@@ -72,13 +72,13 @@ class MeetingApp(ctk.CTk):
 
         self.logs = self._fetch_logs()
         self.discussion_points = self._fetch_discussion_points()
-        self._cached_current_week_goals = self.s4_refresh_goals_cache(self.current_year, self.current_week)
-        self._cached_next_week_goals = self.s4_refresh_goals_cache(self.next_year, self.next_week)
+        self._current_week_goals = self.s4_fetch_goals(self.current_year, self.current_week)
+        self._next_week_goals = self.s4_fetch_goals(self.next_year, self.next_week)
 
         self.slide_map = self._create_slide_map()
 
-        self.online_users_info = self.get_online_users_info()
-        self.online_users = self.get_online_users()
+        self.online_users_info = self.fetch_online_users_info()
+        self.online_users = self.build_online_users()
         self.users_in_input_mode = self.s4_get_users_in_input_mode()
 
         self._setup_slides_scaffold()
@@ -102,16 +102,13 @@ class MeetingApp(ctk.CTk):
 
     def _fetch_discussion_points(self):
         """Returns discussion points for the current year and week."""
-        doc = status_meeting_collection.find_one({"_id": "Discussion Points"})
-        try:
-            points = doc[self.current_year][self.current_week]
-            return points
-        except (TypeError, KeyError):
-            return []
+        return status_meeting_collection.find_one({"_id": "Discussion Points"},
+            projection={f"{self.current_year}.{self.current_week}": 1}
+        ).get(self.current_year, {}).get(self.current_week, [])
 
     def _create_slide_map(self):
         slide_map = [0]
-        if self.logs or self._cached_current_week_goals:
+        if self.logs or self._current_week_goals:
             slide_map.append(1)
         if self.logs:
             slide_map.append(2)
@@ -338,7 +335,7 @@ class MeetingApp(ctk.CTk):
 
     ### HELPERS ###
     @staticmethod
-    def get_online_users_info(): # TODO: $exists för att inte krasha om data saknas?
+    def fetch_online_users_info(): # TODO: $exists för att inte krasha om data saknas?
         """Returns a set of 2-tuples (user, sel_user) from DB with users that are considered online (timestamp within 2 seconds)."""
         pipeline = [
             {"$match": {"_id": "Users"}},
@@ -356,7 +353,7 @@ class MeetingApp(ctk.CTk):
         data = next(status_meeting_collection.aggregate(pipeline))["online_users"]
         return {(u[0], u[1]) for u in data}
 
-    def get_online_users(self):
+    def build_online_users(self):
         """Returns a set of only the users from the 2-tuple-set self.online_users_info."""
         return {user for user, _ in self.online_users_info}
 
@@ -422,15 +419,15 @@ class MeetingApp(ctk.CTk):
             self.show_slide(value)
 
     def _handle_author_goals_change(self, _change):
-        if not self._update_if_changed('_cached_next_week_goals', self.s4_refresh_goals_cache(self.next_year, self.next_week)):
+        if not self._update_if_changed('_cached_next_week_goals', self.s4_fetch_goals(self.next_year, self.next_week)):
             return
         self.s4_update_display_ui()
         self.s4_update_input_ui(False)
 
     def _handle_users_change(self, _change):
-        if not self._update_if_changed('online_users_info', self.get_online_users_info()):
+        if not self._update_if_changed('online_users_info', self.fetch_online_users_info()):
             return
-        users_changed = self._update_if_changed('online_users', self.get_online_users())
+        users_changed = self._update_if_changed('online_users', self.build_online_users())
         input_mode_changed = self._update_if_changed('users_in_input_mode', self.s4_get_users_in_input_mode())
         if users_changed:
             self.users_count_label.configure(text=f"Participants ({len(self.online_users)})")
@@ -593,7 +590,7 @@ class MeetingApp(ctk.CTk):
             elapsed_seconds = log["elapsed_time"]
             author_day_seconds[author][weekday_idx] += elapsed_seconds
 
-        all_authors = author_day_seconds.keys() | self._cached_current_week_goals.keys()
+        all_authors = author_day_seconds.keys() | self._current_week_goals.keys()
 
         base_author_data = []
         max_hours = 0.0
@@ -601,7 +598,7 @@ class MeetingApp(ctk.CTk):
             day_seconds = author_day_seconds.get(author, [0] * 7)
             total_hours = sum(day_seconds) / 3600
             days_hours = [secs / 3600 for secs in day_seconds]
-            goal_data = self._cached_current_week_goals.get(author, {})
+            goal_data = self._current_week_goals.get(author, {})
             goal_hours = goal_data.get("hours", 0)
             goal_days = goal_data.get("days", 0)
             base_author_data.append({
@@ -2119,7 +2116,7 @@ class MeetingApp(ctk.CTk):
 
     def s4_create_selectable_authors(self):
         self.s4_selectable_authors = sorted(
-            self.online_users | self._cached_current_week_goals.keys() | self._cached_next_week_goals.keys())
+            self.online_users | self._current_week_goals.keys() | self._next_week_goals.keys())
         # Update selected if invalid
         if self.s4_selected_author_var.get() not in self.s4_selectable_authors: # type: ignore[attr-defined]
             self.s4_selected_author_var.set(self.s4_selectable_authors[0]) # type: ignore[attr-defined]
@@ -2193,15 +2190,15 @@ class MeetingApp(ctk.CTk):
         self.s4_update_input_ui()
 
     @staticmethod
-    def s4_refresh_goals_cache(year, week):
+    def s4_fetch_goals(year, week):
         """Refresh the goals cache for a specific week."""
         return status_meeting_collection.find_one({"_id": "Author Goals"}).get(year, {}).get(week, {})
 
     def s4_update_input_ui(self, reset_focus=True):
         """Updates the inputs goals ui for selected author"""
         author = self.s4_selected_author_var.get() # type: ignore[attr-defined]
-        current_goals = self._cached_current_week_goals.get(author, {})
-        next_goals = self._cached_next_week_goals.get(author, {})
+        current_goals = self._current_week_goals.get(author, {})
+        next_goals = self._next_week_goals.get(author, {})
         # Update days buttons
         if next_goals.get("days"):
             self.selected_days = next_goals["days"]
@@ -2253,7 +2250,7 @@ class MeetingApp(ctk.CTk):
     def s4_show_input(self):
         """Show the goals input frame"""
         self.s4_in_input = True
-        self._cached_next_week_goals = self.s4_refresh_goals_cache(self.next_year, self.next_week)
+        self._next_week_goals = self.s4_fetch_goals(self.next_year, self.next_week)
         self.s4_update_input_ui()
         self.goals_input_screen.lift() # type: ignore[attr-defined]
 
@@ -2267,7 +2264,7 @@ class MeetingApp(ctk.CTk):
     def s4_update_display_ui(self):
         """Update the goals display with all author goals (only if changed)"""
         # 1. Build all authors (online & users with goals)
-        all_authors = sorted(self.online_users | self._cached_next_week_goals.keys())
+        all_authors = sorted(self.online_users | self._next_week_goals.keys())
 
         # 2. Build Data List
         display_state = []
@@ -2275,8 +2272,8 @@ class MeetingApp(ctk.CTk):
             if author in self.users_in_input_mode:
                 display_state.append((author, 'pending', 'pending'))
             else:
-                if author in self._cached_next_week_goals:
-                    author_goals = self._cached_next_week_goals[author]
+                if author in self._next_week_goals:
+                    author_goals = self._next_week_goals[author]
                     days_val = author_goals.get("days", 0)
                     hours_val = author_goals.get("hours", 0)
                     display_state.append((author, days_val, hours_val))
@@ -2406,8 +2403,8 @@ class MeetingApp(ctk.CTk):
                 upsert=True
             )
             # Cache
-            self._cached_next_week_goals.setdefault(author, {})
-            self._cached_next_week_goals[author]["hours"] = hours
+            self._next_week_goals.setdefault(author, {})
+            self._next_week_goals[author]["hours"] = hours
         else:
             self.s4_remove_author_key_from_goals(author, "hours")
         # UI
@@ -2429,27 +2426,27 @@ class MeetingApp(ctk.CTk):
                 upsert=True
             )
             # Cache
-            self._cached_next_week_goals.setdefault(author, {})
-            self._cached_next_week_goals[author]["days"] = days
+            self._next_week_goals.setdefault(author, {})
+            self._next_week_goals[author]["days"] = days
         else:
             self.s4_remove_author_key_from_goals(author, "days")
 
     def s4_remove_author_key_from_goals(self, author, key):
         """Remove a specific key from author's goals. Remove author entirely if no goals remain."""
-        current_goals = self._cached_next_week_goals.get(author, {})
+        current_goals = self._next_week_goals.get(author, {})
         remaining_goals = {k: v for k, v in current_goals.items() if k != key}
         if remaining_goals:  # Remove just the key
             status_meeting_collection.update_one(
                 {"_id": "Author Goals"},
                 {"$unset": {f"{self.next_year}.{self.next_week}.{author}.{key}": ""}}
             )
-            del self._cached_next_week_goals[author][key]
+            del self._next_week_goals[author][key]
         else:  # No goals left, remove author entirely
             status_meeting_collection.update_one(
                 {"_id": "Author Goals"},
                 {"$unset": {f"{self.next_year}.{self.next_week}.{author}": ""}}
             )
-            del self._cached_next_week_goals[author]
+            del self._next_week_goals[author]
 
     ### SLIDE 5 ###
     def slide_5(self):
