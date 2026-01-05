@@ -338,12 +338,23 @@ class MeetingApp(ctk.CTk):
 
     ### HELPERS ###
     @staticmethod
-    def get_online_users_info():
+    def get_online_users_info(): # TODO: $exists för att inte krasha om data saknas?
         """Returns a set of 2-tuples (user, sel_user) from DB with users that are considered online (timestamp within 2 seconds)."""
-        pipeline = [{"$match": {"_id": "Users"}}, {"$addFields": {"server_time": "$$NOW"}}]
-        doc = status_meeting_collection.aggregate(pipeline).next()
-        cutoff = doc["server_time"] - timedelta(seconds=2)
-        return {(user, data["selected_user"]) for user, data in doc["data"].items() if data["last_seen"] >= cutoff}
+        pipeline = [
+            {"$match": {"_id": "Users"}},
+            {"$project": {
+                "online_users": {
+                    "$map": {
+                        "input": {"$filter": {"input": {
+                            "$objectToArray": "$data"},
+                            "cond": {"$gte": [
+                                "$$this.v.last_seen",
+                                {"$subtract": ["$$NOW", 2000]}]}}},
+                        "in": ["$$this.k", "$$this.v.selected_user"]}},
+                "_id": 0}}]
+
+        data = next(status_meeting_collection.aggregate(pipeline))["online_users"]
+        return {(u[0], u[1]) for u in data}
 
     def get_online_users(self):
         """Returns a set of only the users from the 2-tuple-set self.online_users_info."""
