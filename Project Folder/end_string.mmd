@@ -1,0 +1,50 @@
+flowchart TD
+    Start([Start Loop]) --> AtomCheck[1. find_one_and_update: Check Data OR Try Lock]
+    AtomCheck --> GotDoc{Doc returned?}
+
+    %% SCENARIO 1: LOCKED BY OTHERS
+    GotDoc -- "No (Locked)" --> Wait1[Wait 1.0s]
+    Wait1 --> Start
+
+    %% SCENARIO 2: DOC RETURNED
+    GotDoc -- Yes --> CheckData{Data Exists?}
+
+    %% PATH A: DATA ALREADY EXISTS
+    CheckData -- Yes --> ReturnData([Return Data])
+
+    %% PATH B: WE ACQUIRED LOCK
+    CheckData -- No --> StartHB[Start Heartbeat Thread]
+
+    subgraph Heartbeat Thread
+        direction TB
+        HBLoop[Loop: Every 1s] --> HBUpdate[2. update_one: Extend Timestamp]
+        HBUpdate --> HBLoop
+    end
+
+    StartHB -.-> HBLoop
+    StartHB --> Generate[Generate Phrase & Style]
+
+    %% SUCCESS PATH
+    Generate --> StopHB_Success[Stop Heartbeat]
+    StopHB_Success -.-> HBLoop
+    StopHB_Success --> SaveUnlock[3. update_one: Save Data & Set Lock=None]
+    SaveUnlock --> ReturnGenerated([Return Generated Data])
+
+    %% EXCEPTION HANDLING
+    Generate -.-> Exception{Exception?}
+    SaveUnlock -.-> Exception
+
+    %% ERROR PATHS
+    Exception -- Yes --> StopHB_Err[Stop Heartbeat]
+    StopHB_Err -.-> HBLoop
+    StopHB_Err --> ErrorType{Is Network Error?}
+
+    %% Non-Network Error (Logic/API) -> We must unlock
+    ErrorType -- No --> ResetLock[4. update_one: Set Lock=None]
+    ResetLock --> CatchRetry
+
+    %% Network Error -> DB unreachable, can't unlock
+    ErrorType -- Yes --> CatchRetry[Catch Retry Errors]
+
+    CatchRetry --> Wait2[Wait 1.0s]
+    Wait2 --> Start

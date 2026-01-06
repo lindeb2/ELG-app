@@ -18,9 +18,7 @@ dist/
 *.spec
 
 # Temporary files
-temp.py
-temp.mmd
-temp1.mmd
+temp*
 
 # Configuration (sensitive data)
 config.json
