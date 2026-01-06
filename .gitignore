@@ -2,11 +2,6 @@
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
-
-# Virtual Environment
-.venv/
-venv/
 
 # IDE
 .idea/
@@ -17,8 +12,6 @@ build/
 dist/
 *.spec
 
-# Temporary files
+.venv/
 temp*
-
-# Configuration (sensitive data)
 config.json
