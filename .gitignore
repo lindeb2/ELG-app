@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# Temporary files
+temp.py
+temp.mmd
+temp1.mmd
+
+# Configuration (sensitive data)
+config.json

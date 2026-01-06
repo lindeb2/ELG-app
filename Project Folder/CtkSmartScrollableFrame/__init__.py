@@ -1,0 +1,1 @@
+from .ctk_smart_scrollable_frame import CtkSmartScrollableFrame 

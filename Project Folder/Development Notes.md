@@ -1,0 +1,36 @@
+# Development Notes
+
+- [ ]  `self.days_chart_data_row.bind("<Configure>", update_day_bars)`?
+- [ ]  Create & Show functions
+- [ ]  Goal color function?
+- [ ]  **Hours Graph:** Add Goal Lines
+- [ ]  **Days Chart:** Add Goal Lines
+- [ ]  **Team Hours Bar:** Add Goal Line
+- [X]  Handle DB goals with 0
+- [ ]  Add updates in sync
+- [ ]  DRY (Don't Repeat Yourself) / First runs
+- [ ]  Implement `show_slide()` function
+- [ ]  Create combined `update_goal` function
+- [ ]  Ponder: Args vs Instance variables
+- [X]  Dynamic slide creation
+- [X]  Eliminate desync after init
+- [ ]  Optimize db
+   - [ ]  Db-round-trips (full_document)
+   - [X]  Consolidate watchers
+   - [ ]  Implement projections
+   - [X]  Index logs
+   - [ ]  Reduce heartbeat freq.
+   - [X]  Slide 5
+      - [X]  Watcher
+- [ ]  Merge into one app
+   - [ ]  Correct local data storage
+   - [ ]  Integrate all parts
+   - [ ]  Dry function calls between parts
+- [ ]  S1 Highscore
+- [ ]  Stats_viewer
+- [ ]  Notification system
+- [ ]  Show_slide direct return?
+- [ ]  `_calculate_week_info` output
+- [ ]  Watcher-handler-update-limit
+- [X]  $currentDate vs $$NOW
+- [ ]  `get_online_users_info` DB-eval?
