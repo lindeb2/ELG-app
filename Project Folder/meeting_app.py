@@ -2371,7 +2371,7 @@ class MeetingApp(ctk.CTk):
         hours_label.grid(row=0, column=5, sticky="nsew")
         self._team_row_widget = frame_1
 
-    def s4_get_users_in_input_mode(self):
+    def s4_get_users_in_input_mode(self): # TODO: Improve
         """Returns a set of users currently in input mode."""
         result = set()
         for user, sel_user in self.online_users_info:
