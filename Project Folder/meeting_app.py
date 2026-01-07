@@ -2191,7 +2191,7 @@ class MeetingApp(ctk.CTk):
 
     @staticmethod
     def s4_fetch_goals(year, week):
-        """Refresh the goals cache for a specific week."""
+        """Returns goals for a specific week."""
         return status_meeting_collection.find_one({"_id": "Author Goals"}).get(year, {}).get(week, {})
 
     def s4_update_input_ui(self, reset_focus=True):

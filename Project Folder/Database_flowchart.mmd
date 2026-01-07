@@ -38,13 +38,13 @@ flowchart LR
             Fo1["_fetch_discussion_points"]
             Fo2["_get_start_slide [2]"]
             Fo3["s1_update_records_display"]
-            Fo4["s4_refresh_goals_cache"]
+            Fo4["s4_fetch_goals"]
         end
     subgraph Find["Find"]
             F1["_fetch_logs"]
         end
     subgraph Aggregate["Aggregate"]
-            A1["get_online_users_info"]
+            A1["fetch_online_users_info"]
         end
 
     Uo1 & Uo2 & Uo3 & Uo4 & Uo5 & Uo6 & Uo7 & Uo8 & Uo9 --> DB_STATUS
