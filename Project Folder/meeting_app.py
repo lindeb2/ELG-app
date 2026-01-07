@@ -2371,15 +2371,9 @@ class MeetingApp(ctk.CTk):
         hours_label.grid(row=0, column=5, sticky="nsew")
         self._team_row_widget = frame_1
 
-    def s4_get_users_in_input_mode(self): # TODO: Improve
+    def s4_get_users_in_input_mode(self) -> set[str]:
         """Returns a set of users currently in input mode."""
-        result = set()
-        for user, sel_user in self.online_users_info:
-            if user == self.user_name:
-                continue
-            if sel_user:
-                result.add(sel_user)
-        return result
+        return {sel_user for user, sel_user in self.online_users_info if user != self.user_name and sel_user}
 
     def s4_update_hourly_goal(self, show_summary=False):
         """Update only the hours goal for the current author. Optionally move to summary view if valid."""
