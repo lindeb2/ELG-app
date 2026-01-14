@@ -1115,7 +1115,7 @@ def log_entry():
         "start_month": dt.strftime("%m"),
         "start_day": dt.strftime("%d"),
         "start_time": dt.strftime("%H:%M:%S"),
-        "start_week": f"{int(dt.strftime('%W')) + 1:02d}",
+        "start_week": str(dt.isocalendar().week),
         "start_weekday": dt.strftime("%A"),
         "elapsed_hours": elapsed_hours,
         "elapsed_minutes": elapsed_minutes,

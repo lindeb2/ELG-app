@@ -100,6 +100,17 @@ class MeetingApp(ctk.CTk):
         next_weeks_year, next_weeks_week, _ = time.isocalendar()
         return str(current_year), str(current_week), str(next_weeks_year), str(next_weeks_week)
 
+    @staticmethod
+    def _calculate_week_info():
+        """temp version while not implemented yet implemented the new timetable without leading zeros for weeks"""
+        time = datetime.datetime.now()
+        if time.weekday() <= 2:
+            time -= timedelta(days=3)
+        current_year, current_week, _ = time.isocalendar()
+        time += timedelta(weeks=1)
+        next_weeks_year, next_weeks_week, _ = time.isocalendar()
+        return str(current_year), f"{current_week:02d}", str(next_weeks_year), f"{next_weeks_week:02d}"
+
     def _fetch_discussion_points(self):
         """Returns discussion points for the current year and week."""
         return status_meeting_collection.find_one({"_id": "Discussion Points"},
