@@ -68,6 +68,7 @@ class MeetingApp(ctk.CTk):
         self.start_watchers()
 
         self.current_year, self.current_week, self.next_year, self.next_week = self._calculate_week_info()
+        self.current_week_0d = f"{int(self.current_week):02d}"
         self.user_name = _get_user_name()
 
         self.logs = self._fetch_logs()
@@ -129,7 +130,7 @@ class MeetingApp(ctk.CTk):
         """Returns a list of all logs for the current week."""
         return list(main_collection.find({
             "start_year": self.current_year,  #INT
-            "start_week": self.current_week  #INT
+            "start_week": self.current_week_0d
         }))
 
     def _setup_slides_scaffold(self):
@@ -438,7 +439,7 @@ class MeetingApp(ctk.CTk):
 
     def _handle_timetable_change(self, change):
         full_doc = change.get('fullDocument')
-        if str(full_doc.get('start_year')) == self.current_year and str(full_doc.get('start_week')) == self.current_week:
+        if str(full_doc.get('start_year')) == self.current_year and str(full_doc.get('start_week')) == self.current_week_0d:
             self.ensure_slide(1)
             self.ensure_slide(2)
             self.logs = self._fetch_logs()

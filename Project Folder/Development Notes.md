@@ -35,4 +35,4 @@
 - [X]  $currentDate vs $$NOW
 - [ ]  `get_online_users_info` DB-eval?
 - [X]  0X vs X fix for logs
-   - [X] iso-week-formating
+   - [X] Iso-week-formating
