@@ -1,5 +1,7 @@
 flowchart TD
     Start([Start Loop]) --> AtomCheck[1. find_one_and_update: Check Data OR Try Lock]
+    style AtomCheck fill:purple
+
     AtomCheck --> GotDoc{Doc returned?}
 
     %% SCENARIO 1: LOCKED BY OTHERS
@@ -18,6 +20,7 @@ flowchart TD
     subgraph Heartbeat Thread
         direction TB
         HBLoop[Loop: Every 1s] --> HBUpdate[2. update_one: Extend Timestamp]
+        style HBUpdate fill:red
         HBUpdate --> HBLoop
     end
 
@@ -28,6 +31,7 @@ flowchart TD
     Generate --> StopHB_Success[Stop Heartbeat]
     StopHB_Success -.-> HBLoop
     StopHB_Success --> SaveUnlock[3. update_one: Save Data & Set Lock=None]
+    style SaveUnlock fill:red
     SaveUnlock --> ReturnGenerated([Return Generated Data])
 
     %% EXCEPTION HANDLING
@@ -41,6 +45,7 @@ flowchart TD
 
     %% Non-Network Error (Logic/API) -> We must unlock
     ErrorType -- No --> ResetLock[4. update_one: Set Lock=None]
+    style ResetLock fill:red
     ResetLock --> CatchRetry
 
     %% Network Error -> DB unreachable, can't unlock

@@ -2469,8 +2469,7 @@ class MeetingApp(ctk.CTk):
             "$set": {
                 "lock_timestamp": {
                     "$cond": {
-                        "if": {"$eq": [{"$type": f"$data.{self.current_year}.{self.current_week}"},
-                                       "missing"]},
+                        "if": {"$eq":[{"$type": f"$data.{self.current_year}.{self.current_week}"}, "missing"]},
                         "then": "$$NOW",
                         "else": "$lock_timestamp"
         }}}}]
@@ -2576,7 +2575,7 @@ Strict rules:
         phrase = response.choices[0].message.content
         return phrase, style
 
-    def _s5_create_end_label(self, text, style): # TODO: style
+    def _s5_create_end_label(self, text, style):
         """Create or update the end slide label"""
         self.end_slide_label = ctk.CTkLabel(
             self.slide_frames[5],
