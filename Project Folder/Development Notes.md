@@ -1,19 +1,25 @@
 # Development Notes
 
+- [X]  Add updates in sync
+- [X]  Handle DB goals with 0
+- [X]  Dynamic slide creation
+- [X]  Eliminate desync after init
+- [X]  $currentDate vs $$NOW
+- [X]  `get_online_users_info` DB-eval
+- [X]  0X vs X fix for logs
+   - [X]  Iso-week-formating
+
+
 - [ ]  `self.days_chart_data_row.bind("<Configure>", update_day_bars)`?
 - [ ]  Create & Show functions
 - [ ]  Goal color function?
 - [ ]  **Hours Graph:** Add Goal Lines
 - [ ]  **Days Chart:** Add Goal Lines
 - [ ]  **Team Hours Bar:** Add Goal Line
-- [X]  Handle DB goals with 0
-- [ ]  Add updates in sync
 - [ ]  DRY (Don't Repeat Yourself) / First runs
 - [ ]  Implement `show_slide()` function
 - [ ]  Create combined `update_goal` function
 - [ ]  Ponder: Args vs Instance variables
-- [X]  Dynamic slide creation
-- [X]  Eliminate desync after init
 - [ ]  Optimize db
    - [ ]  Db-round-trips (full_document)
    - [X]  Consolidate watchers
@@ -32,7 +38,7 @@
 - [ ]  Show_slide direct return?
 - [ ]  `_calculate_week_info` output
 - [ ]  Watcher-handler-update-limit
-- [X]  $currentDate vs $$NOW
-- [ ]  `get_online_users_info` DB-eval?
-- [X]  0X vs X fix for logs
-   - [X] Iso-week-formating
+- [ ]  Rework DB with ISODate instead of multiple fields
+- [ ]  Ensure client is on the correct week
+- [ ]  Batch init-fetch or separate DB into its own thread
+- [ ]  DB-init function

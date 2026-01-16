@@ -84,7 +84,7 @@ class MeetingApp(ctk.CTk):
         self._setup_slides_scaffold()
         self.initialize_slides()
         self.current_slide = self._get_start_slide()
-        self.show_slide(self.current_slide)
+        self.show_slide(self.current_slide, False)
 
         threading.Thread(target=self.update_presence, name="update_presence", daemon=True).start()
         self._complete_initialization()
@@ -236,31 +236,34 @@ class MeetingApp(ctk.CTk):
                 self.after(0, getattr(self, f"_handle_{name}_change"), change)
 
     ### ALL SLIDES ###
-    def show_slide(self, slide_map_index):
+    def show_slide(self, slide_map_index, update_db):
         """Show the slide by slide_map_index, with boundary enforcement."""
         old_slide = self.current_slide
-        slide_map_index = max(0, min(len(self.slide_map) - 1, slide_map_index))
+        slide_map_index = max(0, min(len(self.slide_map) - 1, slide_map_index)) # Should be kept here until we ensure that all clients are on the same week.
+
+        if slide_map_index == self.current_slide and self._init_complete:
+            return
 
         # DB
-        status_meeting_collection.update_one(
-            {"_id": "Slide"},
-            {"$set": {"value": slide_map_index}},
-            upsert=True
-        )
+        if update_db:
+            status_meeting_collection.update_one({"_id": "Slide"},{"$set": {"value": slide_map_index}})
         # Cache
         self.current_slide = slide_map_index
         # UI
-        for i, dot in enumerate(self.slide_dots):
-            dot.configure(
-                text="●" if i == slide_map_index else "○",
-                text_color="white" if i == slide_map_index else "gray"
-            )
+        self.update_slide_indicator_dots()
         slide_number = self.slide_map[slide_map_index]
         self.slide_frames[slide_number].lift()
 
         # Leaving slide 4
         if old_slide == self.slide_map.index(4):
             self._presence_update_event.set()
+
+    def update_slide_indicator_dots(self):
+        active_style = {"text": "●", "text_color": "white"}
+        inactive_style = {"text": "○", "text_color": "gray"}
+        for i, dot in enumerate(self.slide_dots):
+            config = active_style if i == self.current_slide else inactive_style
+            dot.configure(**config)
 
     def update_users_list(self):
         """Update the labels in users_list_frame to match self.online_users."""
@@ -323,7 +326,7 @@ class MeetingApp(ctk.CTk):
     def handle_arrow(self, event):
         """Handle left and right arrow key presses."""
         if not isinstance(self.focus_get(), ctk.CTkEntry):
-            self.show_slide(self.current_slide + (1 if event.keysym == "Right" else -1))
+            self.show_slide(self.current_slide + (1 if event.keysym == "Right" else -1), True)
 
     def handle_return(self, _event):
         """Handle Return key press"""
@@ -335,7 +338,7 @@ class MeetingApp(ctk.CTk):
 
     ### HELPERS ###
     @staticmethod
-    def fetch_online_users_info(): # TODO: $exists för att inte krasha om data saknas?
+    def fetch_online_users_info():
         """Returns a set of 2-tuples (user, sel_user) from DB with users that are considered online (timestamp within 2 seconds)."""
         pipeline = [
             {"$match": {"_id": "Users"}},
@@ -415,8 +418,7 @@ class MeetingApp(ctk.CTk):
 
     def _handle_slide_change(self, change):
         value = change["updateDescription"]["updatedFields"].get("value")
-        if value != self.current_slide:
-            self.show_slide(value)
+        self.show_slide(value, False)
 
     def _handle_author_goals_change(self, _change):
         if not self._update_if_changed('_cached_next_week_goals', self.s4_fetch_goals(self.next_year, self.next_week)):
@@ -439,8 +441,7 @@ class MeetingApp(ctk.CTk):
     def _handle_timetable_change(self, change):
         full_doc = change.get('fullDocument')
         if str(full_doc.get('start_year')) == self.current_year and str(full_doc.get('start_week')) == self.current_week:
-            self.ensure_slide(1)
-            self.ensure_slide(2)
+            self.ensure_slide(1, 2)
             self.logs = self._fetch_logs()
             self.hours_graph_data, self.days_charts_data, self.team_hours_bar_data = self.s1_build_all_charts_data()
             self.s2_set_logs_by_author()
@@ -468,17 +469,22 @@ class MeetingApp(ctk.CTk):
                 self._s5_get_data_event.set()
                 break
 
-    def ensure_slide(self, slide_id: int):
-        if slide_id in self.slide_map:
+    def ensure_slide(self, *slide_ids: int):
+        if all(sid in self.slide_map for sid in slide_ids):
             return
 
-        old_slide = self.slide_map[self.current_slide] if self.slide_map else 0 # ??
-        self.slide_map.append(slide_id)
+        old_slide = self.slide_map[self.current_slide]
+
+        for slide_id in slide_ids:
+            if slide_id in self.slide_map:
+                continue
+            self.slide_map.append(slide_id)
+            self.create_slide_dot()
+            getattr(self, f"slide_{slide_id}")()
+
         self.slide_map.sort()
         self.current_slide = self.slide_map.index(old_slide)
-        self.create_slide_dot()
-
-        getattr(self, f"slide_{slide_id}")()
+        self.update_slide_indicator_dots()
 
     ### SLIDE 0 ###
     def slide_0(self):
@@ -2493,8 +2499,8 @@ class MeetingApp(ctk.CTk):
                     return week_data["string"], week_data["style"]
 
                 # We got the lock
-                heartbeat_stop_event = threading.Event()
-                heartbeat_thread = threading.Thread(target=self._s5_run_heartbeat, args=(heartbeat_stop_event,), daemon=True, name="S5_Heartbeat")
+                stop_heart = threading.Event()
+                heartbeat_thread = threading.Thread(target=self._s5_run_heartbeat, args=(stop_heart,), daemon=True, name="S5_Heartbeat")
                 heartbeat_thread.start()
                 try:
                     string, style = self._s5_generate_phrase()
@@ -2511,15 +2517,15 @@ class MeetingApp(ctk.CTk):
                             pass
                     raise
                 finally:
-                    heartbeat_stop_event.set()
+                    stop_heart.set()
             except retry_errors:
                 self._s5_get_data_event.clear()
                 self._s5_get_data_event.wait(1.0)
                 continue
 
     @staticmethod
-    def _s5_run_heartbeat(stop_event):
-        while not stop_event.wait(2.0):
+    def _s5_run_heartbeat(stop_heart):
+        while not stop_heart.wait(2.0):
             # noinspection PyBroadException
             try:
                 status_meeting_collection.update_one({"_id": "End Strings", "lock_timestamp": {"$ne": None}},{"$currentDate": {"lock_timestamp": True}})
