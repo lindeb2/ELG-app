@@ -2466,9 +2466,7 @@ class MeetingApp(ctk.CTk):
             "$or": [
                 {f"data.{self.current_year}.{self.current_week}": {"$exists": True}},
                 {"lock_timestamp": None},
-                {"$expr": {"$lt": ["$lock_timestamp", {"$subtract": ["$$NOW", 30000]}]}}
-            ]
-        }
+                {"$expr": {"$lt": ["$lock_timestamp", {"$subtract": ["$$NOW", 20000]}]}}]}
 
         # If no data: lock, else pass
         update_pipeline = [{
@@ -2477,8 +2475,7 @@ class MeetingApp(ctk.CTk):
                     "$cond": {
                         "if": {"$eq":[{"$type": f"$data.{self.current_year}.{self.current_week}"}, "missing"]},
                         "then": "$$NOW",
-                        "else": "$lock_timestamp"
-        }}}}]
+                        "else": "$lock_timestamp"}}}}]
 
         pymongo_network_errors = (ConnectionFailure, ServerSelectionTimeoutError, NetworkTimeout, AutoReconnect)
         openai_errors = (APIConnectionError, APITimeoutError, InternalServerError, RateLimitError)
@@ -2499,16 +2496,22 @@ class MeetingApp(ctk.CTk):
                     return week_data["string"], week_data["style"]
 
                 # We got the lock
-                stop_heart = threading.Event()
-                heartbeat_thread = threading.Thread(target=self._s5_run_heartbeat, args=(stop_heart,), daemon=True, name="S5_Heartbeat")
-                heartbeat_thread.start()
                 try:
                     string, style = self._s5_generate_phrase()
-                    status_meeting_collection.update_one({"_id": "End Strings"},{"$set": {
-                        f"data.{self.current_year}.{self.current_week}": {"string": string, "style": style},
-                        "lock_timestamp": None
-                    }})
-                    return string, style
+                    data_path = f"data.{self.current_year}.{self.current_week}"
+                    pipeline = [{
+                        "$set": {
+                            data_path: {
+                                "$cond": {
+                                    "if": {"$eq": [{"$type": f"${data_path}"}, "missing"]},
+                                    "then": {"string": string, "style": style},
+                                    "else": f"${data_path}"}},
+                            "lock_timestamp": None}}]
+
+                    updated_doc = status_meeting_collection.find_one_and_update({"_id": "End Strings"}, pipeline, return_document=ReturnDocument.AFTER)
+
+                    week_data = updated_doc.get("data").get(self.current_year).get(self.current_week)
+                    return week_data["string"], week_data["style"]
                 except Exception as e:
                     if not isinstance(e, pymongo_network_errors):
                         try:
@@ -2516,21 +2519,10 @@ class MeetingApp(ctk.CTk):
                         except pymongo_network_errors:
                             pass
                     raise
-                finally:
-                    stop_heart.set()
             except retry_errors:
                 self._s5_get_data_event.clear()
                 self._s5_get_data_event.wait(1.0)
                 continue
-
-    @staticmethod
-    def _s5_run_heartbeat(stop_heart):
-        while not stop_heart.wait(2.0):
-            # noinspection PyBroadException
-            try:
-                status_meeting_collection.update_one({"_id": "End Strings", "lock_timestamp": {"$ne": None}},{"$currentDate": {"lock_timestamp": True}})
-            except:
-                pass
 
     @staticmethod
     def _s5_generate_phrase():
@@ -2572,11 +2564,11 @@ Strict rules:
 
         ai_client = OpenAI(
             base_url="https://models.github.ai/inference",
-            api_key="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",
+            api_key="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",
         )
         response = ai_client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],  # type: ignore[arg-type]
-            model="openai/gpt-4o", temperature=0.9, max_tokens=60, top_p=1,
+            model="openai/gpt-4o", temperature=0.9, max_tokens=60, top_p=1, timeout=15.0
         )
         phrase = response.choices[0].message.content
         return phrase, style

@@ -5,53 +5,46 @@ flowchart LR
             DB_AGG[("Aggregations<br>Collection")]
         end
     subgraph Modify["Modify"]
-        UpdateOne["Update_one"]
-    end
-    subgraph ModifyAndRead["Modify and Read"]
-        FindAndUpdateOne["Find_and_update_one"]
-    end
-    subgraph UpdateOne["Update_one"]
+        subgraph UpdateOne["Update_one"]
             Uo1["_get_start_slide [1]"]
             Uo2["show_slide"]
             Uo3["update_presence"]
             Uo4["s4_update_hourly_goal"]
             Uo5["s4_update_days_goal"]
             Uo6["s4_remove_author_key"]
-            Uo7["_s5_get_data [2]"]
-            Uo8["_s5_run_heartbeat"]
-            Uo9["_s5_get_data [e]"]
+            Uo7["_s5_get_data [e]"]
         end
-    subgraph FindAndUpdateOne["Find_and_update_one"]
-        Fauo1["_s5_get_data [1]"]
+    end
+    subgraph ModifyAndRead["Modify and Read"]
+        subgraph FindAndUpdateOne["Find_and_update_one"]
+            Fauo1["_s5_get_data [1]"]
+            Fauo2["_s5_get_data [2]"]
+        end
     end
     subgraph Reads["Fetch"]
-            FindOne["Find_one"]
-            Aggregate["Aggregate"]
-            Find["Find"]
-            Watch["WatchersNodes"]
-        end
-    subgraph Watch["Watch"]
-            W1["status_meeting_watcher"]
-            W2["timetable_watcher"]
-        end
-    subgraph FindOne["Find_one"]
+        subgraph FindOne["Find_one"]
             Fo1["_fetch_discussion_points"]
             Fo2["_get_start_slide [2]"]
             Fo3["s1_update_records_display"]
             Fo4["s4_fetch_goals"]
         end
-    subgraph Find["Find"]
+        subgraph Find["Find"]
             F1["_fetch_logs"]
         end
-    subgraph Aggregate["Aggregate"]
+        subgraph Aggregate["Aggregate"]
             A1["fetch_online_users_info"]
         end
+        subgraph Watch["Watch"]
+            W1["status_meeting_watcher"]
+            W2["timetable_watcher"]
+        end
+    end
 
-    Uo1 & Uo2 & Uo3 & Uo4 & Uo5 & Uo6 & Uo7 & Uo8 & Uo9 --> DB_STATUS
+    Uo1 & Uo2 & Uo3 & Uo4 & Uo5 & Uo6 & Uo7 --> DB_STATUS
     DB_STATUS --> Fo1 & Fo2 & Fo4 & A1 & W1
     DB_TIME --> F1 & W2
     DB_AGG --> Fo3
-    Fauo1 <--> DB_STATUS
+    Fauo1 & Fauo2 <--> DB_STATUS
 
     style Modify stroke:#000000,fill:#D50000,stroke-width:3px
     style DBs stroke:#000000,fill:#008000,stroke-width:3px
@@ -73,6 +66,6 @@ flowchart LR
 
     %% Assign nodes classes %%
     class DB_STATUS,DB_TIME,DB_AGG db
-    class Uo1,Uo2,Uo3,Uo4,Uo5,Uo6,Uo7,Uo8,Uo9 write
-    class Fauo1 writeread
+    class Uo1,Uo2,Uo3,Uo4,Uo5,Uo6,Uo7 write
+    class Fauo1,Fauo2 writeread
     class Fo1,Fo2,Fo3,Fo4,W1,W2,A1,F1 read

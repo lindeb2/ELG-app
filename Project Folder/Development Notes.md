@@ -25,7 +25,6 @@
    - [X]  Consolidate watchers
    - [ ]  Implement projections
    - [X]  Index logs
-   - [ ]  Reduce heartbeat freq.
    - [X]  Slide 5
       - [X]  Watcher
 - [ ]  Merge into one app

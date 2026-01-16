@@ -15,36 +15,24 @@ flowchart TD
     CheckData -- Yes --> ReturnData([Return Data])
 
     %% PATH B: WE ACQUIRED LOCK
-    CheckData -- No --> StartHB[Start Heartbeat Thread]
+    CheckData -- No --> Generate[Generate Phrase & Style]
 
-    subgraph Heartbeat Thread
-        direction TB
-        HBLoop[Loop: Every 1s] --> HBUpdate[2. update_one: Extend Timestamp]
-        style HBUpdate fill:red
-        HBUpdate --> HBLoop
-    end
+    %% SUCCESS PATH (UPDATED LOGIC)
+    Generate --> CondWrite[2. find_one_and_update: Conditional Write & Unlock]
+    style CondWrite fill:purple
 
-    StartHB -.-> HBLoop
-    StartHB --> Generate[Generate Phrase & Style]
-
-    %% SUCCESS PATH
-    Generate --> StopHB_Success[Stop Heartbeat]
-    StopHB_Success -.-> HBLoop
-    StopHB_Success --> SaveUnlock[3. update_one: Save Data & Set Lock=None]
-    style SaveUnlock fill:red
-    SaveUnlock --> ReturnGenerated([Return Generated Data])
+    CondWrite --> ReadDoc[Read Data from Returned Doc]
+    ReadDoc --> ReturnGenerated([Return Data])
 
     %% EXCEPTION HANDLING
     Generate -.-> Exception{Exception?}
-    SaveUnlock -.-> Exception
+    CondWrite -.-> Exception
 
     %% ERROR PATHS
-    Exception -- Yes --> StopHB_Err[Stop Heartbeat]
-    StopHB_Err -.-> HBLoop
-    StopHB_Err --> ErrorType{Is Network Error?}
+    Exception -- Yes --> ErrorType{Is Network Error?}
 
     %% Non-Network Error (Logic/API) -> We must unlock
-    ErrorType -- No --> ResetLock[4. update_one: Set Lock=None]
+    ErrorType -- No --> ResetLock[3. update_one: Set Lock=None]
     style ResetLock fill:red
     ResetLock --> CatchRetry
 
