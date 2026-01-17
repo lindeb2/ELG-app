@@ -1,6 +1,7 @@
 # Development Notes
 
 - [X]  Add updates in sync
+  -  [X] Resume tokens
 - [X]  Handle DB goals with 0
 - [X]  Dynamic slide creation
 - [X]  Eliminate desync after init

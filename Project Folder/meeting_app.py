@@ -6,6 +6,7 @@ import json
 import threading
 import tkinter
 import math
+import time
 from CtkSmartScrollableFrame import CtkSmartScrollableFrame
 from CTkPieChart import CTkPieChart
 from CTkFlexToolTip import *
@@ -205,28 +206,45 @@ class MeetingApp(ctk.CTk):
         for func in (self.status_meeting_watcher, self.timetable_watcher):
             threading.Thread(target=func, name=func.__name__, daemon=True).start()
 
+    @staticmethod
+    def _run_watcher(collection, pipeline, callback, **watch_kwargs):
+        resume_token = None
+        while True:
+            # noinspection PyBroadException
+            try:
+                with collection.watch(pipeline, resume_after=resume_token, **watch_kwargs) as stream:
+                    for change in stream:
+                        resume_token = stream.resume_token
+                        callback(change)
+            except Exception:
+                time.sleep(1)
+
     def status_meeting_watcher(self):
         pipeline = [{"$match": {"operationType": {"$in": ["update", "replace"]}}}]
-        with status_meeting_collection.watch(pipeline) as stream:
-            for change in stream:
-                doc_id = change["documentKey"]["_id"]
 
-                if doc_id == "Slide":
-                    self._store_or_process_change('slide', change)
-                elif doc_id == "Author Goals":
-                    self._store_or_process_change('goals', change)
-                elif doc_id == "Users":
-                    self._store_or_process_change('users', change)
-                elif doc_id == "Discussion Points":
-                    self._store_or_process_change('points', change)
-                elif doc_id == "End Strings":
-                    self._store_or_process_change('strings', change)
+        def handle_status_change(change):
+            doc_id = change["documentKey"]["_id"]
+            if doc_id == "Slide":
+                self._store_or_process_change('slide', change)
+            elif doc_id == "Author Goals":
+                self._store_or_process_change('goals', change)
+            elif doc_id == "Users":
+                self._store_or_process_change('users', change)
+            elif doc_id == "Discussion Points":
+                self._store_or_process_change('points', change)
+            elif doc_id == "End Strings":
+                self._store_or_process_change('strings', change)
+
+        # Call the generic watcher
+        self._run_watcher(status_meeting_collection, pipeline, handle_status_change)
 
     def timetable_watcher(self):
         pipeline = [{"$match": {"operationType": {"$in": ["insert", "update", "replace"]}}}]
-        with main_collection.watch(pipeline, full_document='updateLookup') as stream:
-            for change in stream:
-                self._store_or_process_change("logs", change)
+
+        def handle_timetable_change(change):
+            self._store_or_process_change("logs", change)
+
+        self._run_watcher(main_collection, pipeline, handle_timetable_change, full_document='updateLookup')
 
     def _complete_initialization(self):
         self._init_complete = True
