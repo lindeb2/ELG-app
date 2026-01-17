@@ -207,7 +207,7 @@ class MeetingApp(ctk.CTk):
 
     def status_meeting_watcher(self):
         pipeline = [{"$match": {"operationType": {"$in": ["update", "replace"]}}}]
-        with status_meeting_collection.watch(pipeline, full_document='updateLookup') as stream:
+        with status_meeting_collection.watch(pipeline) as stream:
             for change in stream:
                 doc_id = change["documentKey"]["_id"]
 
@@ -420,7 +420,7 @@ class MeetingApp(ctk.CTk):
         value = change["updateDescription"]["updatedFields"].get("value")
         self.show_slide(value, False)
 
-    def _handle_author_goals_change(self, _change):
+    def _handle_goals_change(self, _change):
         if not self._update_if_changed('_cached_next_week_goals', self.s4_fetch_goals(self.next_year, self.next_week)):
             return
         self.s4_update_display_ui()
@@ -438,7 +438,7 @@ class MeetingApp(ctk.CTk):
         if users_changed or input_mode_changed:
             self.s4_update_display_ui()
 
-    def _handle_timetable_change(self, change):
+    def _handle_logs_change(self, change):
         full_doc = change.get('fullDocument')
         if str(full_doc.get('start_year')) == self.current_year and str(full_doc.get('start_week')) == self.current_week:
             self.ensure_slide(1, 2)
@@ -2197,8 +2197,9 @@ class MeetingApp(ctk.CTk):
 
     @staticmethod
     def s4_fetch_goals(year, week):
-        """Returns goals for a specific week."""
-        return status_meeting_collection.find_one({"_id": "Author Goals"}).get(year, {}).get(week, {})
+        return status_meeting_collection.find_one({"_id": "Author Goals"},
+            projection={f"{year}.{week}": 1}
+        ).get(year, {}).get(week, {})
 
     def s4_update_input_ui(self, reset_focus=True):
         """Updates the inputs goals ui for selected author"""
@@ -2460,11 +2461,12 @@ class MeetingApp(ctk.CTk):
 
     # noinspection PyUnboundLocalVariable
     def _s5_get_data(self):
+        data_path = f"data.{self.current_year}.{self.current_week}"
         # (Already have data) or (no valid lock)   [(no lock) or (stale lock)]
         filter_query = {
             "_id": "End Strings",
             "$or": [
-                {f"data.{self.current_year}.{self.current_week}": {"$exists": True}},
+                {data_path: {"$exists": True}},
                 {"lock_timestamp": None},
                 {"$expr": {"$lt": ["$lock_timestamp", {"$subtract": ["$$NOW", 20000]}]}}]}
 
@@ -2473,9 +2475,11 @@ class MeetingApp(ctk.CTk):
             "$set": {
                 "lock_timestamp": {
                     "$cond": {
-                        "if": {"$eq":[{"$type": f"$data.{self.current_year}.{self.current_week}"}, "missing"]},
+                        "if": {"$eq":[{"$type": f"${data_path}"}, "missing"]},
                         "then": "$$NOW",
                         "else": "$lock_timestamp"}}}}]
+
+        projection = {data_path: 1, "_id": 0}
 
         pymongo_network_errors = (ConnectionFailure, ServerSelectionTimeoutError, NetworkTimeout, AutoReconnect)
         openai_errors = (APIConnectionError, APITimeoutError, InternalServerError, RateLimitError)
@@ -2483,7 +2487,9 @@ class MeetingApp(ctk.CTk):
 
         while True:
             try:
-                doc = status_meeting_collection.find_one_and_update(filter_query, update_pipeline, return_document=ReturnDocument.AFTER)
+                doc = status_meeting_collection.find_one_and_update(
+                    filter_query, update_pipeline, projection=projection, return_document=ReturnDocument.AFTER
+                )
                 # Locked document
                 if doc is None:
                     self._s5_get_data_event.clear()
@@ -2498,7 +2504,7 @@ class MeetingApp(ctk.CTk):
                 # We got the lock
                 try:
                     string, style = self._s5_generate_phrase()
-                    data_path = f"data.{self.current_year}.{self.current_week}"
+
                     pipeline = [{
                         "$set": {
                             data_path: {
@@ -2508,9 +2514,10 @@ class MeetingApp(ctk.CTk):
                                     "else": f"${data_path}"}},
                             "lock_timestamp": None}}]
 
-                    updated_doc = status_meeting_collection.find_one_and_update({"_id": "End Strings"}, pipeline, return_document=ReturnDocument.AFTER)
-
-                    week_data = updated_doc.get("data").get(self.current_year).get(self.current_week)
+                    updated_doc = status_meeting_collection.find_one_and_update({"_id": "End Strings"},
+                        pipeline, projection=projection, return_document=ReturnDocument.AFTER
+                    )
+                    week_data = updated_doc["data"][self.current_year][self.current_week]
                     return week_data["string"], week_data["style"]
                 except Exception as e:
                     if not isinstance(e, pymongo_network_errors):

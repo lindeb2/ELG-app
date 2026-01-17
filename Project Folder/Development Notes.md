@@ -23,7 +23,7 @@
 - [ ]  Optimize db
    - [ ]  Db-round-trips (full_document)
    - [X]  Consolidate watchers
-   - [ ]  Implement projections
+   - [X]  Implement projections
    - [X]  Index logs
    - [X]  Slide 5
       - [X]  Watcher
