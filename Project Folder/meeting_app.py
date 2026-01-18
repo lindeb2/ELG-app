@@ -28,17 +28,18 @@ main_collection = db['Timetable']  # Only used once
 online_users_collection = db['Status Meeting Online Users']  # Collection for online users
 status_meeting_collection = db['Status Meeting']  # Collection for meeting status
 aggregations_collection = db['Timetable Aggregations']
-WEEK_PIPELINE = [
-    {"$set": {
-        "adjusted_time": {
-            "$dateSubtract": {"startDate": "$$NOW", "unit": "day", "amount": 3}}}},
-    {"$set": {
-        "week": {
-            "$dateTrunc": {
-                "date": "$adjusted_time",
-                "unit": "week",
-                "startOfWeek": "monday"}}}},
-    {"$unset": "adjusted_time"}
+WEEK_PIPELINE = [{
+    "$set": {"new_week": {"$dateTrunc": {
+        "date": {"$dateSubtract": {"startDate": "$$NOW", "unit": "day", "amount": 3}},
+        "unit": "week",
+        "startOfWeek": "monday"}}}},{
+    "$set": {
+        "slide": {"$cond": {
+            "if": {"$ne": ["$week", "$new_week"]},
+            "then": 0,
+            "else": "$slide"}},
+        "week": "$new_week"}},{
+    "$unset": "new_week"}
 ]
 
 # Initialize the customtkinter theme with dark mode
@@ -80,7 +81,7 @@ class MeetingApp(ctk.CTk):
         self._pending_changes = {}
         self.start_watchers()
 
-        self.week_anchor, self.local_target_timestamp = self.fetch_week()
+        self.current_slide, self.week_anchor, self.local_target_timestamp = self.fetch_state()
         self.current_year, self.current_week, self.next_year, self.next_week = self._calculate_week_info()
         threading.Thread(target=self.week_check, name="WeekSync", daemon=True).start()
         self.user_name = _get_user_name()
@@ -98,28 +99,23 @@ class MeetingApp(ctk.CTk):
 
         self._setup_slides_scaffold()
         self.initialize_slides()
-        self.current_slide = self._get_start_slide()
-        self.show_slide(self.current_slide, False)
+        self.show_slide()
 
         threading.Thread(target=self.update_presence, name="update_presence", daemon=True).start()
         self._complete_initialization()
 
     @staticmethod
-    def fetch_week():
+    def fetch_state():
         """Fetches the week anchor from the db. Meeting week is considered from Thursday to next week's Wednesday."""
-        projection = {
-            "week": 1,
-            "server_time": "$$NOW"
-        }
+        projection = {"_id": 0, "slide": 1, "week": 1, "server_time": "$$NOW"}
         doc = status_meeting_collection.find_one_and_update({"_id": "State"},
             WEEK_PIPELINE, projection=projection, return_document=ReturnDocument.AFTER
         )
         local_now = time.time()
-        server_time = doc["server_time"]
-        anchor = doc["week"]
+        slide, anchor, server_time = doc["slide"], doc["week"], doc["server_time"]
         time_to_next_week_start = anchor+timedelta(days=10)-server_time
         local_target_timestamp = local_now + time_to_next_week_start.total_seconds()
-        return anchor, local_target_timestamp
+        return slide, anchor, local_target_timestamp
 
     def _calculate_week_info(self):
         """Calculates current and next week's year and week numbers."""
@@ -146,13 +142,6 @@ class MeetingApp(ctk.CTk):
         slide_map.append(4)
         slide_map.append(5)
         return slide_map
-
-    def _get_start_slide(self):
-        if not self.online_users:
-            status_meeting_collection.update_one({"_id": "State"}, {"$set": {"slide": 0}})
-            return 0
-        else:
-            return status_meeting_collection.find_one({"_id": "State"}, projection={"slide": 1})["slide"]
 
     def _fetch_logs(self):
         """Returns a list of all logs for the current week."""
@@ -279,7 +268,6 @@ class MeetingApp(ctk.CTk):
             try:
                 if time.time() >= self.local_target_timestamp:
                     status_meeting_collection.update_one({"_id": "State"}, WEEK_PIPELINE)
-                    self.local_target_timestamp += 604800 # 1 week
             except Exception:
                 pass
             time.sleep(1)
@@ -292,25 +280,11 @@ class MeetingApp(ctk.CTk):
                 self.after(0, getattr(self, f"_handle_{name}_change"), change)
 
     ### ALL SLIDES ###
-    def show_slide(self, slide_map_index, update_db):
-        """Show the slide by slide_map_index, with boundary enforcement."""
-        old_slide = self.current_slide
-        slide_map_index = max(0, min(len(self.slide_map) - 1, slide_map_index)) # Should be kept here until we ensure that all clients are on the same week.
-
-        if slide_map_index == self.current_slide and self._init_complete:
-            return
-
-        # DB
-        if update_db:
-            status_meeting_collection.update_one({"_id": "State"},{"$set": {"slide": slide_map_index}})
-        # Cache
-        self.current_slide = slide_map_index
-        # UI
+    def show_slide(self, old_slide=None):
+        """Show the index self.current_slide in self.slide_map."""
         self.update_slide_indicator_dots()
-        slide_number = self.slide_map[slide_map_index]
+        slide_number = self.slide_map[self.current_slide]
         self.slide_frames[slide_number].lift()
-
-        # Leaving slide 4
         if old_slide == self.slide_map.index(4):
             self._presence_update_event.set()
 
@@ -382,7 +356,11 @@ class MeetingApp(ctk.CTk):
     def handle_arrow(self, event):
         """Handle left and right arrow key presses."""
         if not isinstance(self.focus_get(), ctk.CTkEntry):
-            self.show_slide(self.current_slide + (1 if event.keysym == "Right" else -1), True)
+            old_slide = self.current_slide
+            slide_map_index = self.current_slide + (1 if event.keysym == "Right" else -1)
+            self.current_slide = max(0, min(len(self.slide_map) - 1, slide_map_index))
+            status_meeting_collection.update_one({"_id": "State"}, {"$set": {"slide": self.current_slide}})
+            self.show_slide(old_slide)
 
     def handle_return(self, _event):
         """Handle Return key press"""
@@ -473,14 +451,16 @@ class MeetingApp(ctk.CTk):
             self._presence_update_event.clear()
 
     def _handle_state_change(self, change):
-        if "slide" in change["updateDescription"]["updatedFields"]:
-            slide = change["updateDescription"]["updatedFields"].get("slide")
-            self.show_slide(slide, False)
-        if "week" in change["updateDescription"]["updatedFields"]:
-            if not self._update_if_changed('week_anchor', change["updateDescription"]["updatedFields"].get("week")):
-                return
-            self.current_year, self.current_week, self.next_year, self.next_week = self._calculate_week_info()
-            # TODO: logic if new week
+        updated_fields = change["updateDescription"]["updatedFields"]
+        if "slide" in updated_fields:
+            old_slide = self.current_slide
+            if self._update_if_changed('current_slide', updated_fields["slide"]):
+                self.show_slide(old_slide)
+        if "week" in updated_fields:
+            if self._update_if_changed('week_anchor', updated_fields["week"]):
+                self.local_target_timestamp += 604800  # 1 week
+                self.current_year, self.current_week, self.next_year, self.next_week = self._calculate_week_info()
+                # TODO: logic if new week
 
     def _handle_goals_change(self, _change):
         if not self._update_if_changed('_cached_next_week_goals', self.s4_fetch_goals(self.next_year, self.next_week)):

@@ -6,29 +6,27 @@ flowchart LR
         end
     subgraph Modify["Modify"]
         subgraph UpdateOne["Update_one"]
-            Uo1["_get_start_slide [1]"]
-            Uo2["show_slide"]
+            Uo1["week_check"]
+            Uo2["handle_arrow"]
             Uo3["update_presence"]
             Uo4["s4_update_hourly_goal"]
             Uo5["s4_update_days_goal"]
-            Uo6["s4_remove_author_key"]
-            Uo7["_s5_get_data [e]"]
-            Uo8["week_check"]
+            Uo6["s4_remove_author_key_from_goals"]
+            Uo7["_s5_get_data [error_unlock]"]
         end
     end
     subgraph ModifyAndRead["Modify and Read"]
         subgraph FindAndUpdateOne["Find_and_update_one"]
-            Fauo1["_s5_get_data [1]"]
-            Fauo2["_s5_get_data [2]"]
-            Fauo3["fetch_week"]
+            Fauo1["fetch_state"]
+            Fauo2["_s5_get_data [lock]"]
+            Fauo3["_s5_get_data [write]"]
         end
     end
     subgraph Reads["Read"]
         subgraph FindOne["Find_one"]
             Fo1["_fetch_discussion_points"]
-            Fo2["_get_start_slide [2]"]
-            Fo3["s1_update_records_display"]
-            Fo4["s4_fetch_goals"]
+            Fo2["s1_update_records_display"]
+            Fo3["s4_fetch_goals"]
         end
         subgraph Find["Find"]
             F1["_fetch_logs"]
@@ -42,10 +40,10 @@ flowchart LR
         end
     end
 
-    Uo1 & Uo2 & Uo3 & Uo4 & Uo5 & Uo6 & Uo7 & Uo8 --> DB_STATUS
-    DB_STATUS --> Fo1 & Fo2 & Fo4 & A1 & W1
+    Uo1 & Uo2 & Uo3 & Uo4 & Uo5 & Uo6 & Uo7 --> DB_STATUS
+    DB_STATUS --> Fo1 & Fo3 & A1 & W1
     DB_TIME --> F1 & W2
-    DB_AGG --> Fo3
+    DB_AGG --> Fo2
     Fauo1 & Fauo2 & Fauo3 <--> DB_STATUS
 
     style Modify stroke:#000000,fill:#D50000,stroke-width:3px
@@ -68,6 +66,6 @@ flowchart LR
 
     %% Assign nodes classes %%
     class DB_STATUS,DB_TIME,DB_AGG db
-    class Uo1,Uo2,Uo3,Uo4,Uo5,Uo6,Uo7,Uo8 write
+    class Uo1,Uo2,Uo3,Uo4,Uo5,Uo6,Uo7 write
     class Fauo1,Fauo2,Fauo3 writeread
-    class Fo1,Fo2,Fo3,Fo4,W1,W2,A1,F1 read
+    class Fo1,Fo2,Fo3,W1,W2,A1,F1 read
