@@ -28,6 +28,18 @@ main_collection = db['Timetable']  # Only used once
 online_users_collection = db['Status Meeting Online Users']  # Collection for online users
 status_meeting_collection = db['Status Meeting']  # Collection for meeting status
 aggregations_collection = db['Timetable Aggregations']
+WEEK_PIPELINE = [
+    {"$set": {
+        "adjusted_time": {
+            "$dateSubtract": {"startDate": "$$NOW", "unit": "day", "amount": 3}}}},
+    {"$set": {
+        "week": {
+            "$dateTrunc": {
+                "date": "$adjusted_time",
+                "unit": "week",
+                "startOfWeek": "monday"}}}},
+    {"$unset": "adjusted_time"}
+]
 
 # Initialize the customtkinter theme with dark mode
 ctk.set_appearance_mode("Dark")
@@ -68,7 +80,9 @@ class MeetingApp(ctk.CTk):
         self._pending_changes = {}
         self.start_watchers()
 
+        self.week_anchor, self.local_target_timestamp = self.fetch_week()
         self.current_year, self.current_week, self.next_year, self.next_week = self._calculate_week_info()
+        threading.Thread(target=self.week_check, name="WeekSync", daemon=True).start()
         self.user_name = _get_user_name()
 
         self.logs = self._fetch_logs()
@@ -91,15 +105,29 @@ class MeetingApp(ctk.CTk):
         self._complete_initialization()
 
     @staticmethod
-    def _calculate_week_info():
-        """Calculates current and next week's year and week numbers. Meeting week is considered from Thursday to next week's Wednesday."""
-        time = datetime.datetime.now()
-        if time.weekday() <= 2:
-            time -= timedelta(days=3)
-        current_year, current_week, _ = time.isocalendar()
-        time += timedelta(weeks=1)
-        next_weeks_year, next_weeks_week, _ = time.isocalendar()
-        return str(current_year), str(current_week), str(next_weeks_year), str(next_weeks_week)
+    def fetch_week():
+        """Fetches the week anchor from the db. Meeting week is considered from Thursday to next week's Wednesday."""
+        projection = {
+            "week": 1,
+            "server_time": "$$NOW"
+        }
+        doc = status_meeting_collection.find_one_and_update({"_id": "State"},
+            WEEK_PIPELINE, projection=projection, return_document=ReturnDocument.AFTER
+        )
+        local_now = time.time()
+        server_time = doc["server_time"]
+        anchor = doc["week"]
+        time_to_next_week_start = anchor+timedelta(days=10)-server_time
+        local_target_timestamp = local_now + time_to_next_week_start.total_seconds()
+        return anchor, local_target_timestamp
+
+    def _calculate_week_info(self):
+        """Calculates current and next week's year and week numbers."""
+        current_year, current_week, _ = self.week_anchor.isocalendar()
+        next_week_time = self.week_anchor + timedelta(weeks=1)
+        next_year, next_week, _ = next_week_time.isocalendar()
+
+        return str(current_year), str(current_week), str(next_year), str(next_week)
 
     def _fetch_discussion_points(self):
         """Returns discussion points for the current year and week."""
@@ -121,10 +149,10 @@ class MeetingApp(ctk.CTk):
 
     def _get_start_slide(self):
         if not self.online_users:
-            status_meeting_collection.update_one({"_id": "Slide"}, {"$set": {"value": 0}})
+            status_meeting_collection.update_one({"_id": "State"}, {"$set": {"slide": 0}})
             return 0
         else:
-            return status_meeting_collection.find_one({"_id": "Slide"})["value"]
+            return status_meeting_collection.find_one({"_id": "State"}, projection={"slide": 1})["slide"]
 
     def _fetch_logs(self):
         """Returns a list of all logs for the current week."""
@@ -224,8 +252,8 @@ class MeetingApp(ctk.CTk):
 
         def handle_status_change(change):
             doc_id = change["documentKey"]["_id"]
-            if doc_id == "Slide":
-                self._store_or_process_change('slide', change)
+            if doc_id == "State":
+                self._store_or_process_change('state', change)
             elif doc_id == "Author Goals":
                 self._store_or_process_change('goals', change)
             elif doc_id == "Users":
@@ -246,6 +274,16 @@ class MeetingApp(ctk.CTk):
 
         self._run_watcher(main_collection, pipeline, handle_timetable_change, full_document='updateLookup')
 
+    def week_check(self):
+        while True:
+            try:
+                if time.time() >= self.local_target_timestamp:
+                    status_meeting_collection.update_one({"_id": "State"}, WEEK_PIPELINE)
+                    self.local_target_timestamp += 604800 # 1 week
+            except Exception:
+                pass
+            time.sleep(1)
+
     def _complete_initialization(self):
         self._init_complete = True
 
@@ -264,7 +302,7 @@ class MeetingApp(ctk.CTk):
 
         # DB
         if update_db:
-            status_meeting_collection.update_one({"_id": "Slide"},{"$set": {"value": slide_map_index}})
+            status_meeting_collection.update_one({"_id": "State"},{"$set": {"slide": slide_map_index}})
         # Cache
         self.current_slide = slide_map_index
         # UI
@@ -434,9 +472,15 @@ class MeetingApp(ctk.CTk):
             self._presence_update_event.wait(timeout=1.0)
             self._presence_update_event.clear()
 
-    def _handle_slide_change(self, change):
-        value = change["updateDescription"]["updatedFields"].get("value")
-        self.show_slide(value, False)
+    def _handle_state_change(self, change):
+        if "slide" in change["updateDescription"]["updatedFields"]:
+            slide = change["updateDescription"]["updatedFields"].get("slide")
+            self.show_slide(slide, False)
+        if "week" in change["updateDescription"]["updatedFields"]:
+            if not self._update_if_changed('week_anchor', change["updateDescription"]["updatedFields"].get("week")):
+                return
+            self.current_year, self.current_week, self.next_year, self.next_week = self._calculate_week_info()
+            # TODO: logic if new week
 
     def _handle_goals_change(self, _change):
         if not self._update_if_changed('_cached_next_week_goals', self.s4_fetch_goals(self.next_year, self.next_week)):

@@ -9,6 +9,7 @@
 - [X]  `get_online_users_info` DB-eval
 - [X]  0X vs X fix for logs
    - [X]  Iso-week-formating
+- [X]  Ensure client is on the correct week
 
 
 - [ ]  `self.days_chart_data_row.bind("<Configure>", update_day_bars)`?
@@ -39,6 +40,6 @@
 - [ ]  `_calculate_week_info` output
 - [ ]  Watcher-handler-update-limit
 - [ ]  Rework DB with ISODate instead of multiple fields
-- [ ]  Ensure client is on the correct week
 - [ ]  Batch init-fetch or separate DB into its own thread
 - [ ]  DB-init function
+- [ ]  Logic if new week
