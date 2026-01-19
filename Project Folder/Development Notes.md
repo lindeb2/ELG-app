@@ -19,16 +19,19 @@
 - [ ]  **Days Chart:** Add Goal Lines
 - [ ]  **Team Hours Bar:** Add Goal Line
 - [ ]  DRY (Don't Repeat Yourself) / First runs
-- [ ]  Implement `show_slide()` function
+  - [ ]  Implement `show_slide()` function
 - [ ]  Create combined `update_goal` function
 - [ ]  Ponder: Args vs Instance variables
 - [ ]  Optimize db
-   - [ ]  Db-round-trips (full_document)
+   - [ ]  Round-trips
+     - [ ] Batch init
+     - [ ] Watcher Pipeline
    - [X]  Consolidate watchers
    - [X]  Implement projections
    - [X]  Index logs
    - [X]  Slide 5
       - [X]  Watcher
+   - Move `Update_one` into worker-thread
 - [ ]  Merge into one app
    - [ ]  Correct local data storage
    - [ ]  Integrate all parts
@@ -43,3 +46,4 @@
 - [ ]  Batch init-fetch or separate DB into its own thread
 - [ ]  DB-init function
 - [ ]  Logic if new week
+- [ ]  Merged s4_update_[]_goal method

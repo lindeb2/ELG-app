@@ -1,5 +1,5 @@
 import customtkinter as ctk
-from pymongo import MongoClient
+from pymongo import MongoClient, UpdateOne
 import datetime
 from datetime import timedelta
 import json
@@ -80,6 +80,11 @@ class MeetingApp(ctk.CTk):
         self._presence_update_event = threading.Event()
         self._pending_changes = {}
         self.start_watchers()
+
+        self._update_event = threading.Event()
+        self._lock = threading.Lock()
+        self.update_buffer = {"slide": None, "goals": {}}
+        threading.Thread(target=self.update_db, name="DB_updater", daemon=True).start()
 
         self.current_slide, self.week_anchor, self.local_target_timestamp = self.fetch_state()
         self.current_year, self.current_week, self.next_year, self.next_week = self._calculate_week_info()
@@ -353,14 +358,65 @@ class MeetingApp(ctk.CTk):
             if hasattr(self, '_pre_fullscreen_geometry'):
                 self.geometry(self._pre_fullscreen_geometry)
 
+    def update_db(self):
+        while True:
+            try:
+                self._update_event.wait()
+                self._update_event.clear()
+                with self._lock:
+                    current_buffer = self.update_buffer
+                    self.update_buffer = {"slide": None, "goals": {}}
+                operations = []
+
+                if current_buffer.get("slide") is not None:
+                    operations.append(UpdateOne(
+                        {"_id": "State"},
+                        {"$set": {"slide": current_buffer["slide"]}}))
+
+                goals_buffer = current_buffer.get("goals", {})
+                if goals_buffer:
+                    set_ops = {}
+                    unset_ops = {}
+                    prefix = f"{self.next_year}.{self.next_week}"
+
+                    for author, changes in goals_buffer.items():
+                        author_path = f"{prefix}.{author}"
+
+                        if changes is None:
+                            unset_ops[author_path] = ""
+                            continue
+
+                        for field, val in changes.items():
+                            full_path = f"{author_path}.{field}"
+                            if val > 0:
+                                set_ops[full_path] = val
+                            elif val == 0:
+                                unset_ops[full_path] = ""
+
+                    update_doc = {}
+                    if set_ops:
+                        update_doc["$set"] = set_ops
+                    if unset_ops:
+                        update_doc["$unset"] = unset_ops
+
+                    operations.append(UpdateOne({"_id": "Author Goals"}, update_doc, upsert=True))
+                status_meeting_collection.bulk_write(operations, ordered=False)
+
+            except Exception as e:
+                print(f"Error in update worker: {e}")
+                time.sleep(1)
+
     def handle_arrow(self, event):
         """Handle left and right arrow key presses."""
         if not isinstance(self.focus_get(), ctk.CTkEntry):
             old_slide = self.current_slide
             slide_map_index = self.current_slide + (1 if event.keysym == "Right" else -1)
             self.current_slide = max(0, min(len(self.slide_map) - 1, slide_map_index))
-            status_meeting_collection.update_one({"_id": "State"}, {"$set": {"slide": self.current_slide}})
             self.show_slide(old_slide)
+            with self._lock:
+                # noinspection PyTypeChecker
+                self.update_buffer["slide"] = self.current_slide
+            self._update_event.set()
 
     def handle_return(self, _event):
         """Handle Return key press"""
@@ -2438,18 +2494,24 @@ class MeetingApp(ctk.CTk):
                 self.s4_flash_error(self.hours_entry) # type: ignore[attr-defined]
             return
 
+        # Cache
+        self._next_week_goals.setdefault(author, {})
         if hours > 0:
-            # DB
-            status_meeting_collection.update_one(
-                {"_id": "Author Goals"},
-                {"$set": {f"{self.next_year}.{self.next_week}.{author}.hours": hours}},
-                upsert=True
-            )
-            # Cache
-            self._next_week_goals.setdefault(author, {})
             self._next_week_goals[author]["hours"] = hours
         else:
-            self.s4_remove_author_key_from_goals(author, "hours")
+            del self._next_week_goals[author]["hours"]
+
+        with self._lock:
+            if not self._next_week_goals[author]:
+                self.update_buffer["goals"][author] = None
+                del self._next_week_goals[author]
+            else:
+                if self.update_buffer["goals"].get(author) is None:
+                    self.update_buffer["goals"][author] = {} # is this needed?
+                self.update_buffer["goals"][author]["hours"] = hours
+
+        self._update_event.set()
+
         # UI
         self.s4_update_display_ui()
         if show_summary:
@@ -2461,35 +2523,23 @@ class MeetingApp(ctk.CTk):
         author = self.s4_selected_author_var.get() # type: ignore[attr-defined]
         days = self.selected_days
 
+        # Cache
+        self._next_week_goals.setdefault(author, {})
         if days > 0:
-            # DB
-            status_meeting_collection.update_one(
-                {"_id": "Author Goals"},
-                {"$set": {f"{self.next_year}.{self.next_week}.{author}.days": days}},
-                upsert=True
-            )
-            # Cache
-            self._next_week_goals.setdefault(author, {})
             self._next_week_goals[author]["days"] = days
         else:
-            self.s4_remove_author_key_from_goals(author, "days")
+            del self._next_week_goals[author]["days"]
 
-    def s4_remove_author_key_from_goals(self, author, key):
-        """Remove a specific key from author's goals. Remove author entirely if no goals remain."""
-        current_goals = self._next_week_goals.get(author, {})
-        remaining_goals = {k: v for k, v in current_goals.items() if k != key}
-        if remaining_goals:  # Remove just the key
-            status_meeting_collection.update_one(
-                {"_id": "Author Goals"},
-                {"$unset": {f"{self.next_year}.{self.next_week}.{author}.{key}": ""}}
-            )
-            del self._next_week_goals[author][key]
-        else:  # No goals left, remove author entirely
-            status_meeting_collection.update_one(
-                {"_id": "Author Goals"},
-                {"$unset": {f"{self.next_year}.{self.next_week}.{author}": ""}}
-            )
-            del self._next_week_goals[author]
+        with self._lock:
+            if not self._next_week_goals[author]:
+                self.update_buffer["goals"][author] = None
+                del self._next_week_goals[author]
+            else:
+                if self.update_buffer["goals"].get(author) is None:
+                    self.update_buffer["goals"][author] = {}
+                self.update_buffer["goals"][author]["days"] = days
+
+        self._update_event.set()
 
     ### SLIDE 5 ###
     def slide_5(self):
