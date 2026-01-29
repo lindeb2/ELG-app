@@ -10,6 +10,7 @@
 - [X]  0X vs X fix for logs
    - [X]  Iso-week-formating
 - [X]  Ensure client is on the correct week
+- [X]  Merged s4_update_[]_goal method
 
 
 - [ ]  `self.days_chart_data_row.bind("<Configure>", update_day_bars)`?
@@ -46,4 +47,3 @@
 - [ ]  Batch init-fetch or separate DB into its own thread
 - [ ]  DB-init function
 - [ ]  Logic if new week
-- [ ]  Merged s4_update_[]_goal method

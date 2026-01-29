@@ -2567,7 +2567,7 @@ Strict rules:
 
         ai_client = OpenAI(
             base_url="https://models.github.ai/inference",
-            api_key="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",
+            api_key="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",
         )
         response = ai_client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],  # type: ignore[arg-type]

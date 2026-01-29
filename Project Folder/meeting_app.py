@@ -83,7 +83,7 @@ class MeetingApp(ctk.CTk):
 
         self._update_event = threading.Event()
         self._lock = threading.Lock()
-        self.update_buffer = {"slide": None, "goals": {}}
+        self.update_buffer = {"slide": None, "goals": defaultdict(dict)}
         threading.Thread(target=self.update_db, name="DB_updater", daemon=True).start()
 
         self.current_slide, self.week_anchor, self.local_target_timestamp = self.fetch_state()
@@ -382,7 +382,7 @@ class MeetingApp(ctk.CTk):
                     for author, changes in goals_buffer.items():
                         author_path = f"{prefix}.{author}"
 
-                        if changes is None:
+                        if changes == {}:
                             unset_ops[author_path] = ""
                             continue
 
@@ -2037,18 +2037,6 @@ class MeetingApp(ctk.CTk):
                 self.days_buttons = []
                 self.selected_days = 0
 
-                def on_days_button_click(day_num):
-                    if day_num == self.selected_days:
-                        self.selected_days = 0
-                    else:
-                        self.selected_days = day_num
-                    for i, btn in enumerate(self.days_buttons):
-                        if i < self.selected_days:
-                            btn.configure(fg_color="#2ecc71")  # Green color for selected
-                        else:
-                            btn.configure(fg_color="#e74c3c")  # Red color for unselected
-                    self.s4_update_days_goal()
-
                 for i in range(7):
                     button_frame = ctk.CTkFrame(
                         days_buttons_frame,
@@ -2064,7 +2052,7 @@ class MeetingApp(ctk.CTk):
                         height=76,
                         fg_color="#e74c3c",
                         hover=False,
-                        command=lambda x=i + 1: on_days_button_click(x)
+                        command=lambda x=i + 1: self.s4_update_days_goal(x)
                     )
                     btn.place(relx=0.5, rely=0.5, anchor="center")
                     self.days_buttons.append(btn)
@@ -2482,7 +2470,6 @@ class MeetingApp(ctk.CTk):
 
     def s4_update_hourly_goal(self, show_summary=False):
         """Update only the hours goal for the current author. Optionally move to summary view if valid."""
-        author = self.s4_selected_author_var.get() # type: ignore[attr-defined]
         hours = self.hours_entry.get().strip() # type: ignore[attr-defined]
         # Convert to int & validate
         try:
@@ -2494,23 +2481,7 @@ class MeetingApp(ctk.CTk):
                 self.s4_flash_error(self.hours_entry) # type: ignore[attr-defined]
             return
 
-        # Cache
-        self._next_week_goals.setdefault(author, {})
-        if hours > 0:
-            self._next_week_goals[author]["hours"] = hours
-        else:
-            del self._next_week_goals[author]["hours"]
-
-        with self._lock:
-            if not self._next_week_goals[author]:
-                self.update_buffer["goals"][author] = None
-                del self._next_week_goals[author]
-            else:
-                if self.update_buffer["goals"].get(author) is None:
-                    self.update_buffer["goals"][author] = {} # is this needed?
-                self.update_buffer["goals"][author]["hours"] = hours
-
-        self._update_event.set()
+        self._s4_update_goal_data("hours", hours)
 
         # UI
         self.s4_update_display_ui()
@@ -2518,26 +2489,31 @@ class MeetingApp(ctk.CTk):
             self.focus_set()
             self.s4_show_display()
 
-    def s4_update_days_goal(self):
+    def s4_update_days_goal(self, day_input):
         """Update only the days goal for the current author."""
-        author = self.s4_selected_author_var.get() # type: ignore[attr-defined]
-        days = self.selected_days
+        self.selected_days = 0 if day_input == self.selected_days else day_input
 
-        # Cache
-        self._next_week_goals.setdefault(author, {})
-        if days > 0:
-            self._next_week_goals[author]["days"] = days
+        self._s4_update_goal_data("days", self.selected_days)
+
+        # UI
+        self.s4_update_days_ui(self.selected_days)
+        self.s4_update_display_ui()
+
+    def _s4_update_goal_data(self, field, value):
+        author = self.s4_selected_author_var.get()
+        goals = self._next_week_goals.setdefault(author, {})
+        if value > 0:
+            goals[field] = value
         else:
-            del self._next_week_goals[author]["days"]
+            goals.pop(field, None)
+            if not goals:
+                del self._next_week_goals[author]
 
         with self._lock:
-            if not self._next_week_goals[author]:
-                self.update_buffer["goals"][author] = None
-                del self._next_week_goals[author]
+            if not goals:
+                self.update_buffer["goals"][author] = {}
             else:
-                if self.update_buffer["goals"].get(author) is None:
-                    self.update_buffer["goals"][author] = {}
-                self.update_buffer["goals"][author]["days"] = days
+                self.update_buffer["goals"][author][field] = value
 
         self._update_event.set()
 
