@@ -23,9 +23,8 @@ from openai import APIConnectionError, APITimeoutError, InternalServerError, Rat
 
 # MongoDB connection
 client = MongoClient("mongodb+srv://johan:baLlbeTtertRacer@elg-timetable.txhpj.mongodb.net/?retryWrites=true&w=majority&appName=ELG-timetable")
-db = client['ELG-Database']
+db = client['ELG-Dev']
 main_collection = db['Timetable']  # Only used once
-online_users_collection = db['Status Meeting Online Users']  # Collection for online users
 status_meeting_collection = db['Status Meeting']  # Collection for meeting status
 aggregations_collection = db['Timetable Aggregations']
 WEEK_PIPELINE = [{
