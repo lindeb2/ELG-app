@@ -408,15 +408,18 @@ class MeetingApp(ctk.CTk):
 
     def handle_arrow(self, event):
         """Handle left and right arrow key presses."""
-        if not isinstance(self.focus_get(), ctk.CTkEntry):
-            old_slide = self.current_slide
-            slide_map_index = self.current_slide + (1 if event.keysym == "Right" else -1)
-            self.current_slide = max(0, min(len(self.slide_map) - 1, slide_map_index))
-            self.show_slide(old_slide)
-            with self._lock:
-                # noinspection PyTypeChecker
-                self.update_buffer["slide"] = self.current_slide
-            self._update_event.set()
+        if isinstance(self.focus_get(), ctk.CTkEntry):
+            return
+
+        target = max(0, min(len(self.slide_map) - 1, self.current_slide + (1 if event.keysym == "Right" else -1)))
+        if target == self.current_slide:
+            return
+
+        old_slide, self.current_slide = self.current_slide, target
+        self.show_slide(old_slide)
+        with self._lock:
+            self.update_buffer["slide"] = self.current_slide
+        self._update_event.set()
 
     def handle_return(self, _event):
         """Handle Return key press"""

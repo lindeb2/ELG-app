@@ -11,6 +11,7 @@
    - [X]  Iso-week-formating
 - [X]  Ensure client is on the correct week
 - [X]  Merged s4_update_[]_goal method
+- [X]  handle_arrow direct return?
 
 
 - [ ]  `self.days_chart_data_row.bind("<Configure>", update_day_bars)`?
@@ -21,18 +22,18 @@
 - [ ]  **Team Hours Bar:** Add Goal Line
 - [ ]  DRY (Don't Repeat Yourself) / First runs
   - [ ]  Implement `show_slide()` function
-- [ ]  Create combined `update_goal` function
 - [ ]  Ponder: Args vs Instance variables
 - [ ]  Optimize db
-   - [ ]  Round-trips
-     - [ ] Batch init
-     - [ ] Watcher Pipeline
    - [X]  Consolidate watchers
    - [X]  Implement projections
    - [X]  Index logs
    - [X]  Slide 5
       - [X]  Watcher
-   - Move `Update_one` into worker-thread
+   - [X] Move `Update_one` into worker-thread
+   - [ ]  Round-trips
+     - [ ] Batch init / DB-init function
+     - [ ] Watcher Pipeline
+   - [ ]  Rework DB with ISODate instead of multiple fields
 - [ ]  Merge into one app
    - [ ]  Correct local data storage
    - [ ]  Integrate all parts
@@ -40,10 +41,6 @@
 - [ ]  S1 Highscore
 - [ ]  Stats_viewer
 - [ ]  Notification system
-- [ ]  Show_slide direct return?
 - [ ]  `_calculate_week_info` output
 - [ ]  Watcher-handler-update-limit
-- [ ]  Rework DB with ISODate instead of multiple fields
-- [ ]  Batch init-fetch or separate DB into its own thread
-- [ ]  DB-init function
 - [ ]  Logic if new week
