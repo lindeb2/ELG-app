@@ -86,7 +86,7 @@ class MeetingApp(ctk.CTk):
         self.update_buffer = {"slide": None, "goals": defaultdict(dict)}
         threading.Thread(target=self.update_db, name="DB_updater", daemon=True).start()
 
-        self.current_slide, self.week_anchor, self.local_target_timestamp = self.fetch_state()
+        self.current_slide, self.current_week_start, self.next_week_start, self.local_target_timestamp = self.fetch_state()
         self.current_year, self.current_week, self.next_year, self.next_week = self._calculate_week_info()
         threading.Thread(target=self.week_check, name="WeekSync", daemon=True).start()
         self.user_name = _get_user_name()
@@ -127,15 +127,15 @@ class MeetingApp(ctk.CTk):
         )
         local_now = time.time()
         slide, anchor, server_time = doc["slide"], doc["week"], doc["server_time"]
+        next_week = anchor + timedelta(weeks=1)
         time_to_next_week_start = anchor+timedelta(days=10)-server_time
         local_target_timestamp = local_now + time_to_next_week_start.total_seconds()
-        return slide, anchor, local_target_timestamp
+        return slide, anchor, next_week, local_target_timestamp
 
     def _calculate_week_info(self):
         """Calculates current and next week's year and week numbers."""
-        current_year, current_week, _ = self.week_anchor.isocalendar()
-        next_week_time = self.week_anchor + timedelta(weeks=1)
-        next_year, next_week, _ = next_week_time.isocalendar()
+        current_year, current_week, _ = self.current_week_start.isocalendar()
+        next_year, next_week, _ = self.next_week_start.isocalendar()
 
         return str(current_year), str(current_week), str(next_year), str(next_week)
 
@@ -160,9 +160,9 @@ class MeetingApp(ctk.CTk):
     def _fetch_logs(self):
         """Returns a list of all logs for the current week."""
         return list(main_collection.find({
-            "start_year": self.current_year,  #INT
-            "start_week": self.current_week  #INT
-        }))
+            "timestamp": {
+                "$gte": self.current_week_start,
+                "$lt": self.next_week_start}}))
 
     def _setup_slides_scaffold(self):
         """Sets up the foundational scaffold and overlay for all slides, including navigation and overlays."""
@@ -548,8 +548,8 @@ class MeetingApp(ctk.CTk):
             self.s4_update_display_ui()
 
     def _handle_logs_change(self, change):
-        full_doc = change.get('fullDocument')
-        if str(full_doc.get('start_year')) == self.current_year and str(full_doc.get('start_week')) == self.current_week:
+        full_doc = change['fullDocument']
+        if self.current_week_start <= full_doc['timestamp'] < self.next_week_start:
             self.ensure_slide(1, 2)
             self.logs = self._fetch_logs()
             self.hours_graph_data, self.days_charts_data, self.team_hours_bar_data = self.s1_build_all_charts_data()
@@ -696,12 +696,11 @@ class MeetingApp(ctk.CTk):
     def s1_build_all_charts_data(self):
         """Returns hours_graph_data, days_charts_data & team_hours_bar_data."""
         # 1) Get base data
-        weekday_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
         author_day_seconds = defaultdict(lambda: [0 for _ in range(7)])
         for log in self.logs:
             author = log["author"]
-            weekday = log["start_weekday"]
-            weekday_idx = weekday_names.index(weekday)
+            dt = log["timestamp"]
+            weekday_idx = dt.weekday()
             elapsed_seconds = log["elapsed_time"]
             author_day_seconds[author][weekday_idx] += elapsed_seconds
 
@@ -1798,11 +1797,7 @@ class MeetingApp(ctk.CTk):
         """Creates or updates self.logs_by_author"""
         # Copy, Sort & Group Logs
         logs = list(self.logs)  # Shallow copy
-        weekday_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        logs.sort(key=lambda x: (
-            weekday_order.index(x.get("start_weekday")),
-            x.get("start_time")
-        ))
+        logs.sort(key=lambda x: x.get("timestamp", datetime.datetime.min))
         self.logs_by_author = defaultdict(list)
         for log in logs:
             self.logs_by_author[log["author"]].append(log)
@@ -1824,12 +1819,11 @@ class MeetingApp(ctk.CTk):
         """Create a single log widget with expand/collapse functionality. If return_frame is True, return the log_frame."""
         # Extract log data
         name = log.get("name", "No title")
-        weekday = log.get("start_weekday", "Unknown")
-        start_time = log.get("start_time", "00:00:00")
+        dt = log["timestamp"]
+        weekday = dt.strftime("%A")
+        start_time_formatted = dt.strftime("%H:%M")
         elapsed_time = log.get("elapsed_time", 0)
         description = log.get("description", "No description")
-        # Format times
-        start_time_formatted = start_time[:-3] if len(start_time) > 5 else start_time  # HH:MM
         elapsed_time_formatted = format_time(elapsed_time)
         # Frame
         log_frame = ctk.CTkFrame(
