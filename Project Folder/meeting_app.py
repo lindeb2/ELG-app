@@ -7,6 +7,7 @@ import threading
 import tkinter
 import math
 import time
+from concurrent.futures import ThreadPoolExecutor
 from CtkSmartScrollableFrame import CtkSmartScrollableFrame
 from CTkPieChart import CTkPieChart
 from CTkFlexToolTip import *
@@ -90,10 +91,18 @@ class MeetingApp(ctk.CTk):
         threading.Thread(target=self.week_check, name="WeekSync", daemon=True).start()
         self.user_name = _get_user_name()
 
-        self.logs = self._fetch_logs()
-        self.discussion_points = self._fetch_discussion_points()
-        self._current_week_goals = self.s4_fetch_goals(self.current_year, self.current_week)
-        self._next_week_goals = self.s4_fetch_goals(self.next_year, self.next_week)
+        with ThreadPoolExecutor() as executor:
+            future_logs = executor.submit(self._fetch_logs)
+            future_points = executor.submit(self._fetch_discussion_points)
+            future_curr_goals = executor.submit(self.s4_fetch_goals, self.current_year, self.current_week)
+            future_next_goals = executor.submit(self.s4_fetch_goals, self.next_year, self.next_week)
+            future_highscores = executor.submit(lambda: aggregations_collection.find_one({"_id": "Highscores"}))
+
+            self.logs = future_logs.result()
+            self.discussion_points = future_points.result()
+            self._current_week_goals = future_curr_goals.result()
+            self._next_week_goals = future_next_goals.result()
+            self.highscores_data = future_highscores.result()
 
         self.slide_map = self._create_slide_map()
 
@@ -1470,7 +1479,7 @@ class MeetingApp(ctk.CTk):
             widget.destroy()
 
         # Get highscores data
-        highscores = aggregations_collection.find_one({"_id": "Highscores"})
+        highscores = self.highscores_data
         if not highscores:
             no_records_label = ctk.CTkLabel(
                 self.records_content,
