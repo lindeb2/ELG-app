@@ -21,7 +21,6 @@
 - [ ]  **Days Chart:** Add Goal Lines
 - [ ]  **Team Hours Bar:** Add Goal Line
 - [ ]  DRY (Don't Repeat Yourself) / First runs
-  - [ ]  Implement `show_slide()` function
 - [ ]  Ponder: Args vs Instance variables
 - [ ]  Optimize db
    - [X]  Consolidate watchers
@@ -31,7 +30,7 @@
       - [X]  Watcher
    - [X] Move `Update_one` into worker-thread
    - [ ]  Round-trips
-     - [ ] Batch init / DB-init function
+     - [X] Batch init / DB-init function
      - [ ] Watcher Pipeline
    - [ ]  Rework DB with ISODate instead of multiple fields
 - [ ]  Merge into one app

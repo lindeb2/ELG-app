@@ -97,18 +97,19 @@ class MeetingApp(ctk.CTk):
             future_curr_goals = executor.submit(self.s4_fetch_goals, self.current_year, self.current_week)
             future_next_goals = executor.submit(self.s4_fetch_goals, self.next_year, self.next_week)
             future_highscores = executor.submit(lambda: aggregations_collection.find_one({"_id": "Highscores"}))
+            future_users = executor.submit(self.fetch_online_users_info)
 
             self.logs = future_logs.result()
             self.discussion_points = future_points.result()
             self._current_week_goals = future_curr_goals.result()
             self._next_week_goals = future_next_goals.result()
             self.highscores_data = future_highscores.result()
+            self.online_users_info = future_users.result()
 
         self.slide_map = self._create_slide_map()
 
-        self.online_users_info = self.fetch_online_users_info()
         self.online_users = self.build_online_users()
-        self.users_in_input_mode = self.s4_get_users_in_input_mode()
+        self.input_mode_users = self.build_input_mode_users()
 
         self._setup_slides_scaffold()
         self.initialize_slides()
@@ -373,16 +374,15 @@ class MeetingApp(ctk.CTk):
                 self._update_event.clear()
                 with self._lock:
                     current_buffer = self.update_buffer
-                    self.update_buffer = {"slide": None, "goals": {}}
+                    self.update_buffer = {"slide": None, "goals": defaultdict(dict)}
                 operations = []
 
-                if current_buffer.get("slide") is not None:
+                if current_buffer["slide"] is not None:
                     operations.append(UpdateOne(
                         {"_id": "State"},
                         {"$set": {"slide": current_buffer["slide"]}}))
 
-                goals_buffer = current_buffer.get("goals", {})
-                if goals_buffer:
+                if goals_buffer := current_buffer["goals"]:
                     set_ops = {}
                     unset_ops = {}
                     prefix = f"{self.next_year}.{self.next_week}"
@@ -426,7 +426,7 @@ class MeetingApp(ctk.CTk):
         old_slide, self.current_slide = self.current_slide, target
         self.show_slide(old_slide)
         with self._lock:
-            self.update_buffer["slide"] = self.current_slide
+            self.update_buffer["slide"] = self.current_slide # type: ignore
         self._update_event.set()
 
     def handle_return(self, _event):
@@ -539,7 +539,7 @@ class MeetingApp(ctk.CTk):
         if not self._update_if_changed('online_users_info', self.fetch_online_users_info()):
             return
         users_changed = self._update_if_changed('online_users', self.build_online_users())
-        input_mode_changed = self._update_if_changed('users_in_input_mode', self.s4_get_users_in_input_mode())
+        input_mode_changed = self._update_if_changed('input_mode_users', self.build_input_mode_users())
         if users_changed:
             self.users_count_label.configure(text=f"Participants ({len(self.online_users)})")
             self.update_users_list()
@@ -2088,8 +2088,7 @@ class MeetingApp(ctk.CTk):
                 self.hours_entry.bind("<KeyRelease>", lambda e: self.s4_update_hourly_goal())
 
             def _create_user_selection():
-                self.s4_selected_author_var = ctk.StringVar(
-                    value=self.user_name)  # Create selected Username default to self
+                self.s4_selected_author_var = ctk.StringVar(value=self.user_name) # Default to self
 
                 self.s4_selected_user_label = ctk.CTkLabel(
                     self.goals_input_screen,
@@ -2219,7 +2218,7 @@ class MeetingApp(ctk.CTk):
 
     def s4_create_selectable_authors(self):
         self.s4_selectable_authors = sorted(
-            self.online_users | self._current_week_goals.keys() | self._next_week_goals.keys())
+            self.online_users | self._current_week_goals.keys() | self._next_week_goals.keys() | {self.user_name})
         # Update selected if invalid
         if self.s4_selected_author_var.get() not in self.s4_selectable_authors: # type: ignore[attr-defined]
             self.s4_selected_author_var.set(self.s4_selectable_authors[0]) # type: ignore[attr-defined]
@@ -2373,7 +2372,7 @@ class MeetingApp(ctk.CTk):
         # 2. Build Data List
         display_state = []
         for author in all_authors:
-            if author in self.users_in_input_mode:
+            if author in self.input_mode_users:
                 display_state.append((author, 'pending', 'pending'))
             else:
                 if author in self._next_week_goals:
@@ -2475,7 +2474,7 @@ class MeetingApp(ctk.CTk):
         hours_label.grid(row=0, column=5, sticky="nsew")
         self._team_row_widget = frame_1
 
-    def s4_get_users_in_input_mode(self) -> set[str]:
+    def build_input_mode_users(self) -> set[str]:
         """Returns a set of users currently in input mode."""
         return {sel_user for user, sel_user in self.online_users_info if user != self.user_name and sel_user}
 
@@ -2511,7 +2510,7 @@ class MeetingApp(ctk.CTk):
         self.s4_update_display_ui()
 
     def _s4_update_goal_data(self, field, value):
-        author = self.s4_selected_author_var.get()
+        author = self.s4_selected_author_var.get() # type: ignore[attr-defined]
         goals = self._next_week_goals.setdefault(author, {})
         if value > 0:
             goals[field] = value
