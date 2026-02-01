@@ -58,9 +58,9 @@ def init_database():
         "week": None
     })
 
-    # A2: Author Goals
+    # A2: Goals
     status_col.insert_one({
-        "_id": "Author Goals"
+        "_id": "Goals"
     })
 
     # A3: Users

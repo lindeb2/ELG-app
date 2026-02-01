@@ -50,9 +50,9 @@ def _get_user_name():
     try:
         with open("config.json", "r") as f:
             config = json.load(f)
-            return config.get("author", "Unknown")
+            return config.get("user", "Unknown")
     except FileNotFoundError:
-        print("Could not fetch author name from config.")
+        print("Could not fetch username from config.")
         return "Unknown"
 
 def format_time(seconds):
@@ -257,7 +257,7 @@ class MeetingApp(ctk.CTk):
             doc_id = change["documentKey"]["_id"]
             if doc_id == "State":
                 self._store_or_process_change('state', change)
-            elif doc_id == "Author Goals":
+            elif doc_id == "Goals":
                 self._store_or_process_change('goals', change)
             elif doc_id == "Users":
                 self._store_or_process_change('users', change)
@@ -387,15 +387,15 @@ class MeetingApp(ctk.CTk):
                     unset_ops = {}
                     prefix = f"{self.next_year}.{self.next_week}"
 
-                    for author, changes in goals_buffer.items():
-                        author_path = f"{prefix}.{author}"
+                    for user, changes in goals_buffer.items():
+                        user_path = f"{prefix}.{user}"
 
                         if changes == {}:
-                            unset_ops[author_path] = ""
+                            unset_ops[user_path] = ""
                             continue
 
                         for field, val in changes.items():
-                            full_path = f"{author_path}.{field}"
+                            full_path = f"{user_path}.{field}"
                             if val > 0:
                                 set_ops[full_path] = val
                             elif val == 0:
@@ -407,7 +407,7 @@ class MeetingApp(ctk.CTk):
                     if unset_ops:
                         update_doc["$unset"] = unset_ops
 
-                    operations.append(UpdateOne({"_id": "Author Goals"}, update_doc, upsert=True))
+                    operations.append(UpdateOne({"_id": "Goals"}, update_doc, upsert=True))
                 status_meeting_collection.bulk_write(operations, ordered=False)
 
             except Exception as e:
@@ -502,7 +502,7 @@ class MeetingApp(ctk.CTk):
         last_seen_path = f"{user_path}.last_seen"
         selected_user_path = f"{user_path}.selected_user"
         while True:
-            sel_user = self.s4_selected_author_var.get() if (self.current_slide == self.slide_map.index(4) and self.s4_in_input) else None # type: ignore[attr-defined]
+            sel_user = self.s4_selected_user_var.get() if (self.current_slide == self.slide_map.index(4) and self.s4_in_input) else None # type: ignore[attr-defined]
             try:
                 status_meeting_collection.update_one(
                     {"_id": "Users"},
@@ -543,7 +543,7 @@ class MeetingApp(ctk.CTk):
         if users_changed:
             self.users_count_label.configure(text=f"Participants ({len(self.online_users)})")
             self.update_users_list()
-            self.s4_update_selectable_authors()
+            self.s4_update_selectable_users()
         if users_changed or input_mode_changed:
             self.s4_update_display_ui()
 
@@ -553,15 +553,15 @@ class MeetingApp(ctk.CTk):
             self.ensure_slide(1, 2)
             self.logs = self._fetch_logs()
             self.hours_graph_data, self.days_charts_data, self.team_hours_bar_data = self.s1_build_all_charts_data()
-            self.s2_set_logs_by_author()
+            self.s2_set_logs_by_user()
             self.s1_update_hours_graph()
             self.s1_update_days_charts()
             self.s1_update_team_hours_bar()
-            self.s2_update_selectable_authors()
-            if change.get("operationType") == "insert" and self.s2_selected_author_var.get() == full_doc.get("author"):
+            self.s2_update_selectable_users()
+            if change.get("operationType") == "insert" and self.s2_selected_user_var.get() == full_doc.get("user"):
                 self.s2_create_log_widget(full_doc)
             else:
-                self.s2_create_author_log_widgets()
+                self.s2_create_user_log_widgets()
 
     def _handle_points_change(self, _change):
         if not self._update_if_changed("discussion_points", self._fetch_discussion_points()):
@@ -696,27 +696,27 @@ class MeetingApp(ctk.CTk):
     def s1_build_all_charts_data(self):
         """Returns hours_graph_data, days_charts_data & team_hours_bar_data."""
         # 1) Get base data
-        author_day_seconds = defaultdict(lambda: [0 for _ in range(7)])
+        user_day_seconds = defaultdict(lambda: [0 for _ in range(7)])
         for log in self.logs:
-            author = log["author"]
+            user = log["user"]
             dt = log["timestamp"]
             weekday_idx = dt.weekday()
             elapsed_seconds = log["elapsed_time"]
-            author_day_seconds[author][weekday_idx] += elapsed_seconds
+            user_day_seconds[user][weekday_idx] += elapsed_seconds
 
-        all_authors = author_day_seconds.keys() | self._current_week_goals.keys()
+        all_users = user_day_seconds.keys() | self._current_week_goals.keys()
 
-        base_author_data = []
+        base_user_data = []
         max_hours = 0.0
-        for author in all_authors:
-            day_seconds = author_day_seconds.get(author, [0] * 7)
+        for user in all_users:
+            day_seconds = user_day_seconds.get(user, [0] * 7)
             total_hours = sum(day_seconds) / 3600
             days_hours = [secs / 3600 for secs in day_seconds]
-            goal_data = self._current_week_goals.get(author, {})
+            goal_data = self._current_week_goals.get(user, {})
             goal_hours = goal_data.get("hours", 0)
             goal_days = goal_data.get("days", 0)
-            base_author_data.append({
-                "author": author,
+            base_user_data.append({
+                "user": user,
                 "total_hours": total_hours,
                 "days_hours": days_hours,
                 "goal_hours": goal_hours,
@@ -743,8 +743,8 @@ class MeetingApp(ctk.CTk):
             else:
                 small_intervals.append(val / 2)  # Float
 
-        hours_graph_authors_data = []
-        for data in base_author_data:
+        hours_graph_users_data = []
+        for data in base_user_data:
             total_hours = data["total_hours"]
             rel_height = total_hours / max_value
             if total_hours > 0:
@@ -771,8 +771,8 @@ class MeetingApp(ctk.CTk):
             day_bar_header_strings = [
                 self.s1_format_bar_header(h, data["goal_hours"]) for h in data["days_hours"]
             ]
-            hours_graph_authors_data.append({
-                "author": data["author"],
+            hours_graph_users_data.append({
+                "user": data["user"],
                 "total_hours": data["total_hours"],
                 "goal_hours": data["goal_hours"],
                 "rel_height": rel_height,
@@ -784,8 +784,8 @@ class MeetingApp(ctk.CTk):
             })
 
         # 2.2) Days Chart
-        days_charts_author_data = []
-        for data in base_author_data:
+        days_charts_user_data = []
+        for data in base_user_data:
             days_hours = data["days_hours"]
             goal_days = data["goal_days"]
             active_days = [i for i, h in enumerate(days_hours) if h]
@@ -796,8 +796,8 @@ class MeetingApp(ctk.CTk):
                 goal_data = (goal_days - 1, goal_color)
             else:
                 goal_data = None
-            days_charts_author_data.append({
-                "author": data["author"],
+            days_charts_user_data.append({
+                "user": data["user"],
                 "total_hours": data["total_hours"],
                 "days_hours": days_hours,
                 "goal_days": goal_days,
@@ -806,19 +806,19 @@ class MeetingApp(ctk.CTk):
             })
 
         # 2.3) Team Hours Bar
-        team_hours = sum(d["total_hours"] for d in hours_graph_authors_data)
-        team_goal = sum(d["goal_hours"] for d in hours_graph_authors_data)
+        team_hours = sum(d["total_hours"] for d in hours_graph_users_data)
+        team_goal = sum(d["goal_hours"] for d in hours_graph_users_data)
         rel_height_team = min(team_hours / team_goal, 1.0) if team_goal else 1.0
-        team_hours_bar_author_data = []
+        team_hours_bar_user_data = []
         others = []
         if team_hours > 0:
-            for d in base_author_data:
+            for d in base_user_data:
                 total_hours = d["total_hours"]
                 if total_hours <= 0:
                     continue
                 ratio = total_hours / team_hours
                 percent = ratio * 100
-                default_text = f"{d['author']}\n{int(percent)}%"
+                default_text = f"{d['user']}\n{int(percent)}%"
                 hover_text = f"{math.floor(total_hours * 10) / 10.0:g} h"
                 entry = {
                     "ratio": ratio,
@@ -826,7 +826,7 @@ class MeetingApp(ctk.CTk):
                     "hover_text": hover_text,
                 }
                 if percent >= 10:
-                    team_hours_bar_author_data.append(entry)
+                    team_hours_bar_user_data.append(entry)
                 else:
                     others.append(entry)
             if len(others) > 1:
@@ -853,35 +853,35 @@ class MeetingApp(ctk.CTk):
             goal_data_team = None
 
         # 3) Sort
-        hours_graph_authors_data.sort(
+        hours_graph_users_data.sort(
             key=lambda x: (
                 -x["total_hours"],
                 -x["goal_hours"],
-                x["author"],
+                x["user"],
             )
         )
-        days_charts_author_data.sort(
+        days_charts_user_data.sort(
             key=lambda x: (
                 -sum(bool(h) for h in x["days_hours"]),  # Active days count
                 -x["goal_days"],
-                x["author"],
+                x["user"],
             )
         )
-        team_hours_bar_author_data.sort(key=lambda x: x["ratio"], reverse=True)
-        team_hours_bar_author_data.extend(others)
+        team_hours_bar_user_data.sort(key=lambda x: x["ratio"], reverse=True)
+        team_hours_bar_user_data.extend(others)
 
         # 4) Build return dictionaries
         hours_graph_data = {
-            "author_data": hours_graph_authors_data,
+            "user_data": hours_graph_users_data,
             "big_intervals": big_intervals,
             "small_intervals": small_intervals,
             "max_value": max_value
         }
         days_charts_data = {
-            "author_data": days_charts_author_data,
+            "user_data": days_charts_user_data,
         }
         team_hours_bar_data = {
-            "author_data": team_hours_bar_author_data,
+            "user_data": team_hours_bar_user_data,
             "team_goal": team_goal,
             "rel_height": rel_height_team,
             "header_string": team_header_string,
@@ -900,7 +900,7 @@ class MeetingApp(ctk.CTk):
         big_intervals = self.hours_graph_data["big_intervals"]
         small_intervals = self.hours_graph_data["small_intervals"]
         max_value = self.hours_graph_data["max_value"]
-        author_data = self.hours_graph_data["author_data"]
+        user_data = self.hours_graph_data["user_data"]
 
         top_margin = 14
         bottom_margin = 19
@@ -934,8 +934,8 @@ class MeetingApp(ctk.CTk):
         goal_line_width = 110  # 100 + 5*2
         max_name_width = 90  # 100-2*5
 
-        for col_idx, data in enumerate(author_data):
-            author_name = data["author"]
+        for col_idx, data in enumerate(user_data):
+            user_name = data["user"]
             header_string = data["header_string"]
             rel_height = data["rel_height"]
             day_bar_top_rel_ys = data["day_bar_top_rel_ys"]
@@ -961,8 +961,8 @@ class MeetingApp(ctk.CTk):
             # Name Label
             font = ctk.CTkFont(family="Arial", size=16)
 
-            display_text = self.truncate_text_to_pixels(author_name, font, max_name_width)
-            author_label = ctk.CTkLabel(
+            display_text = self.truncate_text_to_pixels(user_name, font, max_name_width)
+            user_label = ctk.CTkLabel(
                 self.names_row,
                 text=display_text,
                 font=("Arial", 16),
@@ -972,7 +972,7 @@ class MeetingApp(ctk.CTk):
                 height=0,
                 width=100
             )
-            author_label.pack(side="left", fill="y", expand=True)  # placed correctly??
+            user_label.pack(side="left", fill="y", expand=True)  # placed correctly??
 
             # Goal lines
             if goal_data:
@@ -1146,7 +1146,7 @@ class MeetingApp(ctk.CTk):
         self.s1_create_hours_graph()
 
     def s1_create_days_charts(self):
-        self._days_chart_author_cols = []
+        self._days_chart_user_cols = []
         day_colors = [
             "#FF0000",  # Monday
             "#FF8426",  # Tuesday
@@ -1156,21 +1156,21 @@ class MeetingApp(ctk.CTk):
             "#1F44FF",  # Saturday
             "#8E00BD",  # Sunday
         ]
-        for data in self.days_charts_data["author_data"]:
-            author = data["author"]
-            author_col = ctk.CTkFrame(
+        for data in self.days_charts_data["user_data"]:
+            user = data["user"]
+            user_col = ctk.CTkFrame(
                 self.days_chart_data_row,
                 fg_color="#181C20",
                 corner_radius=0,
                 width=130
             )
-            author_col.pack(side="left", fill="y", expand=True)
-            author_col.grid_propagate(False)
-            self._days_chart_author_cols.append(author_col)
+            user_col.pack(side="left", fill="y", expand=True)
+            user_col.grid_propagate(False)
+            self._days_chart_user_cols.append(user_col)
             font = ctk.CTkFont(family="Arial", size=16)
             max_width = 100 - 10
-            display_text = self.truncate_text_to_pixels(author, font, max_width)
-            author_label = ctk.CTkLabel(
+            display_text = self.truncate_text_to_pixels(user, font, max_width)
+            user_label = ctk.CTkLabel(
                 self.days_chart_names_row,
                 text=display_text,
                 font=("Arial", 16),
@@ -1180,7 +1180,7 @@ class MeetingApp(ctk.CTk):
                 height=18,
                 width=100
             )
-            author_label.pack(side="left", fill="y", expand=True)
+            user_label.pack(side="left", fill="y", expand=True)
 
         def show_pie(idx):
             for i, pie_tuple in enumerate(self._days_chart_pie_charts): # type: ignore[attr-defined]
@@ -1221,16 +1221,16 @@ class MeetingApp(ctk.CTk):
             if segment_height % 2 == 1:  # Corrects tkinter flaw, if odd make even
                 segment_height -= 1
             self._days_chart_pie_charts = []
-            for col_idx, author_col in enumerate(self._days_chart_author_cols):
-                author_data = self.days_charts_data["author_data"][col_idx]
-                days_hours = author_data["days_hours"]
-                goal_days = author_data["goal_days"]
-                total_hours = author_data["total_hours"]
-                day_order = author_data["day_order"]
-                goal_data = author_data["goal_data"]
+            for col_idx, user_col in enumerate(self._days_chart_user_cols):
+                user_data = self.days_charts_data["user_data"][col_idx]
+                days_hours = user_data["days_hours"]
+                goal_days = user_data["goal_days"]
+                total_hours = user_data["total_hours"]
+                day_order = user_data["day_order"]
+                goal_data = user_data["goal_data"]
 
                 # Destroy old
-                for child in author_col.winfo_children():
+                for child in user_col.winfo_children():
                     child.destroy()
                 # Bars
                 y = row_height - segment_height
@@ -1238,7 +1238,7 @@ class MeetingApp(ctk.CTk):
                 for bar_idx, i in enumerate(day_order):
                     is_active = days_hours[i] > 0
                     day_bar_boarder = ctk.CTkFrame(
-                        author_col,
+                        user_col,
                         fg_color=day_colors[i] if is_active else "#181C20",
                         corner_radius=40,
                         width=80,
@@ -1254,7 +1254,7 @@ class MeetingApp(ctk.CTk):
                         line_length = 80 - (corner_radius * 2) + offset
                         line_y = y + segment_height - 2  # bottom of current bar
                         black_canvas = tkinter.Canvas(
-                            author_col,
+                            user_col,
                             width=line_length,
                             height=2,
                             bg="black",
@@ -1273,7 +1273,7 @@ class MeetingApp(ctk.CTk):
                     goal_y = bar_tops[goal_idx]
                     goal_y = max(goal_y - 2, 0)
                     goal_line = ctk.CTkFrame(
-                        author_col,
+                        user_col,
                         fg_color=goal_color,
                         height=6,
                         width=88,
@@ -1287,11 +1287,11 @@ class MeetingApp(ctk.CTk):
                     self._days_chart_pie_charts.append(None)
                 else:
                     # Calculate dynamic radius based on parent height
-                    author_col.update_idletasks()
-                    parent_height = author_col.winfo_height()
+                    user_col.update_idletasks()
+                    parent_height = user_col.winfo_height()
                     radius = min(130, parent_height)
                     pie_chart = CTkPieChart(
-                        author_col,
+                        user_col,
                         line_width=65,
                         border_width=25,
                         border_color="black",
@@ -1306,14 +1306,14 @@ class MeetingApp(ctk.CTk):
                         weekday_abbr = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"][i]
                         pie_chart.add(str(i), hours, color=day_colors[i], text_color="black", custom_text=weekday_abbr)
                     pie_chart.bind("<Button-1>", lambda e, chart=pie_chart: chart.change_text_mode('toggle'))
-                    pie_background = ctk.CTkFrame(author_col, fg_color="#181C20", corner_radius=0)
+                    pie_background = ctk.CTkFrame(user_col, fg_color="#181C20", corner_radius=0)
                     pie_background.place(relx=0, rely=0, relwidth=1.0, relheight=1.0)
                     pie_background.lower()
                     pie_chart.place(relx=0.5, rely=0.5, anchor="center")
                     pie_chart.lower()
                     self._days_chart_pie_charts.append((pie_chart, pie_background))
                 # Bind hover events to the pie chart
-                propagate_pie_hover(author_col, col_idx)
+                propagate_pie_hover(user_col, col_idx)
 
         self.days_chart_data_row.bind("<Configure>", update_day_bars)
         update_day_bars(None)
@@ -1333,7 +1333,7 @@ class MeetingApp(ctk.CTk):
         team_goal = self.team_hours_bar_data["team_goal"]
         header_string = self.team_hours_bar_data["header_string"]
         rel_height = self.team_hours_bar_data["rel_height"]
-        author_data = self.team_hours_bar_data["author_data"]
+        user_data = self.team_hours_bar_data["user_data"]
         goal_data = self.team_hours_bar_data["goal_data"]
 
         # Header - 1.1
@@ -1378,23 +1378,23 @@ class MeetingApp(ctk.CTk):
         team_hours_bar.pack(fill="both", expand=True, padx=3, pady=0)
         team_hours_bar.pack_propagate(False)
         team_hours_bar.update_idletasks()
-        # Author bars
+        # user bars
         y_offset = 0.0
         bar_boundaries = []
-        for data in author_data:
+        for data in user_data:
             ratio = data['ratio'] # type: ignore
             default_text = data['default_text'] # type: ignore
             hover_text = data['hover_text'] # type: ignore
 
-            author_bar = ctk.CTkFrame(
+            user_bar = ctk.CTkFrame(
                 team_hours_bar,
                 fg_color="#0000C6",
                 corner_radius=0,
             )
-            author_bar.place(relx=0, rely=y_offset, relwidth=1.0, relheight=ratio, anchor="nw")
+            user_bar.place(relx=0, rely=y_offset, relwidth=1.0, relheight=ratio, anchor="nw")
             # Label
             label = ctk.CTkLabel(
-                author_bar,
+                user_bar,
                 text=default_text,
                 font=("Arial", 14, "bold"),
                 text_color="#E0E0E0",
@@ -1409,8 +1409,8 @@ class MeetingApp(ctk.CTk):
             def on_leave(_, lbl=label, txt=default_text):
                 lbl.configure(text=txt)
 
-            author_bar.bind("<Enter>", on_enter)
-            author_bar.bind("<Leave>", on_leave)
+            user_bar.bind("<Enter>", on_enter)
+            user_bar.bind("<Leave>", on_leave)
             label.bind("<Enter>", on_enter)
             label.bind("<Leave>", on_leave)
             bar_boundaries.append(y_offset)
@@ -1418,7 +1418,7 @@ class MeetingApp(ctk.CTk):
         # Lines
         self.draw_horizontal_line(team_hours_bar_boarder, 0, 3, "nw")  # Top
         self.draw_horizontal_line(team_hours_bar_boarder, 1.0, 3, "sw")  # Bottom
-        for boundary in bar_boundaries[1:]:  # Between authors
+        for boundary in bar_boundaries[1:]:  # Between users
             self.draw_horizontal_line(team_hours_bar_boarder, boundary, 3, "w")
         # Goal line
         if team_goal > 0:
@@ -1502,34 +1502,34 @@ class MeetingApp(ctk.CTk):
             return year == self.current_year and week == self.current_week
 
         # Check personal records
-        for author in self.online_users:
-            if author in highscores:
-                author_records = highscores[author]
+        for user in self.online_users:
+            if user in highscores:
+                user_records = highscores[user]
                 for time_type in ["Day", "Week", "Month", "Year"]:
-                    if time_type in author_records:
+                    if time_type in user_records:
                         # Check time records
-                        if "time" in author_records[time_type] and author_records[time_type]["time"]["date"]:
-                            date_str = author_records[time_type]["time"]["date"]
+                        if "time" in user_records[time_type] and user_records[time_type]["time"]["date"]:
+                            date_str = user_records[time_type]["time"]["date"]
                             if is_in_current_week(date_str):
                                 records_found.append({
                                     "type": "Personal Best",
-                                    "author": author,
+                                    "user": user,
                                     "time_type": time_type,
                                     "metric": "Time",
-                                    "value": format_time(author_records[time_type]["time"]["value"]),
+                                    "value": format_time(user_records[time_type]["time"]["value"]),
                                     "date": date_str
                                 })
                         # Check activity records (except for Day)
-                        if time_type != "Day" and "activity" in author_records[time_type] and \
-                                author_records[time_type]["activity"]["date"]:
-                            date_str = author_records[time_type]["activity"]["date"]
+                        if time_type != "Day" and "activity" in user_records[time_type] and \
+                                user_records[time_type]["activity"]["date"]:
+                            date_str = user_records[time_type]["activity"]["date"]
                             if is_in_current_week(date_str):
-                                activity_ratio = author_records[time_type]["activity"]["value"]
-                                active_days = author_records[time_type]["activity"]["active_days"]
-                                total_days = author_records[time_type]["activity"]["total_days"]
+                                activity_ratio = user_records[time_type]["activity"]["value"]
+                                active_days = user_records[time_type]["activity"]["active_days"]
+                                total_days = user_records[time_type]["activity"]["total_days"]
                                 records_found.append({
                                     "type": "Personal Best",
-                                    "author": author,
+                                    "user": user,
                                     "time_type": time_type,
                                     "metric": "Activity",
                                     "value": f"{active_days}/{total_days} days ({activity_ratio:.1%})",
@@ -1546,7 +1546,7 @@ class MeetingApp(ctk.CTk):
                         if is_in_current_week(date_str):
                             records_found.append({
                                 "type": "World Record",
-                                "author": global_records[time_type]["time"].get("author", "?"),
+                                "user": global_records[time_type]["time"].get("user", "?"),
                                 "time_type": time_type,
                                 "metric": "Time",
                                 "value": format_time(global_records[time_type]["time"]["value"]),
@@ -1562,7 +1562,7 @@ class MeetingApp(ctk.CTk):
                             total_days = global_records[time_type]["activity"]["total_days"]
                             records_found.append({
                                 "type": "World Record",
-                                "author": global_records[time_type]["activity"].get("author", "?"),
+                                "user": global_records[time_type]["activity"].get("user", "?"),
                                 "time_type": time_type,
                                 "metric": "Activity",
                                 "value": f"{active_days}/{total_days} days ({activity_ratio:.1%})",
@@ -1579,7 +1579,7 @@ class MeetingApp(ctk.CTk):
                         if is_in_current_week(date_str):
                             records_found.append({
                                 "type": "Team Record",
-                                "author": "All Authors",
+                                "user": "All users",
                                 "time_type": time_type,
                                 "metric": "Time",
                                 "value": format_time(combined_records[time_type]["time"]["value"]),
@@ -1595,7 +1595,7 @@ class MeetingApp(ctk.CTk):
                             total_days = combined_records[time_type]["activity"]["total_days"]
                             records_found.append({
                                 "type": "Team Record",
-                                "author": "All Authors",
+                                "user": "All users",
                                 "time_type": time_type,
                                 "metric": "Activity",
                                 "value": f"{active_days}/{total_days} days ({activity_ratio:.1%})",
@@ -1609,14 +1609,14 @@ class MeetingApp(ctk.CTk):
                 # Create record frame
                 record_frame = ctk.CTkFrame(self.records_content, fg_color="#23272B", corner_radius=5)
                 record_frame.pack(fill="x", pady=5, padx=5)
-                # Record type and author
-                type_author_label = ctk.CTkLabel(
+                # Record type and user
+                type_user_label = ctk.CTkLabel(
                     record_frame,
-                    text=f"{record['type']} by {record['author']}",
+                    text=f"{record['type']} by {record['user']}",
                     font=("Arial", 14, "bold"),
                     text_color="white"
                 )
-                type_author_label.pack(anchor="w", padx=10, pady=(5, 2))
+                type_user_label.pack(anchor="w", padx=10, pady=(5, 2))
                 # Time type and metric
                 metric_label = ctk.CTkLabel(
                     record_frame,
@@ -1663,23 +1663,23 @@ class MeetingApp(ctk.CTk):
         """Logs"""
         title = ctk.CTkLabel(
             self.slide_frames[2],
-            text="Author Logs",
+            text="user Logs",
             font=("Arial", 60, "bold"),
             text_color="white"
         )
         title.place(relx=0.028125, rely=0.05, anchor="nw")
         # Main Frame
-        self.logs_author_container = ctk.CTkFrame(self.slide_frames[2])
-        self.logs_author_container.place(relx=0.5, rely=0.5, relwidth=0.8, relheight=0.7, anchor="center")
+        self.logs_user_container = ctk.CTkFrame(self.slide_frames[2])
+        self.logs_user_container.place(relx=0.5, rely=0.5, relwidth=0.8, relheight=0.7, anchor="center")
         # Outer Logs Frame
-        self.logs_frame = ctk.CTkFrame(self.logs_author_container)
+        self.logs_frame = ctk.CTkFrame(self.logs_user_container)
         self.logs_frame.pack(side="bottom", fill="both", expand=True, padx=10, pady=(1, 10))
         # Selected User Name, default to self
-        self.s2_selected_author_var = ctk.StringVar(value=self.user_name)
+        self.s2_selected_user_var = ctk.StringVar(value=self.user_name)
         # Selected User - dropdown button
         self.s2_selected_user_label = ctk.CTkLabel(
-            self.logs_author_container,
-            textvariable=self.s2_selected_author_var,
+            self.logs_user_container,
+            textvariable=self.s2_selected_user_var,
             font=("Arial", 40, "bold"),
             text_color="white",
             height=38,
@@ -1687,15 +1687,15 @@ class MeetingApp(ctk.CTk):
         self.s2_selected_user_label._label.configure(cursor="hand2")
         self.s2_selected_user_label._canvas.configure(cursor="hand2")
         self.s2_selected_user_label.pack(ipadx=6, anchor="w", padx=6, pady=(6, 0))
-        self.s2_selected_user_label.bind("<Enter>", self.s2_selected_author_enter)
-        self.s2_selected_user_label.bind("<Leave>", self.s2_selected_author_leave)
+        self.s2_selected_user_label.bind("<Enter>", self.s2_selected_user_enter)
+        self.s2_selected_user_label.bind("<Leave>", self.s2_selected_user_leave)
         self.s2_selected_user_label.bind("<Button-1>", self.s2_show_dropdown)
         self.s2_user_list_frame = ctk.CTkFrame(
-            self.logs_author_container,
+            self.logs_user_container,
             fg_color='gray20',
             corner_radius=0
         )
-        self.s2_create_selectable_authors()
+        self.s2_create_selectable_users()
         # Scrollable Frame
         self.logs_scrollable_frame = CtkSmartScrollableFrame(
             self.logs_frame,
@@ -1708,22 +1708,22 @@ class MeetingApp(ctk.CTk):
         self.log_widgets = []
         self.selected_log_index = -1
 
-        self.s2_set_logs_by_author()
-        self.s2_create_author_log_widgets()
+        self.s2_set_logs_by_user()
+        self.s2_create_user_log_widgets()
 
         # Bind arrow keys for navigation
         self.bind("<Up>", self.s2_arrow_up)
         self.bind("<Down>", self.s2_arrow_down)
 
-    def s2_create_selectable_authors(self):
-        """Create the dropdown list of authors for logs (slide 2)."""
+    def s2_create_selectable_users(self):
+        """Create the dropdown list of users for logs (slide 2)."""
         # Create list
-        self.s2_selectable_authors = sorted({log.get("author") for log in self.logs})
+        self.s2_selectable_users = sorted({log.get("user") for log in self.logs})
         # Update selected if invalid
-        if self.s2_selected_author_var.get() not in self.s2_selectable_authors:
-            self.s2_selected_author_var.set(self.s2_selectable_authors[0])
+        if self.s2_selected_user_var.get() not in self.s2_selectable_users:
+            self.s2_selected_user_var.set(self.s2_selectable_users[0])
         # Create UI
-        for user in self.s2_selectable_authors:
+        for user in self.s2_selectable_users:
             user_frame = ctk.CTkFrame(
                 self.s2_user_list_frame,
                 fg_color="transparent",
@@ -1746,32 +1746,32 @@ class MeetingApp(ctk.CTk):
                 widget.bind("<Leave>", self.s2_dropdown_leave)
                 widget.bind("<Button-1>", lambda e, u=user: self.s2_dropdown_select(e, u))
 
-    def s2_destroy_selectable_authors(self):
-        """Destroy all dropdown author items for logs (slide 2)."""
+    def s2_destroy_selectable_users(self):
+        """Destroy all dropdown user items for logs (slide 2)."""
         for item in self.s2_user_list_frame.winfo_children():
             item.destroy()
 
-    def s2_update_selectable_authors(self):
-        """Refresh the dropdown author list for logs (slide 2)."""
-        self.s2_destroy_selectable_authors()
-        self.s2_create_selectable_authors()
+    def s2_update_selectable_users(self):
+        """Refresh the dropdown user list for logs (slide 2)."""
+        self.s2_destroy_selectable_users()
+        self.s2_create_selectable_users()
 
-    def s2_selected_author_enter(self, _event):
-        """Handle hover enter on logs author label"""
+    def s2_selected_user_enter(self, _event):
+        """Handle hover enter on logs user label"""
         self.s2_selected_user_label.configure(fg_color="gray20")
 
-    def s2_selected_author_leave(self, _event):
-        """Handle hover leave on logs author label"""
+    def s2_selected_user_leave(self, _event):
+        """Handle hover leave on logs user label"""
         if not self.s2_user_list_frame.winfo_ismapped():
             self.s2_selected_user_label.configure(fg_color="transparent")
 
     def s2_show_dropdown(self, _event):
-        """Show dropdown for logs author selection"""
+        """Show dropdown for logs user selection"""
         self.s2_user_list_frame.place(x=6, y=52, anchor="nw")  # 52=6+38+8
         self.bind("<Button-1>", self.s2_hide_dropdown)
 
     def s2_hide_dropdown(self, event=None):
-        """Hide the logs author dropdown"""
+        """Hide the logs user dropdown"""
         self.s2_user_list_frame.place_forget()
         self.unbind("<Button-1>")
         if event and self.winfo_containing(event.x_root, event.y_root).master != self.s2_selected_user_label:
@@ -1789,22 +1789,22 @@ class MeetingApp(ctk.CTk):
 
     def s2_dropdown_select(self, _event, user):
         """Handle selection of a user from logs dropdown"""
-        self.s2_selected_author_var.set(user)
+        self.s2_selected_user_var.set(user)
         self.s2_hide_dropdown()
-        self.s2_create_author_log_widgets()
+        self.s2_create_user_log_widgets()
 
-    def s2_set_logs_by_author(self):
-        """Creates or updates self.logs_by_author"""
+    def s2_set_logs_by_user(self):
+        """Creates or updates self.logs_by_user"""
         # Copy, Sort & Group Logs
         logs = list(self.logs)  # Shallow copy
         logs.sort(key=lambda x: x.get("timestamp", datetime.datetime.min))
-        self.logs_by_author = defaultdict(list)
+        self.logs_by_user = defaultdict(list)
         for log in logs:
-            self.logs_by_author[log["author"]].append(log)
+            self.logs_by_user[log["user"]].append(log)
 
-    def s2_create_author_log_widgets(self):
-        """Create log widgets for the specified author and store references for navigation"""
-        author = self.s2_selected_author_var.get()
+    def s2_create_user_log_widgets(self):
+        """Create log widgets for the specified user and store references for navigation"""
+        user = self.s2_selected_user_var.get()
         # Clear Existing Logs
         for widget in self.logs_scrollable_frame.winfo_children():
             widget.destroy()
@@ -1812,7 +1812,7 @@ class MeetingApp(ctk.CTk):
         self.expanded_log_widget = None
         self.selected_log_index = -1
         # Create New Logs
-        for log in self.logs_by_author.get(author):
+        for log in self.logs_by_user.get(user):
             self.s2_create_log_widget(log)
 
     def s2_create_log_widget(self, log):
@@ -2082,11 +2082,11 @@ class MeetingApp(ctk.CTk):
                 self.hours_entry.bind("<KeyRelease>", lambda e: self.s4_update_hourly_goal())
 
             def _create_user_selection():
-                self.s4_selected_author_var = ctk.StringVar(value=self.user_name) # Default to self
+                self.s4_selected_user_var = ctk.StringVar(value=self.user_name) # Default to self
 
                 self.s4_selected_user_label = ctk.CTkLabel(
                     self.goals_input_screen,
-                    textvariable=self.s4_selected_author_var,
+                    textvariable=self.s4_selected_user_var,
                     font=("Arial", 40, "bold"),
                     text_color="white",
                     height=38
@@ -2094,15 +2094,15 @@ class MeetingApp(ctk.CTk):
                 self.s4_selected_user_label._canvas.configure(cursor="hand2")
                 self.s4_selected_user_label._label.configure(cursor="hand2")
                 self.s4_selected_user_label.pack(ipadx=6, anchor="w", padx=6, pady=(6, 0))
-                self.s4_selected_user_label.bind("<Enter>", self.s4_selected_author_enter)
-                self.s4_selected_user_label.bind("<Leave>", self.s4_selected_author_leave)
+                self.s4_selected_user_label.bind("<Enter>", self.s4_selected_user_enter)
+                self.s4_selected_user_label.bind("<Leave>", self.s4_selected_user_leave)
                 self.s4_selected_user_label.bind("<Button-1>", self.s4_show_dropdown)
                 self.s4_user_list_frame = ctk.CTkFrame(
                     self.goals_input_screen,
                     fg_color='gray20',
                     corner_radius=0
                 )
-                self.s4_create_selectable_authors()
+                self.s4_create_selectable_users()
 
             _create_days()
             _create_hours()
@@ -2166,7 +2166,7 @@ class MeetingApp(ctk.CTk):
                     static_header_row.grid_columnconfigure(i, weight=1, uniform="pad_colum")
             ctk.CTkLabel(
                 static_header_row,
-                text="Author",
+                text="user",
                 font=("Arial", 20, "bold"),
                 text_color="white",
                 anchor="center"
@@ -2210,14 +2210,14 @@ class MeetingApp(ctk.CTk):
         _s4_create_display_screen()
         _s4_create_input_screen()
 
-    def s4_create_selectable_authors(self):
-        self.s4_selectable_authors = sorted(
+    def s4_create_selectable_users(self):
+        self.s4_selectable_users = sorted(
             self.online_users | self._current_week_goals.keys() | self._next_week_goals.keys() | {self.user_name})
         # Update selected if invalid
-        if self.s4_selected_author_var.get() not in self.s4_selectable_authors: # type: ignore[attr-defined]
-            self.s4_selected_author_var.set(self.s4_selectable_authors[0]) # type: ignore[attr-defined]
+        if self.s4_selected_user_var.get() not in self.s4_selectable_users: # type: ignore[attr-defined]
+            self.s4_selected_user_var.set(self.s4_selectable_users[0]) # type: ignore[attr-defined]
         # Create UI
-        for user in self.s4_selectable_authors:
+        for user in self.s4_selectable_users:
             user_frame = ctk.CTkFrame(
                 self.s4_user_list_frame, # type: ignore[attr-defined]
                 fg_color="transparent",
@@ -2240,20 +2240,20 @@ class MeetingApp(ctk.CTk):
                 widget.bind("<Leave>", self.s4_dropdown_leave)
                 widget.bind("<Button-1>", lambda e, u=user: self.s4_dropdown_select(e, u))
 
-    def s4_destroy_selectable_authors(self):
+    def s4_destroy_selectable_users(self):
         for item in self.s4_user_list_frame.winfo_children(): # type: ignore[attr-defined]
             item.destroy()
 
-    def s4_update_selectable_authors(self):
-        self.s4_destroy_selectable_authors()
-        self.s4_create_selectable_authors()
+    def s4_update_selectable_users(self):
+        self.s4_destroy_selectable_users()
+        self.s4_create_selectable_users()
 
-    def s4_selected_author_enter(self, _event):
-        """Handle hover enter on author label"""
+    def s4_selected_user_enter(self, _event):
+        """Handle hover enter on user label"""
         self.s4_selected_user_label.configure(fg_color="gray20") # type: ignore[attr-defined]
 
-    def s4_selected_author_leave(self, _event):
-        """Handle hover leave on author label"""
+    def s4_selected_user_leave(self, _event):
+        """Handle hover leave on user label"""
         if not self.s4_user_list_frame.winfo_ismapped(): # type: ignore[attr-defined]
             self.s4_selected_user_label.configure(fg_color="transparent") # type: ignore[attr-defined]
 
@@ -2281,21 +2281,21 @@ class MeetingApp(ctk.CTk):
 
     def s4_dropdown_select(self, _event, user):
         """Handle selection of a user from dropdown"""
-        self.s4_selected_author_var.set(user) # type: ignore[attr-defined]
+        self.s4_selected_user_var.set(user) # type: ignore[attr-defined]
         self.s4_hide_dropdown()
         self.s4_update_input_ui()
 
     @staticmethod
     def s4_fetch_goals(year, week):
-        return status_meeting_collection.find_one({"_id": "Author Goals"},
+        return status_meeting_collection.find_one({"_id": "Goals"},
             projection={f"{year}.{week}": 1}
         ).get(year, {}).get(week, {})
 
     def s4_update_input_ui(self, reset_focus=True):
-        """Updates the inputs goals ui for selected author"""
-        author = self.s4_selected_author_var.get() # type: ignore[attr-defined]
-        current_goals = self._current_week_goals.get(author, {})
-        next_goals = self._next_week_goals.get(author, {})
+        """Updates the inputs goals ui for selected user"""
+        user = self.s4_selected_user_var.get() # type: ignore[attr-defined]
+        current_goals = self._current_week_goals.get(user, {})
+        next_goals = self._next_week_goals.get(user, {})
         # Update days buttons
         if next_goals.get("days"):
             self.selected_days = next_goals["days"]
@@ -2359,41 +2359,41 @@ class MeetingApp(ctk.CTk):
         self._presence_update_event.set()
 
     def s4_update_display_ui(self):
-        """Update the goals display with all author goals (only if changed)"""
-        # 1. Build all authors (online & users with goals)
-        all_authors = sorted(self.online_users | self._next_week_goals.keys())
+        """Update the goals display with all user goals (only if changed)"""
+        # 1. Build all users (online & users with goals)
+        all_users = sorted(self.online_users | self._next_week_goals.keys())
 
         # 2. Build Data List
         display_state = []
-        for author in all_authors:
-            if author in self.input_mode_users:
-                display_state.append((author, 'pending', 'pending'))
+        for user in all_users:
+            if user in self.input_mode_users:
+                display_state.append((user, 'pending', 'pending'))
             else:
-                if author in self._next_week_goals:
-                    author_goals = self._next_week_goals[author]
-                    days_val = author_goals.get("days", 0)
-                    hours_val = author_goals.get("hours", 0)
-                    display_state.append((author, days_val, hours_val))
+                if user in self._next_week_goals:
+                    user_goals = self._next_week_goals[user]
+                    days_val = user_goals.get("days", 0)
+                    hours_val = user_goals.get("hours", 0)
+                    display_state.append((user, days_val, hours_val))
                 else:
-                    display_state.append((author, 0, 0))
+                    display_state.append((user, 0, 0))
         # 3. Return if no change
         if hasattr(self, '_last_goals_display_state') and self._last_goals_display_state == display_state: # type: ignore[attr-defined]
             return
         self._last_goals_display_state = display_state
 
-        # 4. Remove authors no longer in data (Widgets & Dict)
-        current_authors_in_display = {item[0] for item in display_state}
-        authors_to_remove = [
-            author for author in self._goals_display_widgets.keys() # type: ignore[attr-defined]
-            if author not in current_authors_in_display
+        # 4. Remove users no longer in data (Widgets & Dict)
+        current_users_in_display = {item[0] for item in display_state}
+        users_to_remove = [
+            user for user in self._goals_display_widgets.keys() # type: ignore[attr-defined]
+            if user not in current_users_in_display
         ]
-        for author in authors_to_remove:
-            self._goals_display_widgets[author]['frame'].destroy()  # type: ignore[attr-defined]
-            del self._goals_display_widgets[author]  # type: ignore[attr-defined]
+        for user in users_to_remove:
+            self._goals_display_widgets[user]['frame'].destroy()  # type: ignore[attr-defined]
+            del self._goals_display_widgets[user]  # type: ignore[attr-defined]
 
         # 5. Update or create widgets
-        for author, days, hours in display_state:
-            if author not in self._goals_display_widgets:  # type: ignore[attr-defined] Create new widgets
+        for user, days, hours in display_state:
+            if user not in self._goals_display_widgets:  # type: ignore[attr-defined] Create new widgets
                 frame_1 = ctk.CTkFrame(
                     self.goals_display_frame,  # type: ignore[attr-defined]
                     fg_color="#23272B",
@@ -2408,20 +2408,20 @@ class MeetingApp(ctk.CTk):
                         frame_2.grid_columnconfigure(i, weight=0, uniform="content_col", minsize=150)
                     else:
                         frame_2.grid_columnconfigure(i, weight=1, uniform="pad_colum")
-                author_label = ctk.CTkLabel(frame_2, text=author, font=("Arial", 20), text_color="white",
+                user_label = ctk.CTkLabel(frame_2, text=user, font=("Arial", 20), text_color="white",
                                             anchor="center")
-                author_label.grid(row=0, column=1, sticky="nsew", padx=(0, 10))
+                user_label.grid(row=0, column=1, sticky="nsew", padx=(0, 10))
                 days_label = ctk.CTkLabel(frame_2, text="", font=("Arial", 18), text_color="white", anchor="center")
                 days_label.grid(row=0, column=3, sticky="nsew", padx=(0, 10))
                 hours_label = ctk.CTkLabel(frame_2, text="", font=("Arial", 18), text_color="white", anchor="center")
                 hours_label.grid(row=0, column=5, sticky="nsew")
-                self._goals_display_widgets[author] = {  # type: ignore[attr-defined]
+                self._goals_display_widgets[user] = {  # type: ignore[attr-defined]
                     'frame': frame_1,
-                    'author_label': author_label,
+                    'user_label': user_label,
                     'days_label': days_label,
                     'hours_label': hours_label
                 }
-            widgets = self._goals_display_widgets[author] # type: ignore[attr-defined] Update the text
+            widgets = self._goals_display_widgets[user] # type: ignore[attr-defined] Update the text
             if days == 'pending':
                 widgets['days_label'].configure(text="⏳")
             else:
@@ -2433,11 +2433,11 @@ class MeetingApp(ctk.CTk):
                 widgets['hours_label'].configure(text=f"{hours or '-'}")
 
         # 6. Re-pack frames
-        for author_widgets in self._goals_display_widgets.values(): # type: ignore[attr-defined]
-            author_widgets['frame'].pack_forget()
-        for author, _, _ in display_state:
-            if author in self._goals_display_widgets: # type: ignore[attr-defined]
-                self._goals_display_widgets[author]['frame'].pack(fill="x", pady=2, padx=5) # type: ignore[attr-defined]
+        for user_widgets in self._goals_display_widgets.values(): # type: ignore[attr-defined]
+            user_widgets['frame'].pack_forget()
+        for user, _, _ in display_state:
+            if user in self._goals_display_widgets: # type: ignore[attr-defined]
+                self._goals_display_widgets[user]['frame'].pack(fill="x", pady=2, padx=5) # type: ignore[attr-defined]
 
         # 7. Team row
         if hasattr(self, '_team_row_widget') and self._team_row_widget is not None: # type: ignore[attr-defined]
@@ -2458,9 +2458,9 @@ class MeetingApp(ctk.CTk):
                 frame_2.grid_columnconfigure(i, weight=0, uniform="content_col", minsize=150)
             else:
                 frame_2.grid_columnconfigure(i, weight=1, uniform="pad_colum")
-        author_label = ctk.CTkLabel(frame_2, text="Team", font=("Arial", 20, "bold"), text_color="white",
+        user_label = ctk.CTkLabel(frame_2, text="Team", font=("Arial", 20, "bold"), text_color="white",
                                     anchor="center")
-        author_label.grid(row=0, column=1, sticky="nsew", padx=(0, 10))
+        user_label.grid(row=0, column=1, sticky="nsew", padx=(0, 10))
         days_label = ctk.CTkLabel(frame_2, text="", font=("Arial", 18), text_color="white", anchor="center")
         days_label.grid(row=0, column=3, sticky="nsew", padx=(0, 10))
         hours_label = ctk.CTkLabel(frame_2, text=team_hours, font=("Arial", 18, "bold"), text_color="white",
@@ -2473,7 +2473,7 @@ class MeetingApp(ctk.CTk):
         return {sel_user for user, sel_user in self.online_users_info if user != self.user_name and sel_user}
 
     def s4_update_hourly_goal(self, show_summary=False):
-        """Update only the hours goal for the current author. Optionally move to summary view if valid."""
+        """Update only the hours goal for the current user. Optionally move to summary view if valid."""
         hours = self.hours_entry.get().strip() # type: ignore[attr-defined]
         # Convert to int & validate
         try:
@@ -2494,7 +2494,7 @@ class MeetingApp(ctk.CTk):
             self.s4_show_display()
 
     def s4_update_days_goal(self, day_input):
-        """Update only the days goal for the current author."""
+        """Update only the days goal for the current user."""
         self.selected_days = 0 if day_input == self.selected_days else day_input
 
         self._s4_update_goal_data("days", self.selected_days)
@@ -2504,20 +2504,20 @@ class MeetingApp(ctk.CTk):
         self.s4_update_display_ui()
 
     def _s4_update_goal_data(self, field, value):
-        author = self.s4_selected_author_var.get() # type: ignore[attr-defined]
-        goals = self._next_week_goals.setdefault(author, {})
+        user = self.s4_selected_user_var.get() # type: ignore[attr-defined]
+        goals = self._next_week_goals.setdefault(user, {})
         if value > 0:
             goals[field] = value
         else:
             goals.pop(field, None)
             if not goals:
-                del self._next_week_goals[author]
+                del self._next_week_goals[user]
 
         with self._lock:
             if not goals:
-                self.update_buffer["goals"][author] = {}
+                self.update_buffer["goals"][user] = {}
             else:
-                self.update_buffer["goals"][author][field] = value
+                self.update_buffer["goals"][user][field] = value
 
         self._update_event.set()
 
