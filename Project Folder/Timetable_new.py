@@ -71,9 +71,9 @@ config_path = os.path.join(project_root, "config.json")
 
 with open(config_path) as file:
     config = json.load(file)
-    author = config["author"]
+    user = config["user"]
 
-def aggregate_day(year, month, day, author):
+def aggregate_day(year, month, day, user):
     pipeline = [
         {
             "$match": {
@@ -84,7 +84,7 @@ def aggregate_day(year, month, day, author):
         },
         {
             "$group": {
-                "_id": "$author",
+                "_id": "$user",
                 "time": {"$sum": "$elapsed_time"}
             }
         }
@@ -107,21 +107,21 @@ def aggregate_day(year, month, day, author):
         upsert=True
     )
     
-    # Update the specific author's document
-    author_time = next((entry["time"] for entry in result if entry["_id"] == author), 0)
+    # Update the specific user's document
+    user_time = next((entry["time"] for entry in result if entry["_id"] == user), 0)
     aggregations.update_one(
         {
-            "_id": author
+            "_id": user
         },
         {
             "$set": {
-                f"years.{year}.months.{month}.days.{day}.time": author_time
+                f"years.{year}.months.{month}.days.{day}.time": user_time
             }
         },
         upsert=True
     )
 
-def aggregate_weekday(year, month, day, weekday, author):
+def aggregate_weekday(year, month, day, weekday, user):
     pipeline = [
         {
             "$match": {
@@ -133,7 +133,7 @@ def aggregate_weekday(year, month, day, weekday, author):
         },
         {
             "$group": {
-                "_id": "$author",
+                "_id": "$user",
                 "time": {"$sum": "$elapsed_time"}
             }
         }
@@ -160,21 +160,21 @@ def aggregate_weekday(year, month, day, weekday, author):
         upsert=True
     )
     
-    # Update the specific author's document
-    author_time = next((entry["time"] for entry in result if entry["_id"] == author), 0)
+    # Update the specific user's document
+    user_time = next((entry["time"] for entry in result if entry["_id"] == user), 0)
     aggregations.update_one(
         {
-            "_id": author
+            "_id": user
         },
         {
             "$set": {
-                f"years.{year}.weeks.{week}.weekdays.{weekday}.time": author_time
+                f"years.{year}.weeks.{week}.weekdays.{weekday}.time": user_time
             }
         },
         upsert=True
     )
 
-def aggregate_week(year, week, author):
+def aggregate_week(year, week, user):
     pipeline = [
         {
             "$match": {
@@ -184,7 +184,7 @@ def aggregate_week(year, week, author):
         },
         {
             "$group": {
-                "_id": "$author",
+                "_id": "$user",
                 "time": {"$sum": "$elapsed_time"},
                 "active_days": {"$addToSet": {"$concat": ["$start_year", "-", "$start_month", "-", "$start_day"]}}
             }
@@ -216,22 +216,22 @@ def aggregate_week(year, week, author):
         upsert=True
     )
     
-    # Update the specific author's document
-    author_entry = next((entry for entry in result if entry["_id"] == author), None)
-    if author_entry:
-        author_active_days = len(author_entry["active_days"])
-        author_ratio = (author_active_days / total_days)
+    # Update the specific user's document
+    user_entry = next((entry for entry in result if entry["_id"] == user), None)
+    if user_entry:
+        user_active_days = len(user_entry["active_days"])
+        user_ratio = (user_active_days / total_days)
         
         aggregations.update_one(
             {
-                "_id": author
+                "_id": user
             },
             {
                 "$set": {
-                    f"years.{year}.weeks.{week}.time": author_entry["time"],
-                    f"years.{year}.weeks.{week}.active_days": author_active_days,
+                    f"years.{year}.weeks.{week}.time": user_entry["time"],
+                    f"years.{year}.weeks.{week}.active_days": user_active_days,
                     f"years.{year}.weeks.{week}.total_days": total_days,
-                    f"years.{year}.weeks.{week}.activity_ratio": author_ratio
+                    f"years.{year}.weeks.{week}.activity_ratio": user_ratio
                 }
             },
             upsert=True
@@ -250,7 +250,7 @@ def aggregate_week(year, week, author):
             },
             {
                 "$group": {
-                    "_id": "$author",
+                    "_id": "$user",
                     "time": {"$sum": "$elapsed_time"}
                 }
             }
@@ -274,21 +274,21 @@ def aggregate_week(year, week, author):
                 upsert=True
             )
             
-            # Update the specific author's document
-            author_weekday_time = next((entry["time"] for entry in weekday_result if entry["_id"] == author), 0)
+            # Update the specific user's document
+            user_weekday_time = next((entry["time"] for entry in weekday_result if entry["_id"] == user), 0)
             aggregations.update_one(
                 {
-                    "_id": author
+                    "_id": user
                 },
                 {
                     "$set": {
-                        f"years.{year}.weeks.{week}.weekdays.{weekday}.time": author_weekday_time
+                        f"years.{year}.weeks.{week}.weekdays.{weekday}.time": user_weekday_time
                     }
                 },
                 upsert=True
             )
 
-def aggregate_month(year, month, author):
+def aggregate_month(year, month, user):
     pipeline = [
         {
             "$match": {
@@ -298,7 +298,7 @@ def aggregate_month(year, month, author):
         },
         {
             "$group": {
-                "_id": "$author",
+                "_id": "$user",
                 "time": {"$sum": "$elapsed_time"},
                 "active_days": {"$addToSet": {"$concat": ["$start_year", "-", "$start_month", "-", "$start_day"]}}
             }
@@ -330,28 +330,28 @@ def aggregate_month(year, month, author):
         upsert=True
     )
     
-    # Update the specific author's document
-    author_entry = next((entry for entry in result if entry["_id"] == author), None)
-    if author_entry:
-        author_active_days = len(author_entry["active_days"])
-        author_ratio = (author_active_days / total_days)
+    # Update the specific user's document
+    user_entry = next((entry for entry in result if entry["_id"] == user), None)
+    if user_entry:
+        user_active_days = len(user_entry["active_days"])
+        user_ratio = (user_active_days / total_days)
         
         aggregations.update_one(
             {
-                "_id": author
+                "_id": user
             },
             {
                 "$set": {
-                    f"years.{year}.months.{month}.time": author_entry["time"],
-                    f"years.{year}.months.{month}.active_days": author_active_days,
+                    f"years.{year}.months.{month}.time": user_entry["time"],
+                    f"years.{year}.months.{month}.active_days": user_active_days,
                     f"years.{year}.months.{month}.total_days": total_days,
-                    f"years.{year}.months.{month}.activity_ratio": author_ratio
+                    f"years.{year}.months.{month}.activity_ratio": user_ratio
                 }
             },
             upsert=True
         )
 
-def aggregate_year(year, author):
+def aggregate_year(year, user):
     pipeline = [
         {
             "$match": {
@@ -360,7 +360,7 @@ def aggregate_year(year, author):
         },
         {
             "$group": {
-                "_id": "$author",
+                "_id": "$user",
                 "time": {"$sum": "$elapsed_time"},
                 "active_days": {"$addToSet": {"$concat": ["$start_year", "-", "$start_month", "-", "$start_day"]}}
             }
@@ -392,22 +392,22 @@ def aggregate_year(year, author):
         upsert=True
     )
     
-    # Update the specific author's document
-    author_entry = next((entry for entry in result if entry["_id"] == author), None)
-    if author_entry:
-        author_active_days = len(author_entry["active_days"])
-        author_ratio = (author_active_days / total_days)
+    # Update the specific user's document
+    user_entry = next((entry for entry in result if entry["_id"] == user), None)
+    if user_entry:
+        user_active_days = len(user_entry["active_days"])
+        user_ratio = (user_active_days / total_days)
         
         aggregations.update_one(
             {
-                "_id": author
+                "_id": user
             },
             {
                 "$set": {
-                    f"years.{year}.time": author_entry["time"],
-                    f"years.{year}.active_days": author_active_days,
+                    f"years.{year}.time": user_entry["time"],
+                    f"years.{year}.active_days": user_active_days,
                     f"years.{year}.total_days": total_days,
-                    f"years.{year}.activity_ratio": author_ratio
+                    f"years.{year}.activity_ratio": user_ratio
                 }
             },
             upsert=True
@@ -431,18 +431,18 @@ def recalculate_all_aggregations():
                 "start_month": month
             })
             for day in days:
-                aggregate_day(year, month, day, author)
+                aggregate_day(year, month, day, user)
             
             # Aggregate monthly data
-            aggregate_month(year, month, author)
+            aggregate_month(year, month, user)
         
         # Get all weeks for this year
         weeks = collection.distinct("start_week", {"start_year": year})
         for week in weeks:
-            aggregate_week(year, week, author)
+            aggregate_week(year, week, user)
         
         # Aggregate yearly data
-        aggregate_year(year, author)
+        aggregate_year(year, user)
 
 def recalculate_all_highscores():
     """
@@ -455,16 +455,16 @@ def recalculate_all_highscores():
     # Get all entries sorted by date
     entries = list(collection.find().sort("start_year", 1).sort("start_month", 1).sort("start_day", 1).sort("start_time", 1))
     
-    # Track current periods for each author
+    # Track current periods for each user
     current_periods = {}
     
     for entry in entries:
-        author = entry["author"]
+        user = entry["user"]
         date_str = f"{entry['start_year']}-{entry['start_month']}-{entry['start_day']} {entry['start_time']}"
         
-        # Initialize tracking for new authors
-        if author not in current_periods:
-            current_periods[author] = {
+        # Initialize tracking for new users
+        if user not in current_periods:
+            current_periods[user] = {
                 "year": None,
                 "month": None,
                 "week": None,
@@ -479,63 +479,63 @@ def recalculate_all_highscores():
             }
         
         # Update year total
-        if current_periods[author]["year"] != entry["start_year"]:
-            if current_periods[author]["year"] is not None:
-                year_total_days = daysInYear(current_periods[author]["year"])
+        if current_periods[user]["year"] != entry["start_year"]:
+            if current_periods[user]["year"] is not None:
+                year_total_days = daysInYear(current_periods[user]["year"])
                 year_activity_data = {
-                    "active_days": len(current_periods[author]["year_active_days"]),
+                    "active_days": len(current_periods[user]["year_active_days"]),
                     "total_days": year_total_days,
-                    "activity_ratio": len(current_periods[author]["year_active_days"]) / year_total_days
+                    "activity_ratio": len(current_periods[user]["year_active_days"]) / year_total_days
                 }
-                update_highscore(author, "Year", current_periods[author]["year_total"], date_str, True, year_activity_data)
-            current_periods[author]["year"] = entry["start_year"]
-            current_periods[author]["year_total"] = 0
-            current_periods[author]["year_active_days"] = set()
-        current_periods[author]["year_total"] += entry["elapsed_time"]
-        current_periods[author]["year_active_days"].add(f"{entry['start_year']}-{entry['start_month']}-{entry['start_day']}")
+                update_highscore(user, "Year", current_periods[user]["year_total"], date_str, True, year_activity_data)
+            current_periods[user]["year"] = entry["start_year"]
+            current_periods[user]["year_total"] = 0
+            current_periods[user]["year_active_days"] = set()
+        current_periods[user]["year_total"] += entry["elapsed_time"]
+        current_periods[user]["year_active_days"].add(f"{entry['start_year']}-{entry['start_month']}-{entry['start_day']}")
         
         # Update month total
-        if current_periods[author]["month"] != (entry["start_year"], entry["start_month"]):
-            if current_periods[author]["month"] is not None:
-                month_total_days = daysInMonth(current_periods[author]["month"][0], current_periods[author]["month"][1])
+        if current_periods[user]["month"] != (entry["start_year"], entry["start_month"]):
+            if current_periods[user]["month"] is not None:
+                month_total_days = daysInMonth(current_periods[user]["month"][0], current_periods[user]["month"][1])
                 month_activity_data = {
-                    "active_days": len(current_periods[author]["month_active_days"]),
+                    "active_days": len(current_periods[user]["month_active_days"]),
                     "total_days": month_total_days,
-                    "activity_ratio": len(current_periods[author]["month_active_days"]) / month_total_days
+                    "activity_ratio": len(current_periods[user]["month_active_days"]) / month_total_days
                 }
-                update_highscore(author, "Month", current_periods[author]["month_total"], date_str, True, month_activity_data)
-            current_periods[author]["month"] = (entry["start_year"], entry["start_month"])
-            current_periods[author]["month_total"] = 0
-            current_periods[author]["month_active_days"] = set()
-        current_periods[author]["month_total"] += entry["elapsed_time"]
-        current_periods[author]["month_active_days"].add(f"{entry['start_year']}-{entry['start_month']}-{entry['start_day']}")
+                update_highscore(user, "Month", current_periods[user]["month_total"], date_str, True, month_activity_data)
+            current_periods[user]["month"] = (entry["start_year"], entry["start_month"])
+            current_periods[user]["month_total"] = 0
+            current_periods[user]["month_active_days"] = set()
+        current_periods[user]["month_total"] += entry["elapsed_time"]
+        current_periods[user]["month_active_days"].add(f"{entry['start_year']}-{entry['start_month']}-{entry['start_day']}")
         
         # Update week total
-        if current_periods[author]["week"] != (entry["start_year"], entry["start_week"]):
-            if current_periods[author]["week"] is not None:
+        if current_periods[user]["week"] != (entry["start_year"], entry["start_week"]):
+            if current_periods[user]["week"] is not None:
                 week_total_days = daysInWeek()
                 week_activity_data = {
-                    "active_days": len(current_periods[author]["week_active_days"]),
+                    "active_days": len(current_periods[user]["week_active_days"]),
                     "total_days": week_total_days,
-                    "activity_ratio": len(current_periods[author]["week_active_days"]) / week_total_days
+                    "activity_ratio": len(current_periods[user]["week_active_days"]) / week_total_days
                 }
-                update_highscore(author, "Week", current_periods[author]["week_total"], date_str, True, week_activity_data)
-            current_periods[author]["week"] = (entry["start_year"], entry["start_week"])
-            current_periods[author]["week_total"] = 0
-            current_periods[author]["week_active_days"] = set()
-        current_periods[author]["week_total"] += entry["elapsed_time"]
-        current_periods[author]["week_active_days"].add(f"{entry['start_year']}-{entry['start_month']}-{entry['start_day']}")
+                update_highscore(user, "Week", current_periods[user]["week_total"], date_str, True, week_activity_data)
+            current_periods[user]["week"] = (entry["start_year"], entry["start_week"])
+            current_periods[user]["week_total"] = 0
+            current_periods[user]["week_active_days"] = set()
+        current_periods[user]["week_total"] += entry["elapsed_time"]
+        current_periods[user]["week_active_days"].add(f"{entry['start_year']}-{entry['start_month']}-{entry['start_day']}")
         
         # Update day total
-        if current_periods[author]["day"] != (entry["start_year"], entry["start_month"], entry["start_day"]):
-            if current_periods[author]["day"] is not None:
-                update_highscore(author, "Day", current_periods[author]["day_total"], date_str, True)
-            current_periods[author]["day"] = (entry["start_year"], entry["start_month"], entry["start_day"])
-            current_periods[author]["day_total"] = 0
-        current_periods[author]["day_total"] += entry["elapsed_time"]
+        if current_periods[user]["day"] != (entry["start_year"], entry["start_month"], entry["start_day"]):
+            if current_periods[user]["day"] is not None:
+                update_highscore(user, "Day", current_periods[user]["day_total"], date_str, True)
+            current_periods[user]["day"] = (entry["start_year"], entry["start_month"], entry["start_day"])
+            current_periods[user]["day_total"] = 0
+        current_periods[user]["day_total"] += entry["elapsed_time"]
     
     # Update final totals for the last periods
-    for author, periods in current_periods.items():
+    for user, periods in current_periods.items():
         date_str = f"{periods['year']}-{periods['month'][1]}-{entry['start_day']} {entry['start_time']}"
         
         if periods["year"] is not None:
@@ -545,7 +545,7 @@ def recalculate_all_highscores():
                 "total_days": year_total_days,
                 "activity_ratio": len(periods["year_active_days"]) / year_total_days
             }
-            update_highscore(author, "Year", periods["year_total"], date_str, True, year_activity_data)
+            update_highscore(user, "Year", periods["year_total"], date_str, True, year_activity_data)
         
         if periods["month"] is not None:
             month_total_days = daysInMonth(periods["month"][0], periods["month"][1])
@@ -554,7 +554,7 @@ def recalculate_all_highscores():
                 "total_days": month_total_days,
                 "activity_ratio": len(periods["month_active_days"]) / month_total_days
             }
-            update_highscore(author, "Month", periods["month_total"], date_str, True, month_activity_data)
+            update_highscore(user, "Month", periods["month_total"], date_str, True, month_activity_data)
         
         if periods["week"] is not None:
             week_total_days = daysInWeek()
@@ -563,10 +563,10 @@ def recalculate_all_highscores():
                 "total_days": week_total_days,
                 "activity_ratio": len(periods["week_active_days"]) / week_total_days
             }
-            update_highscore(author, "Week", periods["week_total"], date_str, True, week_activity_data)
+            update_highscore(user, "Week", periods["week_total"], date_str, True, week_activity_data)
         
         if periods["day"] is not None:
-            update_highscore(author, "Day", periods["day_total"], date_str, True)
+            update_highscore(user, "Day", periods["day_total"], date_str, True)
 
 # Toggle button function
 def toggle_button():
@@ -596,12 +596,12 @@ def update_timer():
         label.configure(text=format_time(int(elapsed_time)))
         root.after(1000, update_timer)
 
-def update_highscore(author, time_type, time_value, date_str, is_global=False, activity_data=None):
+def update_highscore(user, time_type, time_value, date_str, is_global=False, activity_data=None):
     """
-    Update highscores for a given time type and author.
+    Update highscores for a given time type and user.
     
     Args:
-        author (str): Name of the author
+        user (str): Name of the user
         time_type (str): Type of time record (Year, Month, Week, Day)
         time_value (int): Time value in seconds
         date_str (str): Date string in format "YYYY-MM-DD HH:MM:SS"
@@ -619,7 +619,7 @@ def update_highscore(author, time_type, time_value, date_str, is_global=False, a
         # Initialize highscores structure
         highscores = {
             "_id": "Highscores",
-            author: {
+            user: {
                 "Year": {
                     "time": {"value": 0, "date": None},
                     "activity": {"value": 0, "active_days": 0, "total_days": 0, "date": None}
@@ -638,19 +638,19 @@ def update_highscore(author, time_type, time_value, date_str, is_global=False, a
             },
             "Global": {
                 "Year": {
-                    "time": {"value": 0, "date": None, "author": None},
-                    "activity": {"value": 0, "active_days": 0, "total_days": 0, "date": None, "author": None}
+                    "time": {"value": 0, "date": None, "user": None},
+                    "activity": {"value": 0, "active_days": 0, "total_days": 0, "date": None, "user": None}
                 },
                 "Month": {
-                    "time": {"value": 0, "date": None, "author": None},
-                    "activity": {"value": 0, "active_days": 0, "total_days": 0, "date": None, "author": None}
+                    "time": {"value": 0, "date": None, "user": None},
+                    "activity": {"value": 0, "active_days": 0, "total_days": 0, "date": None, "user": None}
                 },
                 "Week": {
-                    "time": {"value": 0, "date": None, "author": None},
-                    "activity": {"value": 0, "active_days": 0, "total_days": 0, "date": None, "author": None}
+                    "time": {"value": 0, "date": None, "user": None},
+                    "activity": {"value": 0, "active_days": 0, "total_days": 0, "date": None, "user": None}
                 },
                 "Day": {
-                    "time": {"value": 0, "date": None, "author": None}
+                    "time": {"value": 0, "date": None, "user": None}
                 }
             },
             "Combined": {
@@ -672,9 +672,9 @@ def update_highscore(author, time_type, time_value, date_str, is_global=False, a
             }
         }
         aggregations.insert_one(highscores)
-    # Ensure the author's structure exists
-    if author not in highscores:
-        highscores[author] = {
+    # Ensure the user's structure exists
+    if user not in highscores:
+        highscores[user] = {
             "Year": {
                 "time": {"value": 0, "date": None},
                 "activity": {"value": 0, "active_days": 0, "total_days": 0, "date": None}
@@ -693,18 +693,18 @@ def update_highscore(author, time_type, time_value, date_str, is_global=False, a
         }
     
     # Update time record
-    if time_value > highscores[author][time_type]["time"]["value"]:
+    if time_value > highscores[user][time_type]["time"]["value"]:
         old_record = {
             "scope": "personal",
             "time_type": time_type,
             "metric": "total_time",
             "value": {
-                "total_time": highscores[author][time_type]["time"]["value"],
+                "total_time": highscores[user][time_type]["time"]["value"],
                 "active_days": None,
                 "total_days": None,
                 "percentage": None
             },
-            "date": highscores[author][time_type]["time"]["date"]
+            "date": highscores[user][time_type]["time"]["date"]
         }
         
         new_record = {
@@ -725,7 +725,7 @@ def update_highscore(author, time_type, time_value, date_str, is_global=False, a
             "new_record": new_record
         })
         
-        highscores[author][time_type]["time"] = {
+        highscores[user][time_type]["time"] = {
             "value": time_value,
             "date": date_str
         }
@@ -742,7 +742,7 @@ def update_highscore(author, time_type, time_value, date_str, is_global=False, a
                     "percentage": None
                 },
                 "date": highscores["Global"][time_type]["time"]["date"],
-                "author": highscores["Global"][time_type]["time"].get("author")
+                "user": highscores["Global"][time_type]["time"].get("user")
             }
             
             new_record = {
@@ -766,22 +766,22 @@ def update_highscore(author, time_type, time_value, date_str, is_global=False, a
             highscores["Global"][time_type]["time"] = {
                 "value": time_value,
                 "date": date_str,
-                "author": author
+                "user": user
             }
     
     # Update activity record if activity data is provided
-    if activity_data and time_type != "Day" and activity_data["activity_ratio"] > highscores[author][time_type]["activity"]["value"]:
+    if activity_data and time_type != "Day" and activity_data["activity_ratio"] > highscores[user][time_type]["activity"]["value"]:
         old_record = {
             "scope": "personal",
             "time_type": time_type,
             "metric": "days_active",
             "value": {
                 "total_time": None,
-                "active_days": highscores[author][time_type]["activity"]["active_days"],
-                "total_days": highscores[author][time_type]["activity"]["total_days"],
-                "percentage": highscores[author][time_type]["activity"]["value"]
+                "active_days": highscores[user][time_type]["activity"]["active_days"],
+                "total_days": highscores[user][time_type]["activity"]["total_days"],
+                "percentage": highscores[user][time_type]["activity"]["value"]
             },
-            "date": highscores[author][time_type]["activity"]["date"]
+            "date": highscores[user][time_type]["activity"]["date"]
         }
         
         new_record = {
@@ -802,7 +802,7 @@ def update_highscore(author, time_type, time_value, date_str, is_global=False, a
             "new_record": new_record
         })
         
-        highscores[author][time_type]["activity"] = {
+        highscores[user][time_type]["activity"] = {
             "value": activity_data["activity_ratio"],
             "active_days": activity_data["active_days"],
             "total_days": activity_data["total_days"],
@@ -821,7 +821,7 @@ def update_highscore(author, time_type, time_value, date_str, is_global=False, a
                     "percentage": highscores["Global"][time_type]["activity"]["value"]
                 },
                 "date": highscores["Global"][time_type]["activity"]["date"],
-                "author": highscores["Global"][time_type]["activity"].get("author")
+                "user": highscores["Global"][time_type]["activity"].get("user")
             }
             
             new_record = {
@@ -847,12 +847,12 @@ def update_highscore(author, time_type, time_value, date_str, is_global=False, a
                 "active_days": activity_data["active_days"],
                 "total_days": activity_data["total_days"],
                 "date": date_str,
-                "author": author
+                "user": user
             }
     
     # Update combined records
     if is_global:
-        # Get all authors' times and activity data for the current period
+        # Get all users' times and activity data for the current period
         pipeline = [
             {
                 "$match": {
@@ -963,7 +963,7 @@ def update_highscore(author, time_type, time_value, date_str, is_global=False, a
     
     return broken_records
 
-def check_and_update_highscores(author, elapsed_time, dt):
+def check_and_update_highscores(user, elapsed_time, dt):
     """
     Check and update all relevant highscores for a new entry
     """
@@ -984,7 +984,7 @@ def check_and_update_highscores(author, elapsed_time, dt):
         {
             "$match": {
                 "start_year": year,
-                "author": author
+                "user": user
             }
         },
         {
@@ -1005,7 +1005,7 @@ def check_and_update_highscores(author, elapsed_time, dt):
             "total_days": year_total_days,
             "activity_ratio": year_active_days / year_total_days
         }
-        broken_records = update_highscore(author, "Year", year_time, date_str, True, year_activity_data)
+        broken_records = update_highscore(user, "Year", year_time, date_str, True, year_activity_data)
         all_broken_records.extend(broken_records)
     
     # Get total time and activity data for current month
@@ -1014,7 +1014,7 @@ def check_and_update_highscores(author, elapsed_time, dt):
             "$match": {
                 "start_year": year,
                 "start_month": month,
-                "author": author
+                "user": user
             }
         },
         {
@@ -1035,7 +1035,7 @@ def check_and_update_highscores(author, elapsed_time, dt):
             "total_days": month_total_days,
             "activity_ratio": month_active_days / month_total_days
         }
-        broken_records = update_highscore(author, "Month", month_time, date_str, True, month_activity_data)
+        broken_records = update_highscore(user, "Month", month_time, date_str, True, month_activity_data)
         all_broken_records.extend(broken_records)
     
     # Get total time and activity data for current week
@@ -1044,7 +1044,7 @@ def check_and_update_highscores(author, elapsed_time, dt):
             "$match": {
                 "start_year": year,
                 "start_week": week,
-                "author": author
+                "user": user
             }
         },
         {
@@ -1065,7 +1065,7 @@ def check_and_update_highscores(author, elapsed_time, dt):
             "total_days": week_total_days,
             "activity_ratio": week_active_days / week_total_days
         }
-        broken_records = update_highscore(author, "Week", week_time, date_str, True, week_activity_data)
+        broken_records = update_highscore(user, "Week", week_time, date_str, True, week_activity_data)
         all_broken_records.extend(broken_records)
     
     # Get total time for current day
@@ -1075,7 +1075,7 @@ def check_and_update_highscores(author, elapsed_time, dt):
                 "start_year": year,
                 "start_month": month,
                 "start_day": day,
-                "author": author
+                "user": user
             }
         },
         {
@@ -1087,7 +1087,7 @@ def check_and_update_highscores(author, elapsed_time, dt):
     ]
     day_time = list(collection.aggregate(day_pipeline))
     if day_time:
-        broken_records = update_highscore(author, "Day", day_time[0]["total_time"], date_str, True)
+        broken_records = update_highscore(user, "Day", day_time[0]["total_time"], date_str, True)
         all_broken_records.extend(broken_records)
     
     # If any records were broken, send notification
@@ -1098,7 +1098,7 @@ def check_and_update_highscores(author, elapsed_time, dt):
         combined_records = [r for r in all_broken_records if r["old_record"]["scope"] == "combined"]
         
         # Create and send notification message
-        message = create_broken_records_notification(author, global_records, personal_records, combined_records)
+        message = create_broken_records_notification(user, global_records, personal_records, combined_records)
         send_notification(message)
 
 # Modify the log_entry function to include highscore updates
@@ -1108,7 +1108,7 @@ def log_entry():
 
     entry = {
         "name": name,
-        "author": author,
+        "user": user,
         "description": description,
         "elapsed_time": elapsed_time,
         "start_year": dt.strftime("%Y"),
@@ -1132,14 +1132,14 @@ def log_entry():
     weekday = dt.strftime("%A")
     
     # Aggregate all timeframes
-    aggregate_year(year, author)
-    aggregate_month(year, month, author)
-    aggregate_day(year, month, day, author)
-    aggregate_week(year, week, author)
-    aggregate_weekday(year, month, day, weekday, author)
+    aggregate_year(year, user)
+    aggregate_month(year, month, user)
+    aggregate_day(year, month, day, user)
+    aggregate_week(year, week, user)
+    aggregate_weekday(year, month, day, weekday, user)
     
     # Update highscores
-    check_and_update_highscores(author, elapsed_time, dt)
+    check_and_update_highscores(user, elapsed_time, dt)
     
     reset_state()
 
@@ -1245,7 +1245,7 @@ def format_record_message(record_pair, days):
     
     # Format the scope and record holder
     if old_record["scope"] == "global":
-        record_holder = f"{old_record.get('author', 'The')}'s" if old_record.get('author') else "The"
+        record_holder = f"{old_record.get('user', 'The')}'s" if old_record.get('user') else "The"
         record_type = "world record"
     elif old_record["scope"] == "personal":
         record_holder = "The"
@@ -1263,12 +1263,12 @@ def format_record_message(record_pair, days):
         new_ratio = f"{new_record['value']['active_days']}/{new_record['value']['total_days']} ({new_record['value']['percentage']:.1%})"
         return f"{record_holder} {days} days old {time_period} activity {record_type}: {old_ratio} → {new_ratio}\n"
 
-def create_broken_records_notification(author, global_records, personal_records, combined_records):
+def create_broken_records_notification(user, global_records, personal_records, combined_records):
     """
     Creates a formatted message string for broken records notification.
     
     Args:
-        author (str): Name of the author who broke the records
+        user (str): Name of the user who broke the records
         global_records (list): List of global records broken
         personal_records (list): List of PBs broken
         combined_records (list): List of combined records broken
@@ -1300,11 +1300,11 @@ def create_broken_records_notification(author, global_records, personal_records,
     
     # Create the header message based on the number of record types
     if len(record_counts) == 1:
-        message = f"{author} just broke {record_counts[0]}!\n\n"
+        message = f"{user} just broke {record_counts[0]}!\n\n"
     elif len(record_counts) == 2:
-        message = f"{author} just broke {record_counts[0]} and {record_counts[1]}!\n\n"
+        message = f"{user} just broke {record_counts[0]} and {record_counts[1]}!\n\n"
     else:
-        message = f"{author} just broke {record_counts[0]}, {record_counts[1]} and {record_counts[2]}!\n\n"
+        message = f"{user} just broke {record_counts[0]}, {record_counts[1]} and {record_counts[2]}!\n\n"
     
     # Add details for all records
     all_records = global_records + filtered_personal_records + combined_records
