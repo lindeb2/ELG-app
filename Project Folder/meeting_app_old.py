@@ -419,7 +419,7 @@ class MeetingApp(ctk.CTk):
         if value != self.current_slide:
             self.show_slide(value)
 
-    def _handle_author_goals_change(self, _change):
+    def _handle_goals_change(self, _change):
         if not self._update_if_changed('_cached_next_week_goals', self.s4_fetch_goals(self.next_year, self.next_week)):
             return
         self.s4_update_display_ui()
