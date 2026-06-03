@@ -1,13 +1,11 @@
 import customtkinter as ctk
-from pymongo import MongoClient, UpdateOne
+from pymongo import MongoClient
 import datetime
 from datetime import timedelta
 import json
 import threading
 import tkinter
 import math
-import time
-from concurrent.futures import ThreadPoolExecutor
 from CtkSmartScrollableFrame import CtkSmartScrollableFrame
 from CTkPieChart import CTkPieChart
 from CTkFlexToolTip import *
@@ -24,23 +22,11 @@ from openai import APIConnectionError, APITimeoutError, InternalServerError, Rat
 
 # MongoDB connection
 client = MongoClient("mongodb+srv://johan:baLlbeTtertRacer@elg-timetable.txhpj.mongodb.net/?retryWrites=true&w=majority&appName=ELG-timetable")
-db = client['ELG-Dev']
+db = client['ELG-Database']
 main_collection = db['Timetable']  # Only used once
+online_users_collection = db['Status Meeting Online Users']  # Collection for online users
 status_meeting_collection = db['Status Meeting']  # Collection for meeting status
 aggregations_collection = db['Timetable Aggregations']
-WEEK_PIPELINE = [{
-    "$set": {"new_week": {"$dateTrunc": {
-        "date": {"$dateSubtract": {"startDate": "$$NOW", "unit": "day", "amount": 3}},
-        "unit": "week",
-        "startOfWeek": "monday"}}}},{
-    "$set": {
-        "slide": {"$cond": {
-            "if": {"$ne": ["$week", "$new_week"]},
-            "then": 0,
-            "else": "$slide"}},
-        "week": "$new_week"}},{
-    "$unset": "new_week"}
-]
 
 # Initialize the customtkinter theme with dark mode
 ctk.set_appearance_mode("Dark")
@@ -50,9 +36,9 @@ def _get_user_name():
     try:
         with open("config.json", "r") as f:
             config = json.load(f)
-            return config.get("user", "Unknown")
+            return config.get("author", "Unknown")
     except FileNotFoundError:
-        print("Could not fetch username from config.")
+        print("Could not fetch author name from config.")
         return "Unknown"
 
 def format_time(seconds):
@@ -81,63 +67,39 @@ class MeetingApp(ctk.CTk):
         self._pending_changes = {}
         self.start_watchers()
 
-        self._update_event = threading.Event()
-        self._lock = threading.Lock()
-        self.update_buffer = {"slide": None, "goals": defaultdict(dict)}
-        threading.Thread(target=self.update_db, name="DB_updater", daemon=True).start()
-
-        self.current_slide, self.current_week_start, self.next_week_start, self.local_target_timestamp = self.fetch_state()
         self.current_year, self.current_week, self.next_year, self.next_week = self._calculate_week_info()
-        threading.Thread(target=self.week_check, name="WeekSync", daemon=True).start()
+        self.current_week_0d = f"{int(self.current_week):02d}"
         self.user_name = _get_user_name()
 
-        with ThreadPoolExecutor() as executor:
-            future_logs = executor.submit(self._fetch_logs)
-            future_points = executor.submit(self._fetch_discussion_points)
-            future_curr_goals = executor.submit(self.s4_fetch_goals, self.current_year, self.current_week)
-            future_next_goals = executor.submit(self.s4_fetch_goals, self.next_year, self.next_week)
-            future_highscores = executor.submit(lambda: aggregations_collection.find_one({"_id": "Highscores"}))
-            future_users = executor.submit(self.fetch_online_users_info)
-
-            self.logs = future_logs.result()
-            self.discussion_points = future_points.result()
-            self._current_week_goals = future_curr_goals.result()
-            self._next_week_goals = future_next_goals.result()
-            self.highscores_data = future_highscores.result()
-            self.online_users_info = future_users.result()
+        self.logs = self._fetch_logs()
+        self.discussion_points = self._fetch_discussion_points()
+        self._current_week_goals = self.s4_fetch_goals(self.current_year, self.current_week)
+        self._next_week_goals = self.s4_fetch_goals(self.next_year, self.next_week)
 
         self.slide_map = self._create_slide_map()
 
+        self.online_users_info = self.fetch_online_users_info()
         self.online_users = self.build_online_users()
-        self.input_mode_users = self.build_input_mode_users()
+        self.users_in_input_mode = self.s4_get_users_in_input_mode()
 
         self._setup_slides_scaffold()
         self.initialize_slides()
-        self.show_slide()
+        self.current_slide = self._get_start_slide()
+        self.show_slide(self.current_slide)
 
         threading.Thread(target=self.update_presence, name="update_presence", daemon=True).start()
         self._complete_initialization()
 
     @staticmethod
-    def fetch_state():
-        """Fetches the week anchor from the db. Meeting week is considered from Thursday to next week's Wednesday."""
-        projection = {"_id": 0, "slide": 1, "week": 1, "server_time": "$$NOW"}
-        doc = status_meeting_collection.find_one_and_update({"_id": "State"},
-            WEEK_PIPELINE, projection=projection, return_document=ReturnDocument.AFTER
-        )
-        local_now = time.time()
-        slide, anchor, server_time = doc["slide"], doc["week"], doc["server_time"]
-        next_week = anchor + timedelta(weeks=1)
-        time_to_next_week_start = anchor+timedelta(days=10)-server_time
-        local_target_timestamp = local_now + time_to_next_week_start.total_seconds()
-        return slide, anchor, next_week, local_target_timestamp
-
-    def _calculate_week_info(self):
-        """Calculates current and next week's year and week numbers."""
-        current_year, current_week, _ = self.current_week_start.isocalendar()
-        next_year, next_week, _ = self.next_week_start.isocalendar()
-
-        return str(current_year), str(current_week), str(next_year), str(next_week)
+    def _calculate_week_info():
+        """Calculates current and next week's year and week numbers. Meeting week is considered from Thursday to next week's Wednesday."""
+        time = datetime.datetime.now()
+        if time.weekday() <= 2:
+            time -= timedelta(days=3)
+        current_year, current_week, _ = time.isocalendar()
+        time += timedelta(weeks=1)
+        next_weeks_year, next_weeks_week, _ = time.isocalendar()
+        return str(current_year), str(current_week), str(next_weeks_year), str(next_weeks_week)
 
     def _fetch_discussion_points(self):
         """Returns discussion points for the current year and week."""
@@ -157,12 +119,19 @@ class MeetingApp(ctk.CTk):
         slide_map.append(5)
         return slide_map
 
+    def _get_start_slide(self):
+        if not self.online_users:
+            status_meeting_collection.update_one({"_id": "Slide"}, {"$set": {"value": 0}})
+            return 0
+        else:
+            return status_meeting_collection.find_one({"_id": "Slide"})["value"]
+
     def _fetch_logs(self):
         """Returns a list of all logs for the current week."""
         return list(main_collection.find({
-            "timestamp": {
-                "$gte": self.current_week_start,
-                "$lt": self.next_week_start}}))
+            "start_year": self.current_year,  #INT
+            "start_week": self.current_week_0d
+        }))
 
     def _setup_slides_scaffold(self):
         """Sets up the foundational scaffold and overlay for all slides, including navigation and overlays."""
@@ -237,54 +206,28 @@ class MeetingApp(ctk.CTk):
         for func in (self.status_meeting_watcher, self.timetable_watcher):
             threading.Thread(target=func, name=func.__name__, daemon=True).start()
 
-    @staticmethod
-    def _run_watcher(collection, pipeline, callback, **watch_kwargs):
-        resume_token = None
-        while True:
-            # noinspection PyBroadException
-            try:
-                with collection.watch(pipeline, resume_after=resume_token, **watch_kwargs) as stream:
-                    for change in stream:
-                        resume_token = stream.resume_token
-                        callback(change)
-            except Exception:
-                time.sleep(1)
-
     def status_meeting_watcher(self):
         pipeline = [{"$match": {"operationType": {"$in": ["update", "replace"]}}}]
+        with status_meeting_collection.watch(pipeline, full_document='updateLookup') as stream:
+            for change in stream:
+                doc_id = change["documentKey"]["_id"]
 
-        def handle_status_change(change):
-            doc_id = change["documentKey"]["_id"]
-            if doc_id == "State":
-                self._store_or_process_change('state', change)
-            elif doc_id == "Goals":
-                self._store_or_process_change('goals', change)
-            elif doc_id == "Users":
-                self._store_or_process_change('users', change)
-            elif doc_id == "Discussion Points":
-                self._store_or_process_change('points', change)
-            elif doc_id == "End Strings":
-                self._store_or_process_change('strings', change)
-
-        # Call the generic watcher
-        self._run_watcher(status_meeting_collection, pipeline, handle_status_change)
+                if doc_id == "Slide":
+                    self._store_or_process_change('slide', change)
+                elif doc_id == "Author Goals":
+                    self._store_or_process_change('goals', change)
+                elif doc_id == "Users":
+                    self._store_or_process_change('users', change)
+                elif doc_id == "Discussion Points":
+                    self._store_or_process_change('points', change)
+                elif doc_id == "End Strings":
+                    self._store_or_process_change('strings', change)
 
     def timetable_watcher(self):
         pipeline = [{"$match": {"operationType": {"$in": ["insert", "update", "replace"]}}}]
-
-        def handle_timetable_change(change):
-            self._store_or_process_change("logs", change)
-
-        self._run_watcher(main_collection, pipeline, handle_timetable_change, full_document='updateLookup')
-
-    def week_check(self):
-        while True:
-            try:
-                if time.time() >= self.local_target_timestamp:
-                    status_meeting_collection.update_one({"_id": "State"}, WEEK_PIPELINE)
-            except Exception:
-                pass
-            time.sleep(1)
+        with main_collection.watch(pipeline, full_document='updateLookup') as stream:
+            for change in stream:
+                self._store_or_process_change("logs", change)
 
     def _complete_initialization(self):
         self._init_complete = True
@@ -294,20 +237,31 @@ class MeetingApp(ctk.CTk):
                 self.after(0, getattr(self, f"_handle_{name}_change"), change)
 
     ### ALL SLIDES ###
-    def show_slide(self, old_slide=None):
-        """Show the index self.current_slide in self.slide_map."""
-        self.update_slide_indicator_dots()
-        slide_number = self.slide_map[self.current_slide]
+    def show_slide(self, slide_map_index):
+        """Show the slide by slide_map_index, with boundary enforcement."""
+        old_slide = self.current_slide
+        slide_map_index = max(0, min(len(self.slide_map) - 1, slide_map_index))
+
+        # DB
+        status_meeting_collection.update_one(
+            {"_id": "Slide"},
+            {"$set": {"value": slide_map_index}},
+            upsert=True
+        )
+        # Cache
+        self.current_slide = slide_map_index
+        # UI
+        for i, dot in enumerate(self.slide_dots):
+            dot.configure(
+                text="●" if i == slide_map_index else "○",
+                text_color="white" if i == slide_map_index else "gray"
+            )
+        slide_number = self.slide_map[slide_map_index]
         self.slide_frames[slide_number].lift()
+
+        # Leaving slide 4
         if old_slide == self.slide_map.index(4):
             self._presence_update_event.set()
-
-    def update_slide_indicator_dots(self):
-        active_style = {"text": "●", "text_color": "white"}
-        inactive_style = {"text": "○", "text_color": "gray"}
-        for i, dot in enumerate(self.slide_dots):
-            config = active_style if i == self.current_slide else inactive_style
-            dot.configure(**config)
 
     def update_users_list(self):
         """Update the labels in users_list_frame to match self.online_users."""
@@ -367,67 +321,10 @@ class MeetingApp(ctk.CTk):
             if hasattr(self, '_pre_fullscreen_geometry'):
                 self.geometry(self._pre_fullscreen_geometry)
 
-    def update_db(self):
-        while True:
-            try:
-                self._update_event.wait()
-                self._update_event.clear()
-                with self._lock:
-                    current_buffer = self.update_buffer
-                    self.update_buffer = {"slide": None, "goals": defaultdict(dict)}
-                operations = []
-
-                if current_buffer["slide"] is not None:
-                    operations.append(UpdateOne(
-                        {"_id": "State"},
-                        {"$set": {"slide": current_buffer["slide"]}}))
-
-                if goals_buffer := current_buffer["goals"]:
-                    set_ops = {}
-                    unset_ops = {}
-                    prefix = f"{self.next_year}.{self.next_week}"
-
-                    for user, changes in goals_buffer.items():
-                        user_path = f"{prefix}.{user}"
-
-                        if changes == {}:
-                            unset_ops[user_path] = ""
-                            continue
-
-                        for field, val in changes.items():
-                            full_path = f"{user_path}.{field}"
-                            if val > 0:
-                                set_ops[full_path] = val
-                            elif val == 0:
-                                unset_ops[full_path] = ""
-
-                    update_doc = {}
-                    if set_ops:
-                        update_doc["$set"] = set_ops
-                    if unset_ops:
-                        update_doc["$unset"] = unset_ops
-
-                    operations.append(UpdateOne({"_id": "Goals"}, update_doc, upsert=True))
-                status_meeting_collection.bulk_write(operations, ordered=False)
-
-            except Exception as e:
-                print(f"Error in update worker: {e}")
-                time.sleep(1)
-
     def handle_arrow(self, event):
         """Handle left and right arrow key presses."""
-        if isinstance(self.focus_get(), ctk.CTkEntry):
-            return
-
-        target = max(0, min(len(self.slide_map) - 1, self.current_slide + (1 if event.keysym == "Right" else -1)))
-        if target == self.current_slide:
-            return
-
-        old_slide, self.current_slide = self.current_slide, target
-        self.show_slide(old_slide)
-        with self._lock:
-            self.update_buffer["slide"] = self.current_slide # type: ignore
-        self._update_event.set()
+        if not isinstance(self.focus_get(), ctk.CTkEntry):
+            self.show_slide(self.current_slide + (1 if event.keysym == "Right" else -1))
 
     def handle_return(self, _event):
         """Handle Return key press"""
@@ -439,7 +336,7 @@ class MeetingApp(ctk.CTk):
 
     ### HELPERS ###
     @staticmethod
-    def fetch_online_users_info():
+    def fetch_online_users_info(): # TODO: $exists för att inte krasha om data saknas?
         """Returns a set of 2-tuples (user, sel_user) from DB with users that are considered online (timestamp within 2 seconds)."""
         pipeline = [
             {"$match": {"_id": "Users"}},
@@ -502,7 +399,7 @@ class MeetingApp(ctk.CTk):
         last_seen_path = f"{user_path}.last_seen"
         selected_user_path = f"{user_path}.selected_user"
         while True:
-            sel_user = self.s4_selected_user_var.get() if (self.current_slide == self.slide_map.index(4) and self.s4_in_input) else None # type: ignore[attr-defined]
+            sel_user = self.s4_selected_author_var.get() if (self.current_slide == self.slide_map.index(4) and self.s4_in_input) else None # type: ignore[attr-defined]
             try:
                 status_meeting_collection.update_one(
                     {"_id": "Users"},
@@ -517,17 +414,10 @@ class MeetingApp(ctk.CTk):
             self._presence_update_event.wait(timeout=1.0)
             self._presence_update_event.clear()
 
-    def _handle_state_change(self, change):
-        updated_fields = change["updateDescription"]["updatedFields"]
-        if "slide" in updated_fields:
-            old_slide = self.current_slide
-            if self._update_if_changed('current_slide', updated_fields["slide"]):
-                self.show_slide(old_slide)
-        if "week" in updated_fields:
-            if self._update_if_changed('week_anchor', updated_fields["week"]):
-                self.local_target_timestamp += 604800  # 1 week
-                self.current_year, self.current_week, self.next_year, self.next_week = self._calculate_week_info()
-                # TODO: logic if new week
+    def _handle_slide_change(self, change):
+        value = change["updateDescription"]["updatedFields"].get("value")
+        if value != self.current_slide:
+            self.show_slide(value)
 
     def _handle_goals_change(self, _change):
         if not self._update_if_changed('_cached_next_week_goals', self.s4_fetch_goals(self.next_year, self.next_week)):
@@ -539,29 +429,30 @@ class MeetingApp(ctk.CTk):
         if not self._update_if_changed('online_users_info', self.fetch_online_users_info()):
             return
         users_changed = self._update_if_changed('online_users', self.build_online_users())
-        input_mode_changed = self._update_if_changed('input_mode_users', self.build_input_mode_users())
+        input_mode_changed = self._update_if_changed('users_in_input_mode', self.s4_get_users_in_input_mode())
         if users_changed:
             self.users_count_label.configure(text=f"Participants ({len(self.online_users)})")
             self.update_users_list()
-            self.s4_update_selectable_users()
+            self.s4_update_selectable_authors()
         if users_changed or input_mode_changed:
             self.s4_update_display_ui()
 
-    def _handle_logs_change(self, change):
-        full_doc = change['fullDocument']
-        if self.current_week_start <= full_doc['timestamp'] < self.next_week_start:
-            self.ensure_slide(1, 2)
+    def _handle_timetable_change(self, change):
+        full_doc = change.get('fullDocument')
+        if str(full_doc.get('start_year')) == self.current_year and str(full_doc.get('start_week')) == self.current_week_0d:
+            self.ensure_slide(1)
+            self.ensure_slide(2)
             self.logs = self._fetch_logs()
             self.hours_graph_data, self.days_charts_data, self.team_hours_bar_data = self.s1_build_all_charts_data()
-            self.s2_set_logs_by_user()
+            self.s2_set_logs_by_author()
             self.s1_update_hours_graph()
             self.s1_update_days_charts()
             self.s1_update_team_hours_bar()
-            self.s2_update_selectable_users()
-            if change.get("operationType") == "insert" and self.s2_selected_user_var.get() == full_doc.get("user"):
+            self.s2_update_selectable_authors()
+            if change.get("operationType") == "insert" and self.s2_selected_author_var.get() == full_doc.get("author"):
                 self.s2_create_log_widget(full_doc)
             else:
-                self.s2_create_user_log_widgets()
+                self.s2_create_author_log_widgets()
 
     def _handle_points_change(self, _change):
         if not self._update_if_changed("discussion_points", self._fetch_discussion_points()):
@@ -578,22 +469,17 @@ class MeetingApp(ctk.CTk):
                 self._s5_get_data_event.set()
                 break
 
-    def ensure_slide(self, *slide_ids: int):
-        if all(sid in self.slide_map for sid in slide_ids):
+    def ensure_slide(self, slide_id: int):
+        if slide_id in self.slide_map:
             return
 
-        old_slide = self.slide_map[self.current_slide]
-
-        for slide_id in slide_ids:
-            if slide_id in self.slide_map:
-                continue
-            self.slide_map.append(slide_id)
-            self.create_slide_dot()
-            getattr(self, f"slide_{slide_id}")()
-
+        old_slide = self.slide_map[self.current_slide] if self.slide_map else 0 # ??
+        self.slide_map.append(slide_id)
         self.slide_map.sort()
         self.current_slide = self.slide_map.index(old_slide)
-        self.update_slide_indicator_dots()
+        self.create_slide_dot()
+
+        getattr(self, f"slide_{slide_id}")()
 
     ### SLIDE 0 ###
     def slide_0(self):
@@ -696,27 +582,28 @@ class MeetingApp(ctk.CTk):
     def s1_build_all_charts_data(self):
         """Returns hours_graph_data, days_charts_data & team_hours_bar_data."""
         # 1) Get base data
-        user_day_seconds = defaultdict(lambda: [0 for _ in range(7)])
+        weekday_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        author_day_seconds = defaultdict(lambda: [0 for _ in range(7)])
         for log in self.logs:
-            user = log["user"]
-            dt = log["timestamp"]
-            weekday_idx = dt.weekday()
+            author = log["author"]
+            weekday = log["start_weekday"]
+            weekday_idx = weekday_names.index(weekday)
             elapsed_seconds = log["elapsed_time"]
-            user_day_seconds[user][weekday_idx] += elapsed_seconds
+            author_day_seconds[author][weekday_idx] += elapsed_seconds
 
-        all_users = user_day_seconds.keys() | self._current_week_goals.keys()
+        all_authors = author_day_seconds.keys() | self._current_week_goals.keys()
 
-        base_user_data = []
+        base_author_data = []
         max_hours = 0.0
-        for user in all_users:
-            day_seconds = user_day_seconds.get(user, [0] * 7)
+        for author in all_authors:
+            day_seconds = author_day_seconds.get(author, [0] * 7)
             total_hours = sum(day_seconds) / 3600
             days_hours = [secs / 3600 for secs in day_seconds]
-            goal_data = self._current_week_goals.get(user, {})
+            goal_data = self._current_week_goals.get(author, {})
             goal_hours = goal_data.get("hours", 0)
             goal_days = goal_data.get("days", 0)
-            base_user_data.append({
-                "user": user,
+            base_author_data.append({
+                "author": author,
                 "total_hours": total_hours,
                 "days_hours": days_hours,
                 "goal_hours": goal_hours,
@@ -743,8 +630,8 @@ class MeetingApp(ctk.CTk):
             else:
                 small_intervals.append(val / 2)  # Float
 
-        hours_graph_users_data = []
-        for data in base_user_data:
+        hours_graph_authors_data = []
+        for data in base_author_data:
             total_hours = data["total_hours"]
             rel_height = total_hours / max_value
             if total_hours > 0:
@@ -771,8 +658,8 @@ class MeetingApp(ctk.CTk):
             day_bar_header_strings = [
                 self.s1_format_bar_header(h, data["goal_hours"]) for h in data["days_hours"]
             ]
-            hours_graph_users_data.append({
-                "user": data["user"],
+            hours_graph_authors_data.append({
+                "author": data["author"],
                 "total_hours": data["total_hours"],
                 "goal_hours": data["goal_hours"],
                 "rel_height": rel_height,
@@ -784,8 +671,8 @@ class MeetingApp(ctk.CTk):
             })
 
         # 2.2) Days Chart
-        days_charts_user_data = []
-        for data in base_user_data:
+        days_charts_author_data = []
+        for data in base_author_data:
             days_hours = data["days_hours"]
             goal_days = data["goal_days"]
             active_days = [i for i, h in enumerate(days_hours) if h]
@@ -796,8 +683,8 @@ class MeetingApp(ctk.CTk):
                 goal_data = (goal_days - 1, goal_color)
             else:
                 goal_data = None
-            days_charts_user_data.append({
-                "user": data["user"],
+            days_charts_author_data.append({
+                "author": data["author"],
                 "total_hours": data["total_hours"],
                 "days_hours": days_hours,
                 "goal_days": goal_days,
@@ -806,19 +693,19 @@ class MeetingApp(ctk.CTk):
             })
 
         # 2.3) Team Hours Bar
-        team_hours = sum(d["total_hours"] for d in hours_graph_users_data)
-        team_goal = sum(d["goal_hours"] for d in hours_graph_users_data)
+        team_hours = sum(d["total_hours"] for d in hours_graph_authors_data)
+        team_goal = sum(d["goal_hours"] for d in hours_graph_authors_data)
         rel_height_team = min(team_hours / team_goal, 1.0) if team_goal else 1.0
-        team_hours_bar_user_data = []
+        team_hours_bar_author_data = []
         others = []
         if team_hours > 0:
-            for d in base_user_data:
+            for d in base_author_data:
                 total_hours = d["total_hours"]
                 if total_hours <= 0:
                     continue
                 ratio = total_hours / team_hours
                 percent = ratio * 100
-                default_text = f"{d['user']}\n{int(percent)}%"
+                default_text = f"{d['author']}\n{int(percent)}%"
                 hover_text = f"{math.floor(total_hours * 10) / 10.0:g} h"
                 entry = {
                     "ratio": ratio,
@@ -826,7 +713,7 @@ class MeetingApp(ctk.CTk):
                     "hover_text": hover_text,
                 }
                 if percent >= 10:
-                    team_hours_bar_user_data.append(entry)
+                    team_hours_bar_author_data.append(entry)
                 else:
                     others.append(entry)
             if len(others) > 1:
@@ -853,35 +740,35 @@ class MeetingApp(ctk.CTk):
             goal_data_team = None
 
         # 3) Sort
-        hours_graph_users_data.sort(
+        hours_graph_authors_data.sort(
             key=lambda x: (
                 -x["total_hours"],
                 -x["goal_hours"],
-                x["user"],
+                x["author"],
             )
         )
-        days_charts_user_data.sort(
+        days_charts_author_data.sort(
             key=lambda x: (
                 -sum(bool(h) for h in x["days_hours"]),  # Active days count
                 -x["goal_days"],
-                x["user"],
+                x["author"],
             )
         )
-        team_hours_bar_user_data.sort(key=lambda x: x["ratio"], reverse=True)
-        team_hours_bar_user_data.extend(others)
+        team_hours_bar_author_data.sort(key=lambda x: x["ratio"], reverse=True)
+        team_hours_bar_author_data.extend(others)
 
         # 4) Build return dictionaries
         hours_graph_data = {
-            "user_data": hours_graph_users_data,
+            "author_data": hours_graph_authors_data,
             "big_intervals": big_intervals,
             "small_intervals": small_intervals,
             "max_value": max_value
         }
         days_charts_data = {
-            "user_data": days_charts_user_data,
+            "author_data": days_charts_author_data,
         }
         team_hours_bar_data = {
-            "user_data": team_hours_bar_user_data,
+            "author_data": team_hours_bar_author_data,
             "team_goal": team_goal,
             "rel_height": rel_height_team,
             "header_string": team_header_string,
@@ -900,7 +787,7 @@ class MeetingApp(ctk.CTk):
         big_intervals = self.hours_graph_data["big_intervals"]
         small_intervals = self.hours_graph_data["small_intervals"]
         max_value = self.hours_graph_data["max_value"]
-        user_data = self.hours_graph_data["user_data"]
+        author_data = self.hours_graph_data["author_data"]
 
         top_margin = 14
         bottom_margin = 19
@@ -934,8 +821,8 @@ class MeetingApp(ctk.CTk):
         goal_line_width = 110  # 100 + 5*2
         max_name_width = 90  # 100-2*5
 
-        for col_idx, data in enumerate(user_data):
-            user_name = data["user"]
+        for col_idx, data in enumerate(author_data):
+            author_name = data["author"]
             header_string = data["header_string"]
             rel_height = data["rel_height"]
             day_bar_top_rel_ys = data["day_bar_top_rel_ys"]
@@ -961,8 +848,8 @@ class MeetingApp(ctk.CTk):
             # Name Label
             font = ctk.CTkFont(family="Arial", size=16)
 
-            display_text = self.truncate_text_to_pixels(user_name, font, max_name_width)
-            user_label = ctk.CTkLabel(
+            display_text = self.truncate_text_to_pixels(author_name, font, max_name_width)
+            author_label = ctk.CTkLabel(
                 self.names_row,
                 text=display_text,
                 font=("Arial", 16),
@@ -972,7 +859,7 @@ class MeetingApp(ctk.CTk):
                 height=0,
                 width=100
             )
-            user_label.pack(side="left", fill="y", expand=True)  # placed correctly??
+            author_label.pack(side="left", fill="y", expand=True)  # placed correctly??
 
             # Goal lines
             if goal_data:
@@ -1146,7 +1033,7 @@ class MeetingApp(ctk.CTk):
         self.s1_create_hours_graph()
 
     def s1_create_days_charts(self):
-        self._days_chart_user_cols = []
+        self._days_chart_author_cols = []
         day_colors = [
             "#FF0000",  # Monday
             "#FF8426",  # Tuesday
@@ -1156,21 +1043,21 @@ class MeetingApp(ctk.CTk):
             "#1F44FF",  # Saturday
             "#8E00BD",  # Sunday
         ]
-        for data in self.days_charts_data["user_data"]:
-            user = data["user"]
-            user_col = ctk.CTkFrame(
+        for data in self.days_charts_data["author_data"]:
+            author = data["author"]
+            author_col = ctk.CTkFrame(
                 self.days_chart_data_row,
                 fg_color="#181C20",
                 corner_radius=0,
                 width=130
             )
-            user_col.pack(side="left", fill="y", expand=True)
-            user_col.grid_propagate(False)
-            self._days_chart_user_cols.append(user_col)
+            author_col.pack(side="left", fill="y", expand=True)
+            author_col.grid_propagate(False)
+            self._days_chart_author_cols.append(author_col)
             font = ctk.CTkFont(family="Arial", size=16)
             max_width = 100 - 10
-            display_text = self.truncate_text_to_pixels(user, font, max_width)
-            user_label = ctk.CTkLabel(
+            display_text = self.truncate_text_to_pixels(author, font, max_width)
+            author_label = ctk.CTkLabel(
                 self.days_chart_names_row,
                 text=display_text,
                 font=("Arial", 16),
@@ -1180,7 +1067,7 @@ class MeetingApp(ctk.CTk):
                 height=18,
                 width=100
             )
-            user_label.pack(side="left", fill="y", expand=True)
+            author_label.pack(side="left", fill="y", expand=True)
 
         def show_pie(idx):
             for i, pie_tuple in enumerate(self._days_chart_pie_charts): # type: ignore[attr-defined]
@@ -1221,16 +1108,16 @@ class MeetingApp(ctk.CTk):
             if segment_height % 2 == 1:  # Corrects tkinter flaw, if odd make even
                 segment_height -= 1
             self._days_chart_pie_charts = []
-            for col_idx, user_col in enumerate(self._days_chart_user_cols):
-                user_data = self.days_charts_data["user_data"][col_idx]
-                days_hours = user_data["days_hours"]
-                goal_days = user_data["goal_days"]
-                total_hours = user_data["total_hours"]
-                day_order = user_data["day_order"]
-                goal_data = user_data["goal_data"]
+            for col_idx, author_col in enumerate(self._days_chart_author_cols):
+                author_data = self.days_charts_data["author_data"][col_idx]
+                days_hours = author_data["days_hours"]
+                goal_days = author_data["goal_days"]
+                total_hours = author_data["total_hours"]
+                day_order = author_data["day_order"]
+                goal_data = author_data["goal_data"]
 
                 # Destroy old
-                for child in user_col.winfo_children():
+                for child in author_col.winfo_children():
                     child.destroy()
                 # Bars
                 y = row_height - segment_height
@@ -1238,7 +1125,7 @@ class MeetingApp(ctk.CTk):
                 for bar_idx, i in enumerate(day_order):
                     is_active = days_hours[i] > 0
                     day_bar_boarder = ctk.CTkFrame(
-                        user_col,
+                        author_col,
                         fg_color=day_colors[i] if is_active else "#181C20",
                         corner_radius=40,
                         width=80,
@@ -1254,7 +1141,7 @@ class MeetingApp(ctk.CTk):
                         line_length = 80 - (corner_radius * 2) + offset
                         line_y = y + segment_height - 2  # bottom of current bar
                         black_canvas = tkinter.Canvas(
-                            user_col,
+                            author_col,
                             width=line_length,
                             height=2,
                             bg="black",
@@ -1273,7 +1160,7 @@ class MeetingApp(ctk.CTk):
                     goal_y = bar_tops[goal_idx]
                     goal_y = max(goal_y - 2, 0)
                     goal_line = ctk.CTkFrame(
-                        user_col,
+                        author_col,
                         fg_color=goal_color,
                         height=6,
                         width=88,
@@ -1287,11 +1174,11 @@ class MeetingApp(ctk.CTk):
                     self._days_chart_pie_charts.append(None)
                 else:
                     # Calculate dynamic radius based on parent height
-                    user_col.update_idletasks()
-                    parent_height = user_col.winfo_height()
+                    author_col.update_idletasks()
+                    parent_height = author_col.winfo_height()
                     radius = min(130, parent_height)
                     pie_chart = CTkPieChart(
-                        user_col,
+                        author_col,
                         line_width=65,
                         border_width=25,
                         border_color="black",
@@ -1306,14 +1193,14 @@ class MeetingApp(ctk.CTk):
                         weekday_abbr = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"][i]
                         pie_chart.add(str(i), hours, color=day_colors[i], text_color="black", custom_text=weekday_abbr)
                     pie_chart.bind("<Button-1>", lambda e, chart=pie_chart: chart.change_text_mode('toggle'))
-                    pie_background = ctk.CTkFrame(user_col, fg_color="#181C20", corner_radius=0)
+                    pie_background = ctk.CTkFrame(author_col, fg_color="#181C20", corner_radius=0)
                     pie_background.place(relx=0, rely=0, relwidth=1.0, relheight=1.0)
                     pie_background.lower()
                     pie_chart.place(relx=0.5, rely=0.5, anchor="center")
                     pie_chart.lower()
                     self._days_chart_pie_charts.append((pie_chart, pie_background))
                 # Bind hover events to the pie chart
-                propagate_pie_hover(user_col, col_idx)
+                propagate_pie_hover(author_col, col_idx)
 
         self.days_chart_data_row.bind("<Configure>", update_day_bars)
         update_day_bars(None)
@@ -1333,7 +1220,7 @@ class MeetingApp(ctk.CTk):
         team_goal = self.team_hours_bar_data["team_goal"]
         header_string = self.team_hours_bar_data["header_string"]
         rel_height = self.team_hours_bar_data["rel_height"]
-        user_data = self.team_hours_bar_data["user_data"]
+        author_data = self.team_hours_bar_data["author_data"]
         goal_data = self.team_hours_bar_data["goal_data"]
 
         # Header - 1.1
@@ -1378,23 +1265,23 @@ class MeetingApp(ctk.CTk):
         team_hours_bar.pack(fill="both", expand=True, padx=3, pady=0)
         team_hours_bar.pack_propagate(False)
         team_hours_bar.update_idletasks()
-        # user bars
+        # Author bars
         y_offset = 0.0
         bar_boundaries = []
-        for data in user_data:
+        for data in author_data:
             ratio = data['ratio'] # type: ignore
             default_text = data['default_text'] # type: ignore
             hover_text = data['hover_text'] # type: ignore
 
-            user_bar = ctk.CTkFrame(
+            author_bar = ctk.CTkFrame(
                 team_hours_bar,
                 fg_color="#0000C6",
                 corner_radius=0,
             )
-            user_bar.place(relx=0, rely=y_offset, relwidth=1.0, relheight=ratio, anchor="nw")
+            author_bar.place(relx=0, rely=y_offset, relwidth=1.0, relheight=ratio, anchor="nw")
             # Label
             label = ctk.CTkLabel(
-                user_bar,
+                author_bar,
                 text=default_text,
                 font=("Arial", 14, "bold"),
                 text_color="#E0E0E0",
@@ -1409,8 +1296,8 @@ class MeetingApp(ctk.CTk):
             def on_leave(_, lbl=label, txt=default_text):
                 lbl.configure(text=txt)
 
-            user_bar.bind("<Enter>", on_enter)
-            user_bar.bind("<Leave>", on_leave)
+            author_bar.bind("<Enter>", on_enter)
+            author_bar.bind("<Leave>", on_leave)
             label.bind("<Enter>", on_enter)
             label.bind("<Leave>", on_leave)
             bar_boundaries.append(y_offset)
@@ -1418,7 +1305,7 @@ class MeetingApp(ctk.CTk):
         # Lines
         self.draw_horizontal_line(team_hours_bar_boarder, 0, 3, "nw")  # Top
         self.draw_horizontal_line(team_hours_bar_boarder, 1.0, 3, "sw")  # Bottom
-        for boundary in bar_boundaries[1:]:  # Between users
+        for boundary in bar_boundaries[1:]:  # Between authors
             self.draw_horizontal_line(team_hours_bar_boarder, boundary, 3, "w")
         # Goal line
         if team_goal > 0:
@@ -1478,7 +1365,7 @@ class MeetingApp(ctk.CTk):
             widget.destroy()
 
         # Get highscores data
-        highscores = self.highscores_data
+        highscores = aggregations_collection.find_one({"_id": "Highscores"})
         if not highscores:
             no_records_label = ctk.CTkLabel(
                 self.records_content,
@@ -1502,34 +1389,34 @@ class MeetingApp(ctk.CTk):
             return year == self.current_year and week == self.current_week
 
         # Check personal records
-        for user in self.online_users:
-            if user in highscores:
-                user_records = highscores[user]
+        for author in self.online_users:
+            if author in highscores:
+                author_records = highscores[author]
                 for time_type in ["Day", "Week", "Month", "Year"]:
-                    if time_type in user_records:
+                    if time_type in author_records:
                         # Check time records
-                        if "time" in user_records[time_type] and user_records[time_type]["time"]["date"]:
-                            date_str = user_records[time_type]["time"]["date"]
+                        if "time" in author_records[time_type] and author_records[time_type]["time"]["date"]:
+                            date_str = author_records[time_type]["time"]["date"]
                             if is_in_current_week(date_str):
                                 records_found.append({
                                     "type": "Personal Best",
-                                    "user": user,
+                                    "author": author,
                                     "time_type": time_type,
                                     "metric": "Time",
-                                    "value": format_time(user_records[time_type]["time"]["value"]),
+                                    "value": format_time(author_records[time_type]["time"]["value"]),
                                     "date": date_str
                                 })
                         # Check activity records (except for Day)
-                        if time_type != "Day" and "activity" in user_records[time_type] and \
-                                user_records[time_type]["activity"]["date"]:
-                            date_str = user_records[time_type]["activity"]["date"]
+                        if time_type != "Day" and "activity" in author_records[time_type] and \
+                                author_records[time_type]["activity"]["date"]:
+                            date_str = author_records[time_type]["activity"]["date"]
                             if is_in_current_week(date_str):
-                                activity_ratio = user_records[time_type]["activity"]["value"]
-                                active_days = user_records[time_type]["activity"]["active_days"]
-                                total_days = user_records[time_type]["activity"]["total_days"]
+                                activity_ratio = author_records[time_type]["activity"]["value"]
+                                active_days = author_records[time_type]["activity"]["active_days"]
+                                total_days = author_records[time_type]["activity"]["total_days"]
                                 records_found.append({
                                     "type": "Personal Best",
-                                    "user": user,
+                                    "author": author,
                                     "time_type": time_type,
                                     "metric": "Activity",
                                     "value": f"{active_days}/{total_days} days ({activity_ratio:.1%})",
@@ -1546,7 +1433,7 @@ class MeetingApp(ctk.CTk):
                         if is_in_current_week(date_str):
                             records_found.append({
                                 "type": "World Record",
-                                "user": global_records[time_type]["time"].get("user", "?"),
+                                "author": global_records[time_type]["time"].get("author", "?"),
                                 "time_type": time_type,
                                 "metric": "Time",
                                 "value": format_time(global_records[time_type]["time"]["value"]),
@@ -1562,7 +1449,7 @@ class MeetingApp(ctk.CTk):
                             total_days = global_records[time_type]["activity"]["total_days"]
                             records_found.append({
                                 "type": "World Record",
-                                "user": global_records[time_type]["activity"].get("user", "?"),
+                                "author": global_records[time_type]["activity"].get("author", "?"),
                                 "time_type": time_type,
                                 "metric": "Activity",
                                 "value": f"{active_days}/{total_days} days ({activity_ratio:.1%})",
@@ -1579,7 +1466,7 @@ class MeetingApp(ctk.CTk):
                         if is_in_current_week(date_str):
                             records_found.append({
                                 "type": "Team Record",
-                                "user": "All users",
+                                "author": "All Authors",
                                 "time_type": time_type,
                                 "metric": "Time",
                                 "value": format_time(combined_records[time_type]["time"]["value"]),
@@ -1595,7 +1482,7 @@ class MeetingApp(ctk.CTk):
                             total_days = combined_records[time_type]["activity"]["total_days"]
                             records_found.append({
                                 "type": "Team Record",
-                                "user": "All users",
+                                "author": "All Authors",
                                 "time_type": time_type,
                                 "metric": "Activity",
                                 "value": f"{active_days}/{total_days} days ({activity_ratio:.1%})",
@@ -1609,14 +1496,14 @@ class MeetingApp(ctk.CTk):
                 # Create record frame
                 record_frame = ctk.CTkFrame(self.records_content, fg_color="#23272B", corner_radius=5)
                 record_frame.pack(fill="x", pady=5, padx=5)
-                # Record type and user
-                type_user_label = ctk.CTkLabel(
+                # Record type and author
+                type_author_label = ctk.CTkLabel(
                     record_frame,
-                    text=f"{record['type']} by {record['user']}",
+                    text=f"{record['type']} by {record['author']}",
                     font=("Arial", 14, "bold"),
                     text_color="white"
                 )
-                type_user_label.pack(anchor="w", padx=10, pady=(5, 2))
+                type_author_label.pack(anchor="w", padx=10, pady=(5, 2))
                 # Time type and metric
                 metric_label = ctk.CTkLabel(
                     record_frame,
@@ -1663,23 +1550,23 @@ class MeetingApp(ctk.CTk):
         """Logs"""
         title = ctk.CTkLabel(
             self.slide_frames[2],
-            text="user Logs",
+            text="Author Logs",
             font=("Arial", 60, "bold"),
             text_color="white"
         )
         title.place(relx=0.028125, rely=0.05, anchor="nw")
         # Main Frame
-        self.logs_user_container = ctk.CTkFrame(self.slide_frames[2])
-        self.logs_user_container.place(relx=0.5, rely=0.5, relwidth=0.8, relheight=0.7, anchor="center")
+        self.logs_author_container = ctk.CTkFrame(self.slide_frames[2])
+        self.logs_author_container.place(relx=0.5, rely=0.5, relwidth=0.8, relheight=0.7, anchor="center")
         # Outer Logs Frame
-        self.logs_frame = ctk.CTkFrame(self.logs_user_container)
+        self.logs_frame = ctk.CTkFrame(self.logs_author_container)
         self.logs_frame.pack(side="bottom", fill="both", expand=True, padx=10, pady=(1, 10))
         # Selected User Name, default to self
-        self.s2_selected_user_var = ctk.StringVar(value=self.user_name)
+        self.s2_selected_author_var = ctk.StringVar(value=self.user_name)
         # Selected User - dropdown button
         self.s2_selected_user_label = ctk.CTkLabel(
-            self.logs_user_container,
-            textvariable=self.s2_selected_user_var,
+            self.logs_author_container,
+            textvariable=self.s2_selected_author_var,
             font=("Arial", 40, "bold"),
             text_color="white",
             height=38,
@@ -1687,15 +1574,15 @@ class MeetingApp(ctk.CTk):
         self.s2_selected_user_label._label.configure(cursor="hand2")
         self.s2_selected_user_label._canvas.configure(cursor="hand2")
         self.s2_selected_user_label.pack(ipadx=6, anchor="w", padx=6, pady=(6, 0))
-        self.s2_selected_user_label.bind("<Enter>", self.s2_selected_user_enter)
-        self.s2_selected_user_label.bind("<Leave>", self.s2_selected_user_leave)
+        self.s2_selected_user_label.bind("<Enter>", self.s2_selected_author_enter)
+        self.s2_selected_user_label.bind("<Leave>", self.s2_selected_author_leave)
         self.s2_selected_user_label.bind("<Button-1>", self.s2_show_dropdown)
         self.s2_user_list_frame = ctk.CTkFrame(
-            self.logs_user_container,
+            self.logs_author_container,
             fg_color='gray20',
             corner_radius=0
         )
-        self.s2_create_selectable_users()
+        self.s2_create_selectable_authors()
         # Scrollable Frame
         self.logs_scrollable_frame = CtkSmartScrollableFrame(
             self.logs_frame,
@@ -1708,22 +1595,22 @@ class MeetingApp(ctk.CTk):
         self.log_widgets = []
         self.selected_log_index = -1
 
-        self.s2_set_logs_by_user()
-        self.s2_create_user_log_widgets()
+        self.s2_set_logs_by_author()
+        self.s2_create_author_log_widgets()
 
         # Bind arrow keys for navigation
         self.bind("<Up>", self.s2_arrow_up)
         self.bind("<Down>", self.s2_arrow_down)
 
-    def s2_create_selectable_users(self):
-        """Create the dropdown list of users for logs (slide 2)."""
+    def s2_create_selectable_authors(self):
+        """Create the dropdown list of authors for logs (slide 2)."""
         # Create list
-        self.s2_selectable_users = sorted({log.get("user") for log in self.logs})
+        self.s2_selectable_authors = sorted({log.get("author") for log in self.logs})
         # Update selected if invalid
-        if self.s2_selected_user_var.get() not in self.s2_selectable_users:
-            self.s2_selected_user_var.set(self.s2_selectable_users[0])
+        if self.s2_selected_author_var.get() not in self.s2_selectable_authors:
+            self.s2_selected_author_var.set(self.s2_selectable_authors[0])
         # Create UI
-        for user in self.s2_selectable_users:
+        for user in self.s2_selectable_authors:
             user_frame = ctk.CTkFrame(
                 self.s2_user_list_frame,
                 fg_color="transparent",
@@ -1746,32 +1633,32 @@ class MeetingApp(ctk.CTk):
                 widget.bind("<Leave>", self.s2_dropdown_leave)
                 widget.bind("<Button-1>", lambda e, u=user: self.s2_dropdown_select(e, u))
 
-    def s2_destroy_selectable_users(self):
-        """Destroy all dropdown user items for logs (slide 2)."""
+    def s2_destroy_selectable_authors(self):
+        """Destroy all dropdown author items for logs (slide 2)."""
         for item in self.s2_user_list_frame.winfo_children():
             item.destroy()
 
-    def s2_update_selectable_users(self):
-        """Refresh the dropdown user list for logs (slide 2)."""
-        self.s2_destroy_selectable_users()
-        self.s2_create_selectable_users()
+    def s2_update_selectable_authors(self):
+        """Refresh the dropdown author list for logs (slide 2)."""
+        self.s2_destroy_selectable_authors()
+        self.s2_create_selectable_authors()
 
-    def s2_selected_user_enter(self, _event):
-        """Handle hover enter on logs user label"""
+    def s2_selected_author_enter(self, _event):
+        """Handle hover enter on logs author label"""
         self.s2_selected_user_label.configure(fg_color="gray20")
 
-    def s2_selected_user_leave(self, _event):
-        """Handle hover leave on logs user label"""
+    def s2_selected_author_leave(self, _event):
+        """Handle hover leave on logs author label"""
         if not self.s2_user_list_frame.winfo_ismapped():
             self.s2_selected_user_label.configure(fg_color="transparent")
 
     def s2_show_dropdown(self, _event):
-        """Show dropdown for logs user selection"""
+        """Show dropdown for logs author selection"""
         self.s2_user_list_frame.place(x=6, y=52, anchor="nw")  # 52=6+38+8
         self.bind("<Button-1>", self.s2_hide_dropdown)
 
     def s2_hide_dropdown(self, event=None):
-        """Hide the logs user dropdown"""
+        """Hide the logs author dropdown"""
         self.s2_user_list_frame.place_forget()
         self.unbind("<Button-1>")
         if event and self.winfo_containing(event.x_root, event.y_root).master != self.s2_selected_user_label:
@@ -1789,22 +1676,26 @@ class MeetingApp(ctk.CTk):
 
     def s2_dropdown_select(self, _event, user):
         """Handle selection of a user from logs dropdown"""
-        self.s2_selected_user_var.set(user)
+        self.s2_selected_author_var.set(user)
         self.s2_hide_dropdown()
-        self.s2_create_user_log_widgets()
+        self.s2_create_author_log_widgets()
 
-    def s2_set_logs_by_user(self):
-        """Creates or updates self.logs_by_user"""
+    def s2_set_logs_by_author(self):
+        """Creates or updates self.logs_by_author"""
         # Copy, Sort & Group Logs
         logs = list(self.logs)  # Shallow copy
-        logs.sort(key=lambda x: x.get("timestamp", datetime.datetime.min))
-        self.logs_by_user = defaultdict(list)
+        weekday_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        logs.sort(key=lambda x: (
+            weekday_order.index(x.get("start_weekday")),
+            x.get("start_time")
+        ))
+        self.logs_by_author = defaultdict(list)
         for log in logs:
-            self.logs_by_user[log["user"]].append(log)
+            self.logs_by_author[log["author"]].append(log)
 
-    def s2_create_user_log_widgets(self):
-        """Create log widgets for the specified user and store references for navigation"""
-        user = self.s2_selected_user_var.get()
+    def s2_create_author_log_widgets(self):
+        """Create log widgets for the specified author and store references for navigation"""
+        author = self.s2_selected_author_var.get()
         # Clear Existing Logs
         for widget in self.logs_scrollable_frame.winfo_children():
             widget.destroy()
@@ -1812,18 +1703,19 @@ class MeetingApp(ctk.CTk):
         self.expanded_log_widget = None
         self.selected_log_index = -1
         # Create New Logs
-        for log in self.logs_by_user.get(user):
+        for log in self.logs_by_author.get(author):
             self.s2_create_log_widget(log)
 
     def s2_create_log_widget(self, log):
         """Create a single log widget with expand/collapse functionality. If return_frame is True, return the log_frame."""
         # Extract log data
         name = log.get("name", "No title")
-        dt = log["timestamp"]
-        weekday = dt.strftime("%A")
-        start_time_formatted = dt.strftime("%H:%M")
+        weekday = log.get("start_weekday", "Unknown")
+        start_time = log.get("start_time", "00:00:00")
         elapsed_time = log.get("elapsed_time", 0)
         description = log.get("description", "No description")
+        # Format times
+        start_time_formatted = start_time[:-3] if len(start_time) > 5 else start_time  # HH:MM
         elapsed_time_formatted = format_time(elapsed_time)
         # Frame
         log_frame = ctk.CTkFrame(
@@ -2042,6 +1934,18 @@ class MeetingApp(ctk.CTk):
                 self.days_buttons = []
                 self.selected_days = 0
 
+                def on_days_button_click(day_num):
+                    if day_num == self.selected_days:
+                        self.selected_days = 0
+                    else:
+                        self.selected_days = day_num
+                    for i, btn in enumerate(self.days_buttons):
+                        if i < self.selected_days:
+                            btn.configure(fg_color="#2ecc71")  # Green color for selected
+                        else:
+                            btn.configure(fg_color="#e74c3c")  # Red color for unselected
+                    self.s4_update_days_goal()
+
                 for i in range(7):
                     button_frame = ctk.CTkFrame(
                         days_buttons_frame,
@@ -2057,7 +1961,7 @@ class MeetingApp(ctk.CTk):
                         height=76,
                         fg_color="#e74c3c",
                         hover=False,
-                        command=lambda x=i + 1: self.s4_update_days_goal(x)
+                        command=lambda x=i + 1: on_days_button_click(x)
                     )
                     btn.place(relx=0.5, rely=0.5, anchor="center")
                     self.days_buttons.append(btn)
@@ -2082,11 +1986,12 @@ class MeetingApp(ctk.CTk):
                 self.hours_entry.bind("<KeyRelease>", lambda e: self.s4_update_hourly_goal())
 
             def _create_user_selection():
-                self.s4_selected_user_var = ctk.StringVar(value=self.user_name) # Default to self
+                self.s4_selected_author_var = ctk.StringVar(
+                    value=self.user_name)  # Create selected Username default to self
 
                 self.s4_selected_user_label = ctk.CTkLabel(
                     self.goals_input_screen,
-                    textvariable=self.s4_selected_user_var,
+                    textvariable=self.s4_selected_author_var,
                     font=("Arial", 40, "bold"),
                     text_color="white",
                     height=38
@@ -2094,15 +1999,15 @@ class MeetingApp(ctk.CTk):
                 self.s4_selected_user_label._canvas.configure(cursor="hand2")
                 self.s4_selected_user_label._label.configure(cursor="hand2")
                 self.s4_selected_user_label.pack(ipadx=6, anchor="w", padx=6, pady=(6, 0))
-                self.s4_selected_user_label.bind("<Enter>", self.s4_selected_user_enter)
-                self.s4_selected_user_label.bind("<Leave>", self.s4_selected_user_leave)
+                self.s4_selected_user_label.bind("<Enter>", self.s4_selected_author_enter)
+                self.s4_selected_user_label.bind("<Leave>", self.s4_selected_author_leave)
                 self.s4_selected_user_label.bind("<Button-1>", self.s4_show_dropdown)
                 self.s4_user_list_frame = ctk.CTkFrame(
                     self.goals_input_screen,
                     fg_color='gray20',
                     corner_radius=0
                 )
-                self.s4_create_selectable_users()
+                self.s4_create_selectable_authors()
 
             _create_days()
             _create_hours()
@@ -2166,7 +2071,7 @@ class MeetingApp(ctk.CTk):
                     static_header_row.grid_columnconfigure(i, weight=1, uniform="pad_colum")
             ctk.CTkLabel(
                 static_header_row,
-                text="user",
+                text="Author",
                 font=("Arial", 20, "bold"),
                 text_color="white",
                 anchor="center"
@@ -2210,14 +2115,14 @@ class MeetingApp(ctk.CTk):
         _s4_create_display_screen()
         _s4_create_input_screen()
 
-    def s4_create_selectable_users(self):
-        self.s4_selectable_users = sorted(
-            self.online_users | self._current_week_goals.keys() | self._next_week_goals.keys() | {self.user_name})
+    def s4_create_selectable_authors(self):
+        self.s4_selectable_authors = sorted(
+            self.online_users | self._current_week_goals.keys() | self._next_week_goals.keys())
         # Update selected if invalid
-        if self.s4_selected_user_var.get() not in self.s4_selectable_users: # type: ignore[attr-defined]
-            self.s4_selected_user_var.set(self.s4_selectable_users[0]) # type: ignore[attr-defined]
+        if self.s4_selected_author_var.get() not in self.s4_selectable_authors: # type: ignore[attr-defined]
+            self.s4_selected_author_var.set(self.s4_selectable_authors[0]) # type: ignore[attr-defined]
         # Create UI
-        for user in self.s4_selectable_users:
+        for user in self.s4_selectable_authors:
             user_frame = ctk.CTkFrame(
                 self.s4_user_list_frame, # type: ignore[attr-defined]
                 fg_color="transparent",
@@ -2240,20 +2145,20 @@ class MeetingApp(ctk.CTk):
                 widget.bind("<Leave>", self.s4_dropdown_leave)
                 widget.bind("<Button-1>", lambda e, u=user: self.s4_dropdown_select(e, u))
 
-    def s4_destroy_selectable_users(self):
+    def s4_destroy_selectable_authors(self):
         for item in self.s4_user_list_frame.winfo_children(): # type: ignore[attr-defined]
             item.destroy()
 
-    def s4_update_selectable_users(self):
-        self.s4_destroy_selectable_users()
-        self.s4_create_selectable_users()
+    def s4_update_selectable_authors(self):
+        self.s4_destroy_selectable_authors()
+        self.s4_create_selectable_authors()
 
-    def s4_selected_user_enter(self, _event):
-        """Handle hover enter on user label"""
+    def s4_selected_author_enter(self, _event):
+        """Handle hover enter on author label"""
         self.s4_selected_user_label.configure(fg_color="gray20") # type: ignore[attr-defined]
 
-    def s4_selected_user_leave(self, _event):
-        """Handle hover leave on user label"""
+    def s4_selected_author_leave(self, _event):
+        """Handle hover leave on author label"""
         if not self.s4_user_list_frame.winfo_ismapped(): # type: ignore[attr-defined]
             self.s4_selected_user_label.configure(fg_color="transparent") # type: ignore[attr-defined]
 
@@ -2281,21 +2186,20 @@ class MeetingApp(ctk.CTk):
 
     def s4_dropdown_select(self, _event, user):
         """Handle selection of a user from dropdown"""
-        self.s4_selected_user_var.set(user) # type: ignore[attr-defined]
+        self.s4_selected_author_var.set(user) # type: ignore[attr-defined]
         self.s4_hide_dropdown()
         self.s4_update_input_ui()
 
     @staticmethod
     def s4_fetch_goals(year, week):
-        return status_meeting_collection.find_one({"_id": "Goals"},
-            projection={f"{year}.{week}": 1}
-        ).get(year, {}).get(week, {})
+        """Returns goals for a specific week."""
+        return status_meeting_collection.find_one({"_id": "Author Goals"}).get(year, {}).get(week, {})
 
     def s4_update_input_ui(self, reset_focus=True):
-        """Updates the inputs goals ui for selected user"""
-        user = self.s4_selected_user_var.get() # type: ignore[attr-defined]
-        current_goals = self._current_week_goals.get(user, {})
-        next_goals = self._next_week_goals.get(user, {})
+        """Updates the inputs goals ui for selected author"""
+        author = self.s4_selected_author_var.get() # type: ignore[attr-defined]
+        current_goals = self._current_week_goals.get(author, {})
+        next_goals = self._next_week_goals.get(author, {})
         # Update days buttons
         if next_goals.get("days"):
             self.selected_days = next_goals["days"]
@@ -2359,41 +2263,41 @@ class MeetingApp(ctk.CTk):
         self._presence_update_event.set()
 
     def s4_update_display_ui(self):
-        """Update the goals display with all user goals (only if changed)"""
-        # 1. Build all users (online & users with goals)
-        all_users = sorted(self.online_users | self._next_week_goals.keys())
+        """Update the goals display with all author goals (only if changed)"""
+        # 1. Build all authors (online & users with goals)
+        all_authors = sorted(self.online_users | self._next_week_goals.keys())
 
         # 2. Build Data List
         display_state = []
-        for user in all_users:
-            if user in self.input_mode_users:
-                display_state.append((user, 'pending', 'pending'))
+        for author in all_authors:
+            if author in self.users_in_input_mode:
+                display_state.append((author, 'pending', 'pending'))
             else:
-                if user in self._next_week_goals:
-                    user_goals = self._next_week_goals[user]
-                    days_val = user_goals.get("days", 0)
-                    hours_val = user_goals.get("hours", 0)
-                    display_state.append((user, days_val, hours_val))
+                if author in self._next_week_goals:
+                    author_goals = self._next_week_goals[author]
+                    days_val = author_goals.get("days", 0)
+                    hours_val = author_goals.get("hours", 0)
+                    display_state.append((author, days_val, hours_val))
                 else:
-                    display_state.append((user, 0, 0))
+                    display_state.append((author, 0, 0))
         # 3. Return if no change
         if hasattr(self, '_last_goals_display_state') and self._last_goals_display_state == display_state: # type: ignore[attr-defined]
             return
         self._last_goals_display_state = display_state
 
-        # 4. Remove users no longer in data (Widgets & Dict)
-        current_users_in_display = {item[0] for item in display_state}
-        users_to_remove = [
-            user for user in self._goals_display_widgets.keys() # type: ignore[attr-defined]
-            if user not in current_users_in_display
+        # 4. Remove authors no longer in data (Widgets & Dict)
+        current_authors_in_display = {item[0] for item in display_state}
+        authors_to_remove = [
+            author for author in self._goals_display_widgets.keys() # type: ignore[attr-defined]
+            if author not in current_authors_in_display
         ]
-        for user in users_to_remove:
-            self._goals_display_widgets[user]['frame'].destroy()  # type: ignore[attr-defined]
-            del self._goals_display_widgets[user]  # type: ignore[attr-defined]
+        for author in authors_to_remove:
+            self._goals_display_widgets[author]['frame'].destroy()  # type: ignore[attr-defined]
+            del self._goals_display_widgets[author]  # type: ignore[attr-defined]
 
         # 5. Update or create widgets
-        for user, days, hours in display_state:
-            if user not in self._goals_display_widgets:  # type: ignore[attr-defined] Create new widgets
+        for author, days, hours in display_state:
+            if author not in self._goals_display_widgets:  # type: ignore[attr-defined] Create new widgets
                 frame_1 = ctk.CTkFrame(
                     self.goals_display_frame,  # type: ignore[attr-defined]
                     fg_color="#23272B",
@@ -2408,20 +2312,20 @@ class MeetingApp(ctk.CTk):
                         frame_2.grid_columnconfigure(i, weight=0, uniform="content_col", minsize=150)
                     else:
                         frame_2.grid_columnconfigure(i, weight=1, uniform="pad_colum")
-                user_label = ctk.CTkLabel(frame_2, text=user, font=("Arial", 20), text_color="white",
+                author_label = ctk.CTkLabel(frame_2, text=author, font=("Arial", 20), text_color="white",
                                             anchor="center")
-                user_label.grid(row=0, column=1, sticky="nsew", padx=(0, 10))
+                author_label.grid(row=0, column=1, sticky="nsew", padx=(0, 10))
                 days_label = ctk.CTkLabel(frame_2, text="", font=("Arial", 18), text_color="white", anchor="center")
                 days_label.grid(row=0, column=3, sticky="nsew", padx=(0, 10))
                 hours_label = ctk.CTkLabel(frame_2, text="", font=("Arial", 18), text_color="white", anchor="center")
                 hours_label.grid(row=0, column=5, sticky="nsew")
-                self._goals_display_widgets[user] = {  # type: ignore[attr-defined]
+                self._goals_display_widgets[author] = {  # type: ignore[attr-defined]
                     'frame': frame_1,
-                    'user_label': user_label,
+                    'author_label': author_label,
                     'days_label': days_label,
                     'hours_label': hours_label
                 }
-            widgets = self._goals_display_widgets[user] # type: ignore[attr-defined] Update the text
+            widgets = self._goals_display_widgets[author] # type: ignore[attr-defined] Update the text
             if days == 'pending':
                 widgets['days_label'].configure(text="⏳")
             else:
@@ -2433,11 +2337,11 @@ class MeetingApp(ctk.CTk):
                 widgets['hours_label'].configure(text=f"{hours or '-'}")
 
         # 6. Re-pack frames
-        for user_widgets in self._goals_display_widgets.values(): # type: ignore[attr-defined]
-            user_widgets['frame'].pack_forget()
-        for user, _, _ in display_state:
-            if user in self._goals_display_widgets: # type: ignore[attr-defined]
-                self._goals_display_widgets[user]['frame'].pack(fill="x", pady=2, padx=5) # type: ignore[attr-defined]
+        for author_widgets in self._goals_display_widgets.values(): # type: ignore[attr-defined]
+            author_widgets['frame'].pack_forget()
+        for author, _, _ in display_state:
+            if author in self._goals_display_widgets: # type: ignore[attr-defined]
+                self._goals_display_widgets[author]['frame'].pack(fill="x", pady=2, padx=5) # type: ignore[attr-defined]
 
         # 7. Team row
         if hasattr(self, '_team_row_widget') and self._team_row_widget is not None: # type: ignore[attr-defined]
@@ -2458,9 +2362,9 @@ class MeetingApp(ctk.CTk):
                 frame_2.grid_columnconfigure(i, weight=0, uniform="content_col", minsize=150)
             else:
                 frame_2.grid_columnconfigure(i, weight=1, uniform="pad_colum")
-        user_label = ctk.CTkLabel(frame_2, text="Team", font=("Arial", 20, "bold"), text_color="white",
+        author_label = ctk.CTkLabel(frame_2, text="Team", font=("Arial", 20, "bold"), text_color="white",
                                     anchor="center")
-        user_label.grid(row=0, column=1, sticky="nsew", padx=(0, 10))
+        author_label.grid(row=0, column=1, sticky="nsew", padx=(0, 10))
         days_label = ctk.CTkLabel(frame_2, text="", font=("Arial", 18), text_color="white", anchor="center")
         days_label.grid(row=0, column=3, sticky="nsew", padx=(0, 10))
         hours_label = ctk.CTkLabel(frame_2, text=team_hours, font=("Arial", 18, "bold"), text_color="white",
@@ -2468,12 +2372,13 @@ class MeetingApp(ctk.CTk):
         hours_label.grid(row=0, column=5, sticky="nsew")
         self._team_row_widget = frame_1
 
-    def build_input_mode_users(self) -> set[str]:
+    def s4_get_users_in_input_mode(self) -> set[str]:
         """Returns a set of users currently in input mode."""
         return {sel_user for user, sel_user in self.online_users_info if user != self.user_name and sel_user}
 
     def s4_update_hourly_goal(self, show_summary=False):
-        """Update only the hours goal for the current user. Optionally move to summary view if valid."""
+        """Update only the hours goal for the current author. Optionally move to summary view if valid."""
+        author = self.s4_selected_author_var.get() # type: ignore[attr-defined]
         hours = self.hours_entry.get().strip() # type: ignore[attr-defined]
         # Convert to int & validate
         try:
@@ -2485,41 +2390,58 @@ class MeetingApp(ctk.CTk):
                 self.s4_flash_error(self.hours_entry) # type: ignore[attr-defined]
             return
 
-        self._s4_update_goal_data("hours", hours)
-
+        if hours > 0:
+            # DB
+            status_meeting_collection.update_one(
+                {"_id": "Author Goals"},
+                {"$set": {f"{self.next_year}.{self.next_week}.{author}.hours": hours}},
+                upsert=True
+            )
+            # Cache
+            self._next_week_goals.setdefault(author, {})
+            self._next_week_goals[author]["hours"] = hours
+        else:
+            self.s4_remove_author_key_from_goals(author, "hours")
         # UI
         self.s4_update_display_ui()
         if show_summary:
             self.focus_set()
             self.s4_show_display()
 
-    def s4_update_days_goal(self, day_input):
-        """Update only the days goal for the current user."""
-        self.selected_days = 0 if day_input == self.selected_days else day_input
+    def s4_update_days_goal(self):
+        """Update only the days goal for the current author."""
+        author = self.s4_selected_author_var.get() # type: ignore[attr-defined]
+        days = self.selected_days
 
-        self._s4_update_goal_data("days", self.selected_days)
-
-        # UI
-        self.s4_update_days_ui(self.selected_days)
-        self.s4_update_display_ui()
-
-    def _s4_update_goal_data(self, field, value):
-        user = self.s4_selected_user_var.get() # type: ignore[attr-defined]
-        goals = self._next_week_goals.setdefault(user, {})
-        if value > 0:
-            goals[field] = value
+        if days > 0:
+            # DB
+            status_meeting_collection.update_one(
+                {"_id": "Author Goals"},
+                {"$set": {f"{self.next_year}.{self.next_week}.{author}.days": days}},
+                upsert=True
+            )
+            # Cache
+            self._next_week_goals.setdefault(author, {})
+            self._next_week_goals[author]["days"] = days
         else:
-            goals.pop(field, None)
-            if not goals:
-                del self._next_week_goals[user]
+            self.s4_remove_author_key_from_goals(author, "days")
 
-        with self._lock:
-            if not goals:
-                self.update_buffer["goals"][user] = {}
-            else:
-                self.update_buffer["goals"][user][field] = value
-
-        self._update_event.set()
+    def s4_remove_author_key_from_goals(self, author, key):
+        """Remove a specific key from author's goals. Remove author entirely if no goals remain."""
+        current_goals = self._next_week_goals.get(author, {})
+        remaining_goals = {k: v for k, v in current_goals.items() if k != key}
+        if remaining_goals:  # Remove just the key
+            status_meeting_collection.update_one(
+                {"_id": "Author Goals"},
+                {"$unset": {f"{self.next_year}.{self.next_week}.{author}.{key}": ""}}
+            )
+            del self._next_week_goals[author][key]
+        else:  # No goals left, remove author entirely
+            status_meeting_collection.update_one(
+                {"_id": "Author Goals"},
+                {"$unset": {f"{self.next_year}.{self.next_week}.{author}": ""}}
+            )
+            del self._next_week_goals[author]
 
     ### SLIDE 5 ###
     def slide_5(self):
@@ -2533,25 +2455,25 @@ class MeetingApp(ctk.CTk):
 
     # noinspection PyUnboundLocalVariable
     def _s5_get_data(self):
-        data_path = f"data.{self.current_year}.{self.current_week}"
         # (Already have data) or (no valid lock)   [(no lock) or (stale lock)]
         filter_query = {
             "_id": "End Strings",
             "$or": [
-                {data_path: {"$exists": True}},
+                {f"data.{self.current_year}.{self.current_week}": {"$exists": True}},
                 {"lock_timestamp": None},
-                {"$expr": {"$lt": ["$lock_timestamp", {"$subtract": ["$$NOW", 20000]}]}}]}
+                {"$expr": {"$lt": ["$lock_timestamp", {"$subtract": ["$$NOW", 30000]}]}}
+            ]
+        }
 
         # If no data: lock, else pass
         update_pipeline = [{
             "$set": {
                 "lock_timestamp": {
                     "$cond": {
-                        "if": {"$eq":[{"$type": f"${data_path}"}, "missing"]},
+                        "if": {"$eq":[{"$type": f"$data.{self.current_year}.{self.current_week}"}, "missing"]},
                         "then": "$$NOW",
-                        "else": "$lock_timestamp"}}}}]
-
-        projection = {data_path: 1, "_id": 0}
+                        "else": "$lock_timestamp"
+        }}}}]
 
         pymongo_network_errors = (ConnectionFailure, ServerSelectionTimeoutError, NetworkTimeout, AutoReconnect)
         openai_errors = (APIConnectionError, APITimeoutError, InternalServerError, RateLimitError)
@@ -2559,9 +2481,7 @@ class MeetingApp(ctk.CTk):
 
         while True:
             try:
-                doc = status_meeting_collection.find_one_and_update(
-                    filter_query, update_pipeline, projection=projection, return_document=ReturnDocument.AFTER
-                )
+                doc = status_meeting_collection.find_one_and_update(filter_query, update_pipeline, return_document=ReturnDocument.AFTER)
                 # Locked document
                 if doc is None:
                     self._s5_get_data_event.clear()
@@ -2574,23 +2494,16 @@ class MeetingApp(ctk.CTk):
                     return week_data["string"], week_data["style"]
 
                 # We got the lock
+                heartbeat_stop_event = threading.Event()
+                heartbeat_thread = threading.Thread(target=self._s5_run_heartbeat, args=(heartbeat_stop_event,), daemon=True, name="S5_Heartbeat")
+                heartbeat_thread.start()
                 try:
                     string, style = self._s5_generate_phrase()
-
-                    pipeline = [{
-                        "$set": {
-                            data_path: {
-                                "$cond": {
-                                    "if": {"$eq": [{"$type": f"${data_path}"}, "missing"]},
-                                    "then": {"string": string, "style": style},
-                                    "else": f"${data_path}"}},
-                            "lock_timestamp": None}}]
-
-                    updated_doc = status_meeting_collection.find_one_and_update({"_id": "End Strings"},
-                        pipeline, projection=projection, return_document=ReturnDocument.AFTER
-                    )
-                    week_data = updated_doc["data"][self.current_year][self.current_week]
-                    return week_data["string"], week_data["style"]
+                    status_meeting_collection.update_one({"_id": "End Strings"},{"$set": {
+                        f"data.{self.current_year}.{self.current_week}": {"string": string, "style": style},
+                        "lock_timestamp": None
+                    }})
+                    return string, style
                 except Exception as e:
                     if not isinstance(e, pymongo_network_errors):
                         try:
@@ -2598,10 +2511,21 @@ class MeetingApp(ctk.CTk):
                         except pymongo_network_errors:
                             pass
                     raise
+                finally:
+                    heartbeat_stop_event.set()
             except retry_errors:
                 self._s5_get_data_event.clear()
                 self._s5_get_data_event.wait(1.0)
                 continue
+
+    @staticmethod
+    def _s5_run_heartbeat(stop_event):
+        while not stop_event.wait(2.0):
+            # noinspection PyBroadException
+            try:
+                status_meeting_collection.update_one({"_id": "End Strings", "lock_timestamp": {"$ne": None}},{"$currentDate": {"lock_timestamp": True}})
+            except:
+                pass
 
     @staticmethod
     def _s5_generate_phrase():
@@ -2643,11 +2567,11 @@ Strict rules:
 
         ai_client = OpenAI(
             base_url="https://models.github.ai/inference",
-            api_key="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",
+            api_key="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",
         )
         response = ai_client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],  # type: ignore[arg-type]
-            model="openai/gpt-4o", temperature=0.9, max_tokens=60, top_p=1, timeout=15.0
+            model="openai/gpt-4o", temperature=0.9, max_tokens=60, top_p=1,
         )
         phrase = response.choices[0].message.content
         return phrase, style
