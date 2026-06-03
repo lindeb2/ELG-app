@@ -29,7 +29,7 @@ This project is a Python desktop application suite for time tracking, meeting ma
 - **Custom Widgets**: Import custom widgets using their package names (e.g., `from CTkPieChart import CTkPieChart`).
 
 ## Key Files & Directories
-- `Project Folder/Timetable_new.py`: Aggregation, highscore, and notification logic
+- `Project Folder/Timetable.py`: Aggregation, highscore, and notification logic
 - `Project Folder/meeting_app.py`: Status meeting workflow and UI
 - `Project Folder/meeting_point_manager.py`: Meeting points management
 - `Project Folder/CTkFlexToolTip/`, `CTkPieChart/`, `CtkSmartScrollableFrame/`: Custom widget implementations
