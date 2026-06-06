@@ -122,15 +122,13 @@ class MeetingApp(ctk.CTk):
     def fetch_state():
         """Fetches the week anchor from the db. Meeting week is considered from Thursday to next week's Wednesday."""
         projection = {"_id": 0, "slide": 1, "week": 1, "server_time": "$$NOW"}
-        doc = status_meeting_collection.find_one_and_update({"_id": "State"},
-            WEEK_PIPELINE, projection=projection, return_document=ReturnDocument.AFTER
-        )
+        doc = status_meeting_collection.find_one_and_update({"_id": "State"}, WEEK_PIPELINE, projection=projection, return_document=ReturnDocument.AFTER)
         local_now = time.time()
-        slide, anchor, server_time = doc["slide"], doc["week"], doc["server_time"]
-        next_week = anchor + timedelta(weeks=1)
-        time_to_next_week_start = anchor+timedelta(days=10)-server_time
-        local_target_timestamp = local_now + time_to_next_week_start.total_seconds()
-        return slide, anchor, next_week, local_target_timestamp
+        slide = doc["slide"]
+        current_week = doc["week"]
+        next_week = current_week + timedelta(weeks=1)
+        local_target_timestamp = local_now + (next_week + timedelta(days=3) - doc["server_time"]).total_seconds()
+        return slide, current_week, next_week, local_target_timestamp
 
     def _calculate_week_info(self):
         """Calculates current and next week's year and week numbers."""
@@ -1498,8 +1496,7 @@ class MeetingApp(ctk.CTk):
                 dt = datetime.datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
             except (ValueError, TypeError):
                 return False
-            year, week, _ = dt.isocalendar()
-            return year == self.current_year and week == self.current_week
+            return self.current_week_start <= dt < self.next_week_start
 
         # Check personal records
         for user in self.online_users:

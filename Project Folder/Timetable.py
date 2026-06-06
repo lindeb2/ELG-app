@@ -1,10 +1,13 @@
+from selectors import SelectSelector
+
+from bson import ObjectId
 import customtkinter as ctk
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
+from pymongo import ReturnDocument
 from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
 import os
-import sys
 import json
 import requests
 
@@ -13,7 +16,7 @@ client = MongoClient(
     "mongodb+srv://johan:baLlbeTtertRacer@elg-timetable.txhpj.mongodb.net/?retryWrites=true&w=majority&appName=ELG-timetable",
     server_api=ServerApi('1')
 )
-db = client['ELG-Database']
+db = client['ELG-Dev']
 collection = db['Timetable']
 aggregations = db['Timetable Aggregations']
 
@@ -21,14 +24,13 @@ aggregations = db['Timetable Aggregations']
 GAE_URL = "https://your-app-engine-url.appspot.com/notify"  # Replace with your actual GAE URL
 
 def format_time(seconds):
-    """Format time from seconds an exact readable format."""
-    if seconds is None or seconds == 0:
+    """Format time from seconds to a readable format."""
+    total = int(float(seconds or 0))
+    if total <= 0:
         return "00:00"
-    
-    hours = seconds // 3600
-    minutes = (seconds % 3600) // 60
-    seconds = seconds % 60
-    
+    hours = total // 3600
+    minutes = (total % 3600) // 60
+    seconds = total % 60
     if hours >= 24:
         return f"{hours} hours"
     elif hours > 0:
@@ -58,8 +60,8 @@ def send_notification(message):
 ctk.set_appearance_mode("Dark")
 
 # Global variables
-name = description = start_time = end_time = None
-elapsed_time = elapsed_seconds = elapsed_minutes = elapsed_hours = 0
+name = description = local_start = None
+elapsed_time = _monotonic_anchor = 0.0
 running = False
 
 # Get the directory of the current script
@@ -73,528 +75,197 @@ with open(config_path) as file:
     config = json.load(file)
     user = config["user"]
 
-def aggregate_day(year, month, day, user):
+_ACTIVE_DAY_EXPR = {"$dateToString": {"format": "%Y-%m-%d", "date": "$timestamp"}}
+
+def calendar_week_key(dt: datetime) -> tuple[str, str]:
+    year, week, _ = dt.isocalendar()
+    return str(year), str(week)
+
+
+def calendar_bounds(
+    period: str,
+    *,
+    year: int | None = None,
+    month: int | None = None,
+    day: int | None = None,
+    week: int | None = None,
+) -> tuple[datetime, datetime]:
+    """Inclusive start, exclusive end for a calendar day/week/month/year."""
+    if period == "day":
+        start = datetime(year, month, day).replace(hour=0, minute=0, second=0, microsecond=0)
+        return start, start + timedelta(days=1)
+
+    if period == "week":
+        start = datetime.fromisocalendar(year, week, 1)
+        return start, start + timedelta(weeks=1)
+
+    if period == "month":
+        start = datetime(year, month, 1)
+        end = datetime(year + 1, 1, 1) if month == 12 else datetime(year, month + 1, 1)
+        return start, end
+
+    if period == "year":
+        return datetime(year, 1, 1), datetime(year + 1, 1, 1)
+
+
+def timestamp_range_match(start: datetime, end: datetime) -> dict:
+    return {"timestamp": {"$gte": start, "$lt": end}}
+
+
+def format_date_str(dt: datetime) -> str:
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+_TIME_TYPE_TO_PERIOD = {"Year": "year", "Month": "month", "Week": "week", "Day": "day"}
+
+
+def _period_timestamp_match(date_str: str, time_type: str) -> dict:
+    dt = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+    period = _TIME_TYPE_TO_PERIOD[time_type]
+    if period == "year":
+        return timestamp_range_match(*calendar_bounds("year", year=dt.year))
+    if period == "month":
+        return timestamp_range_match(*calendar_bounds("month", year=dt.year, month=dt.month))
+    if period == "week":
+        iso_year, iso_week, _ = dt.isocalendar()
+        return timestamp_range_match(*calendar_bounds("week", year=iso_year, week=iso_week))
+    return timestamp_range_match(*calendar_bounds("day", year=dt.year, month=dt.month, day=dt.day))
+
+
+_TIME_BY_USER_GROUP = {"$group": {"_id": "$user", "time": {"$sum": "$elapsed_time"}}}
+_TIME_AND_DAYS_BY_USER_GROUP = {
+    "$group": {
+        "_id": "$user",
+        "time": {"$sum": "$elapsed_time"},
+        "active_days": {"$addToSet": _ACTIVE_DAY_EXPR},
+    }
+}
+
+
+def _sum_time_by_user(start: datetime, end: datetime) -> list:
+    pipeline = [{"$match": timestamp_range_match(start, end)}, _TIME_BY_USER_GROUP]
+    return list(collection.aggregate(pipeline))
+
+
+def _sum_time_and_days_by_user(start: datetime, end: datetime) -> list:
     pipeline = [
-        {
-            "$match": {
-                "start_year": year,
-                "start_month": month,
-                "start_day": day
-            }
-        },
-        {
-            "$group": {
-                "_id": "$user",
-                "time": {"$sum": "$elapsed_time"}
-            }
-        }
+        {"$match": timestamp_range_match(start, end)},
+        _TIME_AND_DAYS_BY_USER_GROUP,
     ]
-    result = list(collection.aggregate(pipeline))
-    
-    # Calculate combined total
+    return list(collection.aggregate(pipeline))
+
+
+def _upsert_aggregation(doc_id: str, fields: dict) -> None:
+    aggregations.update_one({"_id": doc_id}, {"$set": fields}, upsert=True)
+
+
+def _write_time_field(result: list, user: str, base_path: str) -> None:
     combined_time = sum(entry["time"] for entry in result)
-    
-    # Update combined document
-    aggregations.update_one(
-        {
-            "_id": "Combined"
-        },
-        {
-            "$set": {
-                f"years.{year}.months.{month}.days.{day}.time": combined_time
-            }
-        },
-        upsert=True
-    )
-    
-    # Update the specific user's document
     user_time = next((entry["time"] for entry in result if entry["_id"] == user), 0)
-    aggregations.update_one(
-        {
-            "_id": user
-        },
-        {
-            "$set": {
-                f"years.{year}.months.{month}.days.{day}.time": user_time
-            }
-        },
-        upsert=True
-    )
+    _upsert_aggregation("Combined", {f"{base_path}.time": combined_time,})
+    _upsert_aggregation(user, {f"{base_path}.time": user_time})
 
-def aggregate_weekday(year, month, day, weekday, user):
-    pipeline = [
-        {
-            "$match": {
-                "start_year": year,
-                "start_month": month,
-                "start_day": day,
-                "start_weekday": weekday
-            }
-        },
-        {
-            "$group": {
-                "_id": "$user",
-                "time": {"$sum": "$elapsed_time"}
-            }
-        }
-    ]
-    result = list(collection.aggregate(pipeline))
-    
-    # Calculate combined total
-    combined_time = sum(entry["time"] for entry in result)
-    
-    # Get the week number for this date
-    dt = datetime(int(year), int(month), int(day))
-    week = f"{int(dt.strftime('%W')) + 1:02d}"
-    
-    # Update combined document
-    aggregations.update_one(
-        {
-            "_id": "Combined"
-        },
-        {
-            "$set": {
-                f"years.{year}.weeks.{week}.weekdays.{weekday}.time": combined_time
-            }
-        },
-        upsert=True
-    )
-    
-    # Update the specific user's document
-    user_time = next((entry["time"] for entry in result if entry["_id"] == user), 0)
-    aggregations.update_one(
-        {
-            "_id": user
-        },
-        {
-            "$set": {
-                f"years.{year}.weeks.{week}.weekdays.{weekday}.time": user_time
-            }
-        },
-        upsert=True
-    )
 
-def aggregate_week(year, week, user):
-    pipeline = [
-        {
-            "$match": {
-                "start_year": year,
-                "start_week": week
-            }
-        },
-        {
-            "$group": {
-                "_id": "$user",
-                "time": {"$sum": "$elapsed_time"},
-                "active_days": {"$addToSet": {"$concat": ["$start_year", "-", "$start_month", "-", "$start_day"]}}
-            }
-        }
-    ]
-    result = list(collection.aggregate(pipeline))
-    
-    # Calculate combined total and active days
+def _write_activity_fields(result: list, user: str, base_path: str, total_days: int) -> None:
     combined_time = sum(entry["time"] for entry in result)
-    combined_active_days = len(set(day for entry in result for day in entry["active_days"]))
-    total_days = daysInWeek()
-    
-    # Calculate activity ratios
-    combined_ratio = (combined_active_days / total_days)
-    
-    # Update combined document
-    aggregations.update_one(
-        {
-            "_id": "Combined"
-        },
-        {
-            "$set": {
-                f"years.{year}.weeks.{week}.time": combined_time,
-                f"years.{year}.weeks.{week}.active_days": combined_active_days,
-                f"years.{year}.weeks.{week}.total_days": total_days,
-                f"years.{year}.weeks.{week}.activity_ratio": combined_ratio
-            }
-        },
-        upsert=True
-    )
-    
-    # Update the specific user's document
+    combined_active_days = len({day for entry in result for day in entry["active_days"]})
+    combined_ratio = combined_active_days / total_days
+
+    _upsert_aggregation("Combined", {
+        f"{base_path}.time": combined_time,
+        f"{base_path}.active_days": combined_active_days,
+        f"{base_path}.total_days": total_days,
+        f"{base_path}.activity_ratio": combined_ratio,
+    })
+
     user_entry = next((entry for entry in result if entry["_id"] == user), None)
     if user_entry:
         user_active_days = len(user_entry["active_days"])
-        user_ratio = (user_active_days / total_days)
-        
-        aggregations.update_one(
-            {
-                "_id": user
-            },
-            {
-                "$set": {
-                    f"years.{year}.weeks.{week}.time": user_entry["time"],
-                    f"years.{year}.weeks.{week}.active_days": user_active_days,
-                    f"years.{year}.weeks.{week}.total_days": total_days,
-                    f"years.{year}.weeks.{week}.activity_ratio": user_ratio
-                }
-            },
-            upsert=True
-        )
+        _upsert_aggregation(user, {
+            f"{base_path}.time": user_entry["time"],
+            f"{base_path}.active_days": user_active_days,
+            f"{base_path}.total_days": total_days,
+            f"{base_path}.activity_ratio": user_active_days / total_days,
+        })
 
-    # Aggregate weekdays for this week
-    weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-    for weekday in weekdays:
-        weekday_pipeline = [
-            {
-                "$match": {
-                    "start_year": year,
-                    "start_week": week,
-                    "start_weekday": weekday
-                }
-            },
-            {
-                "$group": {
-                    "_id": "$user",
-                    "time": {"$sum": "$elapsed_time"}
-                }
-            }
-        ]
-        weekday_result = list(collection.aggregate(weekday_pipeline))
-        
-        if weekday_result:
-            # Calculate combined total for this weekday
-            weekday_combined_time = sum(entry["time"] for entry in weekday_result)
-            
-            # Update combined document
-            aggregations.update_one(
-                {
-                    "_id": "Combined"
-                },
-                {
-                    "$set": {
-                        f"years.{year}.weeks.{week}.weekdays.{weekday}.time": weekday_combined_time
-                    }
-                },
-                upsert=True
-            )
-            
-            # Update the specific user's document
-            user_weekday_time = next((entry["time"] for entry in weekday_result if entry["_id"] == user), 0)
-            aggregations.update_one(
-                {
-                    "_id": user
-                },
-                {
-                    "$set": {
-                        f"years.{year}.weeks.{week}.weekdays.{weekday}.time": user_weekday_time
-                    }
-                },
-                upsert=True
-            )
+def aggregate(
+    period: str,
+    user: str,
+    *,
+    year: str,
+    month: str | None = None,
+    day: str | None = None,
+    week_year: str | None = None,
+    week: str | None = None,
+    weekday: str | None = None
+) -> None:
 
-def aggregate_month(year, month, user):
-    pipeline = [
-        {
-            "$match": {
-                "start_year": year,
-                "start_month": month
-            }
-        },
-        {
-            "$group": {
-                "_id": "$user",
-                "time": {"$sum": "$elapsed_time"},
-                "active_days": {"$addToSet": {"$concat": ["$start_year", "-", "$start_month", "-", "$start_day"]}}
-            }
-        }
-    ]
-    result = list(collection.aggregate(pipeline))
-    
-    # Calculate combined total and active days
-    combined_time = sum(entry["time"] for entry in result)
-    combined_active_days = len(set(day for entry in result for day in entry["active_days"]))
-    total_days = daysInMonth(year, month)
-    
-    # Calculate activity ratios
-    combined_ratio = (combined_active_days / total_days)
-    
-    # Update combined document
-    aggregations.update_one(
-        {
-            "_id": "Combined"
-        },
-        {
-            "$set": {
-                f"years.{year}.months.{month}.time": combined_time,
-                f"years.{year}.months.{month}.active_days": combined_active_days,
-                f"years.{year}.months.{month}.total_days": total_days,
-                f"years.{year}.months.{month}.activity_ratio": combined_ratio
-            }
-        },
-        upsert=True
-    )
-    
-    # Update the specific user's document
-    user_entry = next((entry for entry in result if entry["_id"] == user), None)
-    if user_entry:
-        user_active_days = len(user_entry["active_days"])
-        user_ratio = (user_active_days / total_days)
-        
-        aggregations.update_one(
-            {
-                "_id": user
-            },
-            {
-                "$set": {
-                    f"years.{year}.months.{month}.time": user_entry["time"],
-                    f"years.{year}.months.{month}.active_days": user_active_days,
-                    f"years.{year}.months.{month}.total_days": total_days,
-                    f"years.{year}.months.{month}.activity_ratio": user_ratio
-                }
-            },
-            upsert=True
-        )
+    y = int(year) if year is not None else None
+    m = int(month) if month is not None else None
+    d = int(day) if day is not None else None
+    wy = int(week_year) if week_year is not None else None
+    w = int(week) if week is not None else None
+    wd = int(weekday) if weekday is not None else None
 
-def aggregate_year(year, user):
-    pipeline = [
-        {
-            "$match": {
-                "start_year": year
-            }
-        },
-        {
-            "$group": {
-                "_id": "$user",
-                "time": {"$sum": "$elapsed_time"},
-                "active_days": {"$addToSet": {"$concat": ["$start_year", "-", "$start_month", "-", "$start_day"]}}
-            }
-        }
-    ]
-    result = list(collection.aggregate(pipeline))
-    
-    # Calculate combined total and active days
-    combined_time = sum(entry["time"] for entry in result)
-    combined_active_days = len(set(day for entry in result for day in entry["active_days"]))
-    total_days = daysInYear(year)
-    
-    # Calculate activity ratios
-    combined_ratio = (combined_active_days / total_days)
-    
-    # Update combined document
-    aggregations.update_one(
-        {
-            "_id": "Combined"
-        },
-        {
-            "$set": {
-                f"years.{year}.time": combined_time,
-                f"years.{year}.active_days": combined_active_days,
-                f"years.{year}.total_days": total_days,
-                f"years.{year}.activity_ratio": combined_ratio
-            }
-        },
-        upsert=True
-    )
-    
-    # Update the specific user's document
-    user_entry = next((entry for entry in result if entry["_id"] == user), None)
-    if user_entry:
-        user_active_days = len(user_entry["active_days"])
-        user_ratio = (user_active_days / total_days)
-        
-        aggregations.update_one(
-            {
-                "_id": user
-            },
-            {
-                "$set": {
-                    f"years.{year}.time": user_entry["time"],
-                    f"years.{year}.active_days": user_active_days,
-                    f"years.{year}.total_days": total_days,
-                    f"years.{year}.activity_ratio": user_ratio
-                }
-            },
-            upsert=True
-        )
+    if period == "year":
+        start, end = calendar_bounds("year", year=y)
+        total_days = total_days_in_period(y)
+        path_base = f"years.{year}"
+    elif period == "month":
+        path_base = f"years.{year}.months.{month}"
+        start, end = calendar_bounds("month", year=y, month=m)
+        total_days = total_days_in_period(y, m)
+    elif period == "week":
+        path_base = f"years.{week_year}.weeks.{week}"
+        start, end = calendar_bounds("week", year=wy, week=w)
+        total_days = total_days_in_period()
+    else:
+        start, end = calendar_bounds("day", year=y, month=m, day=d)
+        total_days = None
+        if period == "day":
+            path_base = f"years.{year}.months.{month}.days.{day}"
+        elif period == "weekday":
+            path_base = f"years.{week_year}.weeks.{week}.weekdays.{weekday}"
 
-def recalculate_all_aggregations():
-    """
-    Recalculate all aggregations from scratch.
-    This is useful if you need to rebuild all summaries.
-    """
-    # Get all unique years from the collection
-    years = collection.distinct("start_year")
-    
-    for year in years:
-        # Get all months for this year
-        months = collection.distinct("start_month", {"start_year": year})
-        for month in months:
-            # Get all days for this month
-            days = collection.distinct("start_day", {
-                "start_year": year,
-                "start_month": month
-            })
-            for day in days:
-                aggregate_day(year, month, day, user)
-            
-            # Aggregate monthly data
-            aggregate_month(year, month, user)
-        
-        # Get all weeks for this year
-        weeks = collection.distinct("start_week", {"start_year": year})
-        for week in weeks:
-            aggregate_week(year, week, user)
-        
-        # Aggregate yearly data
-        aggregate_year(year, user)
 
-def recalculate_all_highscores():
-    """
-    Recalculate all highscores from scratch using the raw data in the collection.
-    This is useful when the highscores document gets corrupted or needs to be reset.
-    """
-    # Delete existing highscores
-    aggregations.delete_one({"_id": "Highscores"})
-    
-    # Get all entries sorted by date
-    entries = list(collection.find().sort("start_year", 1).sort("start_month", 1).sort("start_day", 1).sort("start_time", 1))
-    
-    # Track current periods for each user
-    current_periods = {}
-    
-    for entry in entries:
-        user = entry["user"]
-        date_str = f"{entry['start_year']}-{entry['start_month']}-{entry['start_day']} {entry['start_time']}"
-        
-        # Initialize tracking for new users
-        if user not in current_periods:
-            current_periods[user] = {
-                "year": None,
-                "month": None,
-                "week": None,
-                "day": None,
-                "year_total": 0,
-                "month_total": 0,
-                "week_total": 0,
-                "day_total": 0,
-                "year_active_days": set(),
-                "month_active_days": set(),
-                "week_active_days": set()
-            }
-        
-        # Update year total
-        if current_periods[user]["year"] != entry["start_year"]:
-            if current_periods[user]["year"] is not None:
-                year_total_days = daysInYear(current_periods[user]["year"])
-                year_activity_data = {
-                    "active_days": len(current_periods[user]["year_active_days"]),
-                    "total_days": year_total_days,
-                    "activity_ratio": len(current_periods[user]["year_active_days"]) / year_total_days
-                }
-                update_highscore(user, "Year", current_periods[user]["year_total"], date_str, True, year_activity_data)
-            current_periods[user]["year"] = entry["start_year"]
-            current_periods[user]["year_total"] = 0
-            current_periods[user]["year_active_days"] = set()
-        current_periods[user]["year_total"] += entry["elapsed_time"]
-        current_periods[user]["year_active_days"].add(f"{entry['start_year']}-{entry['start_month']}-{entry['start_day']}")
-        
-        # Update month total
-        if current_periods[user]["month"] != (entry["start_year"], entry["start_month"]):
-            if current_periods[user]["month"] is not None:
-                month_total_days = daysInMonth(current_periods[user]["month"][0], current_periods[user]["month"][1])
-                month_activity_data = {
-                    "active_days": len(current_periods[user]["month_active_days"]),
-                    "total_days": month_total_days,
-                    "activity_ratio": len(current_periods[user]["month_active_days"]) / month_total_days
-                }
-                update_highscore(user, "Month", current_periods[user]["month_total"], date_str, True, month_activity_data)
-            current_periods[user]["month"] = (entry["start_year"], entry["start_month"])
-            current_periods[user]["month_total"] = 0
-            current_periods[user]["month_active_days"] = set()
-        current_periods[user]["month_total"] += entry["elapsed_time"]
-        current_periods[user]["month_active_days"].add(f"{entry['start_year']}-{entry['start_month']}-{entry['start_day']}")
-        
-        # Update week total
-        if current_periods[user]["week"] != (entry["start_year"], entry["start_week"]):
-            if current_periods[user]["week"] is not None:
-                week_total_days = daysInWeek()
-                week_activity_data = {
-                    "active_days": len(current_periods[user]["week_active_days"]),
-                    "total_days": week_total_days,
-                    "activity_ratio": len(current_periods[user]["week_active_days"]) / week_total_days
-                }
-                update_highscore(user, "Week", current_periods[user]["week_total"], date_str, True, week_activity_data)
-            current_periods[user]["week"] = (entry["start_year"], entry["start_week"])
-            current_periods[user]["week_total"] = 0
-            current_periods[user]["week_active_days"] = set()
-        current_periods[user]["week_total"] += entry["elapsed_time"]
-        current_periods[user]["week_active_days"].add(f"{entry['start_year']}-{entry['start_month']}-{entry['start_day']}")
-        
-        # Update day total
-        if current_periods[user]["day"] != (entry["start_year"], entry["start_month"], entry["start_day"]):
-            if current_periods[user]["day"] is not None:
-                update_highscore(user, "Day", current_periods[user]["day_total"], date_str, True)
-            current_periods[user]["day"] = (entry["start_year"], entry["start_month"], entry["start_day"])
-            current_periods[user]["day_total"] = 0
-        current_periods[user]["day_total"] += entry["elapsed_time"]
-    
-    # Update final totals for the last periods
-    for user, periods in current_periods.items():
-        date_str = f"{periods['year']}-{periods['month'][1]}-{entry['start_day']} {entry['start_time']}"
-        
-        if periods["year"] is not None:
-            year_total_days = daysInYear(periods["year"])
-            year_activity_data = {
-                "active_days": len(periods["year_active_days"]),
-                "total_days": year_total_days,
-                "activity_ratio": len(periods["year_active_days"]) / year_total_days
-            }
-            update_highscore(user, "Year", periods["year_total"], date_str, True, year_activity_data)
-        
-        if periods["month"] is not None:
-            month_total_days = daysInMonth(periods["month"][0], periods["month"][1])
-            month_activity_data = {
-                "active_days": len(periods["month_active_days"]),
-                "total_days": month_total_days,
-                "activity_ratio": len(periods["month_active_days"]) / month_total_days
-            }
-            update_highscore(user, "Month", periods["month_total"], date_str, True, month_activity_data)
-        
-        if periods["week"] is not None:
-            week_total_days = daysInWeek()
-            week_activity_data = {
-                "active_days": len(periods["week_active_days"]),
-                "total_days": week_total_days,
-                "activity_ratio": len(periods["week_active_days"]) / week_total_days
-            }
-            update_highscore(user, "Week", periods["week_total"], date_str, True, week_activity_data)
-        
-        if periods["day"] is not None:
-            update_highscore(user, "Day", periods["day_total"], date_str, True)
+    if total_days is not None:
+        result = _sum_time_and_days_by_user(start, end)
+        _write_activity_fields(result, user, path_base, total_days)
+        return
+    result = _sum_time_by_user(start, end)
+    _write_time_field(result, user, path_base)
 
 # Toggle button function
 def toggle_button():
-    global start_time, running, elapsed_time, elapsed_seconds, elapsed_minutes, elapsed_hours
+    global local_start, running, elapsed_time, _monotonic_anchor
     if not running:
-        start_time = time.time() - elapsed_time
+        if local_start is None:
+            local_start = time.time()
+        _monotonic_anchor = time.perf_counter()
         running = True
         button.configure(text="Pause", font=("Arial", 24))
         done_button.grid_forget()
         update_timer()
         button.grid_configure(columnspan=2)
     else:
+        elapsed_time += time.perf_counter() - _monotonic_anchor
         running = False
         button.configure(text="Continue", font=("Arial", 14))
-        label.configure(text=format_time(int(elapsed_time)))
+        label.configure(text=format_time(elapsed_time))
         done_button.grid(row=0, column=1, sticky='nsew', padx=4, pady=4)
         button.grid_configure(columnspan=1)
 
 # Update timer function
 def update_timer():
-    global elapsed_time, elapsed_seconds, elapsed_minutes, elapsed_hours
+    global elapsed_time, _monotonic_anchor
     if running:
-        elapsed_time = time.time() - start_time
-        elapsed_seconds = int(elapsed_time % 60)
-        elapsed_minutes = int((elapsed_time // 60) % 60)
-        elapsed_hours = int(elapsed_time // 3600)
-        label.configure(text=format_time(int(elapsed_time)))
-        root.after(1000, update_timer)
+        now = time.perf_counter()
+        elapsed_time += now - _monotonic_anchor
+        _monotonic_anchor = now
+        label.configure(text=format_time(elapsed_time))
+        time_until_next_second = 1.0 - (elapsed_time % 1.0)
+        delay = int(time_until_next_second * 1000)
+        root.after(delay, update_timer)
 
 def update_highscore(user, time_type, time_value, date_str, is_global=False, activity_data=None):
     """
@@ -854,19 +525,12 @@ def update_highscore(user, time_type, time_value, date_str, is_global=False, act
     if is_global:
         # Get all users' times and activity data for the current period
         pipeline = [
-            {
-                "$match": {
-                    "start_year": date_str[:4],
-                    "start_month": date_str[5:7] if time_type in ["Month", "Week", "Day"] else {"$exists": True},
-                    "start_week": f"{int(datetime.strptime(date_str[:10], '%Y-%m-%d').strftime('%W')) + 1:02d}" if time_type == "Week" else {"$exists": True},
-                    "start_day": date_str[8:10] if time_type == "Day" else {"$exists": True}
-                }
-            },
+            {"$match": _period_timestamp_match(date_str, time_type)},
             {
                 "$group": {
                     "_id": None,
                     "total_time": {"$sum": "$elapsed_time"},
-                    "active_days": {"$addToSet": {"$concat": ["$start_year", "-", "$start_month", "-", "$start_day"]}}
+                    "active_days": {"$addToSet": _ACTIVE_DAY_EXPR}
                 }
             }
         ]
@@ -914,9 +578,9 @@ def update_highscore(user, time_type, time_value, date_str, is_global=False, act
             # Update activity record
             if time_type != "Day":  # Activity records don't apply to Day type
                 combined_active_days = len(combined_data[0]["active_days"])
-                total_days = daysInYear(date_str[:4]) if time_type == "Year" else \
-                           daysInMonth(date_str[:4], date_str[5:7]) if time_type == "Month" else \
-                           daysInWeek()
+                total_days = total_days_in_period(date_str[:4]) if time_type == "Year" else \
+                           total_days_in_period(date_str[:4], date_str[5:7]) if time_type == "Month" else \
+                           total_days_in_period()
                 combined_ratio = combined_active_days / total_days
                 
                 if combined_ratio > highscores["Combined"][time_type]["activity"]["value"]:
@@ -973,25 +637,23 @@ def check_and_update_highscores(user, elapsed_time, dt):
     # Track all broken records
     all_broken_records = []
     
-    # Get current year, month, week, and day
     year = dt.strftime("%Y")
     month = dt.strftime("%m")
     day = dt.strftime("%d")
-    week = f"{int(dt.strftime('%W')) + 1:02d}"
-    
-    # Get total time and activity data for current year
+    week_year, week = calendar_week_key(dt)
+
     year_pipeline = [
         {
             "$match": {
-                "start_year": year,
-                "user": user
+                **timestamp_range_match(*calendar_bounds("year", year=int(year))),
+                "user": user,
             }
         },
         {
             "$group": {
                 "_id": None,
                 "total_time": {"$sum": "$elapsed_time"},
-                "active_days": {"$addToSet": {"$concat": ["$start_year", "-", "$start_month", "-", "$start_day"]}}
+                "active_days": {"$addToSet": _ACTIVE_DAY_EXPR}
             }
         }
     ]
@@ -999,7 +661,7 @@ def check_and_update_highscores(user, elapsed_time, dt):
     if year_data:
         year_time = year_data[0]["total_time"]
         year_active_days = len(year_data[0]["active_days"])
-        year_total_days = daysInYear(year)
+        year_total_days = total_days_in_period(year)
         year_activity_data = {
             "active_days": year_active_days,
             "total_days": year_total_days,
@@ -1012,16 +674,15 @@ def check_and_update_highscores(user, elapsed_time, dt):
     month_pipeline = [
         {
             "$match": {
-                "start_year": year,
-                "start_month": month,
-                "user": user
+                **timestamp_range_match(*calendar_bounds("month", year=int(year), month=int(month))),
+                "user": user,
             }
         },
         {
             "$group": {
                 "_id": None,
                 "total_time": {"$sum": "$elapsed_time"},
-                "active_days": {"$addToSet": {"$concat": ["$start_year", "-", "$start_month", "-", "$start_day"]}}
+                "active_days": {"$addToSet": _ACTIVE_DAY_EXPR}
             }
         }
     ]
@@ -1029,7 +690,7 @@ def check_and_update_highscores(user, elapsed_time, dt):
     if month_data:
         month_time = month_data[0]["total_time"]
         month_active_days = len(month_data[0]["active_days"])
-        month_total_days = daysInMonth(year, month)
+        month_total_days = total_days_in_period(year, month)
         month_activity_data = {
             "active_days": month_active_days,
             "total_days": month_total_days,
@@ -1042,16 +703,15 @@ def check_and_update_highscores(user, elapsed_time, dt):
     week_pipeline = [
         {
             "$match": {
-                "start_year": year,
-                "start_week": week,
-                "user": user
+                **timestamp_range_match(*calendar_bounds("week", year=int(week_year), week=int(week))),
+                "user": user,
             }
         },
         {
             "$group": {
                 "_id": None,
                 "total_time": {"$sum": "$elapsed_time"},
-                "active_days": {"$addToSet": {"$concat": ["$start_year", "-", "$start_month", "-", "$start_day"]}}
+                "active_days": {"$addToSet": _ACTIVE_DAY_EXPR}
             }
         }
     ]
@@ -1059,7 +719,7 @@ def check_and_update_highscores(user, elapsed_time, dt):
     if week_data:
         week_time = week_data[0]["total_time"]
         week_active_days = len(week_data[0]["active_days"])
-        week_total_days = daysInWeek()
+        week_total_days = total_days_in_period()
         week_activity_data = {
             "active_days": week_active_days,
             "total_days": week_total_days,
@@ -1072,10 +732,8 @@ def check_and_update_highscores(user, elapsed_time, dt):
     day_pipeline = [
         {
             "$match": {
-                "start_year": year,
-                "start_month": month,
-                "start_day": day,
-                "user": user
+                **timestamp_range_match(*calendar_bounds("day", year=dt.year, month=dt.month, day=dt.day)),
+                "user": user,
             }
         },
         {
@@ -1101,54 +759,52 @@ def check_and_update_highscores(user, elapsed_time, dt):
         message = create_broken_records_notification(user, global_records, personal_records, combined_records)
         send_notification(message)
 
-# Modify the log_entry function to include highscore updates
 def log_entry():
-    global name, description, start_time, elapsed_time, elapsed_seconds, elapsed_minutes, elapsed_hours, running
-    dt = datetime.fromtimestamp(start_time)
+    global name, description, local_start, elapsed_time, running
 
-    entry = {
-        "name": name,
-        "user": user,
-        "description": description,
-        "elapsed_time": elapsed_time,
-        "start_year": dt.strftime("%Y"),
-        "start_month": dt.strftime("%m"),
-        "start_day": dt.strftime("%d"),
-        "start_time": dt.strftime("%H:%M:%S"),
-        "start_week": str(dt.isocalendar().week),
-        "start_weekday": dt.strftime("%A"),
-        "elapsed_hours": elapsed_hours,
-        "elapsed_minutes": elapsed_minutes,
-        "elapsed_seconds": elapsed_seconds
-    }
+    ms_since_local_start = int((time.time() - local_start) * 1000)
+    new_id = ObjectId()
+    
+    doc = collection.find_one_and_update(
+        {"_id": new_id},
+        [{
+            "$set": {
+                "name": name,
+                "user": user,
+                "description": description,
+                "elapsed_time": int(elapsed_time),
+                "timestamp": {"$subtract": ["$$NOW", ms_since_local_start]}
+            }
+        }],
+        upsert=True,
+        return_document=ReturnDocument.AFTER,
+        projection={"timestamp": 1, "_id": 0}
+    )
+    
+    timestamp = doc["timestamp"]
 
-    collection.insert_one(entry)
-    
-    # Calculate summaries for all time periods affected by this entry
-    year = dt.strftime("%Y")
-    month = dt.strftime("%m")
-    day = dt.strftime("%d")
-    week = f"{int(dt.strftime('%W')) + 1:02d}"
-    weekday = dt.strftime("%A")
-    
-    # Aggregate all timeframes
-    aggregate_year(year, user)
-    aggregate_month(year, month, user)
-    aggregate_day(year, month, day, user)
-    aggregate_week(year, week, user)
-    aggregate_weekday(year, month, day, weekday, user)
-    
-    # Update highscores
-    check_and_update_highscores(user, elapsed_time, dt)
+    year = timestamp.strftime("%Y")
+    month = timestamp.strftime("%m")
+    day = timestamp.strftime("%d")
+    week_year, week = calendar_week_key(timestamp)
+    weekday = timestamp.strftime("%u")
+
+    aggregate("year", user, year=year)
+    aggregate("month", user, year=year, month=month)
+    aggregate("day", user, year=year, month=month, day=day)
+    aggregate("week", user, week_year=week_year, week=week)
+    aggregate("weekday", user, year=year, month=month, day=day, week_year=week_year, week=week, weekday=weekday)
+
+    check_and_update_highscores(user, int(elapsed_time), timestamp)
     
     reset_state()
 
 # Reset state and UI
 def reset_state():
-    global name, description, start_time, elapsed_time, elapsed_seconds, elapsed_minutes, elapsed_hours, running
+    global name, description, local_start, elapsed_time, running
 
-    name = description = start_time = None
-    elapsed_time = elapsed_seconds = elapsed_minutes = elapsed_hours = 0
+    name = description = local_start = None
+    elapsed_time = 0.0
     running = False
 
     label.configure(text="00:00")
@@ -1188,25 +844,25 @@ def show_entry_overlay():
     ctk.CTkButton(overlay_canvas, text="Log Entry", fg_color="#000000", hover_color="#121212", 
                    command=submit_entry, text_color="white", font=("Arial", 14)).grid(row=2, column=1, padx=4, pady=4, sticky='nsew')
 
-def daysInWeek():
-    return 7
-
-def daysInMonth(year, month):
-    year = int(year)
-    month = int(month)
-    if month == 2:
+def total_days_in_period(year: str | int | None = None, month: str | int | None = None, ) -> int:
+    if year is not None and month is None:
+        year = int(year)
         if (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0):
-            return 29
-        return 28
-    if month in [1, 3, 5, 7, 8, 10, 12]:
-        return 31
-    return 30
+            return 366
+        return 365
 
-def daysInYear(year):
-    year = int(year)
-    if (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0):
-        return 366
-    return 365
+    if year is not None and month is not None:
+        year = int(year)
+        month = int(month)
+        if month == 2:
+            if (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0):
+                return 29
+            return 28
+        if month in [1, 3, 5, 7, 8, 10, 12]:
+            return 31
+        return 30
+
+    return 7
 
 def days_since_record(old_date_str):
     """
@@ -1314,9 +970,7 @@ def create_broken_records_notification(user, global_records, personal_records, c
     
     return message
 
-# Move all the main application setup and execution into the if block
 if __name__ == "__main__":
-    # Main application setup
     root = ctk.CTk()
     root.title("Timetable")
     root.geometry("200x170")
@@ -1330,7 +984,7 @@ if __name__ == "__main__":
 
     done_button = ctk.CTkButton(root, text="Done", fg_color="#000000", hover_color="#121212", 
                                 text_color="white", font=("Arial", 14), command=show_entry_overlay)
-    done_button.grid_forget()
+    done_button.grid_forget() # remove?
 
     root.grid_rowconfigure([0, 1], weight=1, uniform='a')
     root.grid_columnconfigure([0, 1], weight=1, uniform='b')
