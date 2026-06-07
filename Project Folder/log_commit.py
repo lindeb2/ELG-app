@@ -9,18 +9,54 @@ from pymongo.collection import Collection
 
 from commit_pipeline import (
     COMBINED_BUCKET_PIPELINE,
-    COMBINED_CONTEXT_PIPELINE,
+    COMMIT_CONTEXT_PIPELINE,
     USER_BUCKET_PIPELINE,
-    USER_CONTEXT_PIPELINE,
 )
 from highscore_commit import update_highscores
 
 
-def _fetch_context(collection: Collection, pipeline: list, let_vars: dict, session) -> dict:
-    rows = list(collection.aggregate(pipeline, let=let_vars, session=session))
-    if not rows:
-        raise RuntimeError("commit_log: context pipeline returned no rows")
-    return rows[0]
+def _fetch_commit_context(
+    collection: Collection,
+    let_vars: dict,
+    session,
+) -> tuple[dict, dict]:
+    rows = list(
+        collection.aggregate(
+            COMMIT_CONTEXT_PIPELINE,
+            let=let_vars,
+            session=session,
+        )
+    )
+    if not rows or rows[0].get("user") is None or rows[0].get("combined") is None:
+        raise RuntimeError("commit_log: context pipeline returned incomplete rows")
+    return rows[0]["user"], rows[0]["combined"]
+
+
+def _apply_bucket_updates(
+    aggregations: Collection,
+    *,
+    user: str,
+    base_let: dict,
+    user_ctx: dict,
+    combined_ctx: dict,
+    elapsed_time: int,
+    session,
+) -> None:
+    """Apply user + combined bucket pipeline updates (separate let vars per doc)."""
+    aggregations.update_one(
+        {"_id": user},
+        USER_BUCKET_PIPELINE,
+        let={**base_let, **user_ctx},
+        upsert=True,
+        session=session,
+    )
+    aggregations.update_one(
+        {"_id": "Combined"},
+        COMBINED_BUCKET_PIPELINE,
+        let={"elapsed": elapsed_time, **combined_ctx},
+        upsert=True,
+        session=session,
+    )
 
 
 def commit_log(
@@ -62,31 +98,18 @@ def commit_log(
             "logUser": user,
         }
 
-        user_ctx = _fetch_context(
+        user_ctx, combined_ctx = _fetch_commit_context(
             collection,
-            USER_CONTEXT_PIPELINE,
             base_let,
             session,
         )
-        aggregations.update_one(
-            {"_id": user},
-            USER_BUCKET_PIPELINE,
-            let={**base_let, **user_ctx},
-            upsert=True,
-            session=session,
-        )
-
-        combined_ctx = _fetch_context(
-            collection,
-            COMBINED_CONTEXT_PIPELINE,
-            {"logId": new_id, "elapsed": elapsed_time},
-            session,
-        )
-        aggregations.update_one(
-            {"_id": "Combined"},
-            COMBINED_BUCKET_PIPELINE,
-            let={"elapsed": elapsed_time, **combined_ctx},
-            upsert=True,
+        _apply_bucket_updates(
+            aggregations,
+            user=user,
+            base_let=base_let,
+            user_ctx=user_ctx,
+            combined_ctx=combined_ctx,
+            elapsed_time=elapsed_time,
             session=session,
         )
         broken_records = update_highscores(

@@ -396,25 +396,50 @@ def _context_from_log_stages(*, include_log_user: bool) -> list[dict]:
     if include_log_user:
         stages.append({"$set": {"logUser": "$$logUser"}})
     stages.extend(_lookups_and_activity_stages(filter_user=include_log_user))
-    stages.append({
-        "$project": {
-            "_id": 0,
-            "yearStr": 1,
-            "monthStr": 1,
-            "dayStr": 1,
-            "weekdayStr": 1,
-            "weekYearStr": 1,
-            "weekStr": 1,
-            "yearTotalDays": 1,
-            "monthTotalDays": 1,
-            "weekTotalDays": 1,
-            "yearActiveInc": 1,
-            "monthActiveInc": 1,
-            "weekActiveInc": 1,
-        }
-    })
+    stages.append(_CONTEXT_PROJECT)
     return stages
 
+
+_CONTEXT_PROJECT = {
+    "$project": {
+        "_id": 0,
+        "yearStr": 1,
+        "monthStr": 1,
+        "dayStr": 1,
+        "weekdayStr": 1,
+        "weekYearStr": 1,
+        "weekStr": 1,
+        "yearTotalDays": 1,
+        "monthTotalDays": 1,
+        "weekTotalDays": 1,
+        "yearActiveInc": 1,
+        "monthActiveInc": 1,
+        "weekActiveInc": 1,
+    }
+}
+
+
+def _context_facet_branch(*, filter_user: bool) -> list[dict]:
+    return _lookups_and_activity_stages(filter_user=filter_user) + [_CONTEXT_PROJECT]
+
+
+COMMIT_CONTEXT_PIPELINE = [
+    {"$match": {"$expr": {"$eq": ["$_id", "$$logId"]}}},
+    {"$set": {"logTs": "$timestamp"}},
+    period_key_set_stage("$logTs"),
+    {
+        "$facet": {
+            "user": _context_facet_branch(filter_user=True),
+            "combined": _context_facet_branch(filter_user=False),
+        }
+    },
+    {
+        "$project": {
+            "user": {"$arrayElemAt": ["$user", 0]},
+            "combined": {"$arrayElemAt": ["$combined", 0]},
+        }
+    },
+]
 
 USER_CONTEXT_PIPELINE = _context_from_log_stages(include_log_user=True)
 COMBINED_CONTEXT_PIPELINE = _context_from_log_stages(include_log_user=False)
