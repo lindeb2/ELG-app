@@ -19,6 +19,8 @@ from pymongo import ReturnDocument
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError, NetworkTimeout, AutoReconnect
 from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
+from period_model import APP_TIMEZONE
+
 # TODO: Set up color scheme or theme
 # Improvements: Sync, No-activity weeks, Dry Dropdown, server-side slide_5
 
@@ -32,7 +34,8 @@ WEEK_PIPELINE = [{
     "$set": {"new_week": {"$dateTrunc": {
         "date": {"$dateSubtract": {"startDate": "$$NOW", "unit": "day", "amount": 3}},
         "unit": "week",
-        "startOfWeek": "monday"}}}},{
+        "startOfWeek": "monday",
+        "timezone": APP_TIMEZONE}}}},{
     "$set": {
         "slide": {"$cond": {
             "if": {"$ne": ["$week", "$new_week"]},

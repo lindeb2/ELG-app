@@ -96,6 +96,7 @@ def init_database():
     print("    -> Initializing 'Timetable' collection...")
     timetable = db.create_collection("Timetable")
     timetable.create_index([("timestamp", 1)])
+    timetable.create_index([("user", 1), ("timestamp", 1)])
 
     print(f"\n[SUCCESS] Database '{db_name}' initialized successfully.")
     print("You can now update your 'config.json' or connection string to use this database.")

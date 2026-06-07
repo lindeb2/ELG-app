@@ -1,10 +1,10 @@
 """Admin-only: rebuild aggregations and highscores from raw Timetable logs."""
 from datetime import datetime
 
+from period_model import calendar_bounds, period_keys
 from Timetable import (
     aggregate,
     aggregations,
-    calendar_week_key,
     collection,
     format_date_str,
     total_days_in_period,
@@ -24,12 +24,11 @@ def recalculate_all_aggregations():
     seen_weeks: set[tuple[str, str]] = set()
 
     for entry in collection.find({}):
-        dt = entry["timestamp"]
-        y, m, d = dt.strftime("%Y"), dt.strftime("%m"), dt.strftime("%d")
-        seen_days.add((y, m, d))
-        seen_months.add((y, m))
-        seen_years.add(y)
-        seen_weeks.add(calendar_week_key(dt))
+        keys = period_keys(entry["timestamp"])
+        seen_days.add((keys.year, keys.month, keys.day))
+        seen_months.add((keys.year, keys.month))
+        seen_years.add(keys.year)
+        seen_weeks.add((keys.iso_week_year, keys.iso_week))
 
     for year in sorted(seen_years):
         aggregate("year", user, year=year)
@@ -39,17 +38,17 @@ def recalculate_all_aggregations():
 
     for year, month, day in sorted(seen_days):
         aggregate("day", user, year=year, month=month, day=day)
-        dt = datetime(int(year), int(month), int(day))
-        week_year, week = calendar_week_key(dt)
+        day_start, _ = calendar_bounds("day", year=int(year), month=int(month), day=int(day))
+        day_keys = period_keys(day_start)
         aggregate(
             "weekday",
             user,
-            year=year,
-            month=month,
-            day=day,
-            week_year=week_year,
-            week=week,
-            weekday=dt.strftime("%u"),
+            year=day_keys.year,
+            month=day_keys.month,
+            day=day_keys.day,
+            week_year=day_keys.iso_week_year,
+            week=day_keys.iso_week,
+            weekday=day_keys.weekday,
         )
 
     for week_year, week in sorted(seen_weeks):
@@ -75,11 +74,12 @@ def recalculate_all_highscores():
         entry_user = entry["user"]
         date_str = format_date_str(dt)
         last_date_str = date_str
-        day_key = (dt.strftime("%Y"), dt.strftime("%m"), dt.strftime("%d"))
-        month_key = (dt.strftime("%Y"), dt.strftime("%m"))
-        year_key = dt.strftime("%Y")
-        week_key = calendar_week_key(dt)
-        day_label = f"{day_key[0]}-{day_key[1]}-{day_key[2]}"
+        keys = period_keys(dt)
+        day_key = (keys.year, keys.month, keys.day)
+        month_key = (keys.year, keys.month)
+        year_key = keys.year
+        week_key = (keys.iso_week_year, keys.iso_week)
+        day_label = f"{keys.year}-{keys.month}-{keys.day}"
 
         if entry_user not in current_periods:
             current_periods[entry_user] = {

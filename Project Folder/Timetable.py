@@ -1,10 +1,17 @@
-from selectors import SelectSelector
-
-from bson import ObjectId
 import customtkinter as ctk
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from pymongo import ReturnDocument
+from log_commit import commit_log
+from period_model import (
+    active_day_expr,
+    calendar_bounds,
+    calendar_week_key,
+    format_date_str,
+    period_keys,
+    timestamp_range_match,
+    total_days_in_period,
+)
 from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
 import os
@@ -75,61 +82,32 @@ with open(config_path) as file:
     config = json.load(file)
     user = config["user"]
 
-_ACTIVE_DAY_EXPR = {"$dateToString": {"format": "%Y-%m-%d", "date": "$timestamp"}}
-
-def calendar_week_key(dt: datetime) -> tuple[str, str]:
-    year, week, _ = dt.isocalendar()
-    return str(year), str(week)
-
-
-def calendar_bounds(
-    period: str,
-    *,
-    year: int | None = None,
-    month: int | None = None,
-    day: int | None = None,
-    week: int | None = None,
-) -> tuple[datetime, datetime]:
-    """Inclusive start, exclusive end for a calendar day/week/month/year."""
-    if period == "day":
-        start = datetime(year, month, day).replace(hour=0, minute=0, second=0, microsecond=0)
-        return start, start + timedelta(days=1)
-
-    if period == "week":
-        start = datetime.fromisocalendar(year, week, 1)
-        return start, start + timedelta(weeks=1)
-
-    if period == "month":
-        start = datetime(year, month, 1)
-        end = datetime(year + 1, 1, 1) if month == 12 else datetime(year, month + 1, 1)
-        return start, end
-
-    if period == "year":
-        return datetime(year, 1, 1), datetime(year + 1, 1, 1)
-
-
-def timestamp_range_match(start: datetime, end: datetime) -> dict:
-    return {"timestamp": {"$gte": start, "$lt": end}}
-
-
-def format_date_str(dt: datetime) -> str:
-    return dt.strftime("%Y-%m-%d %H:%M:%S")
-
+_ACTIVE_DAY_EXPR = active_day_expr()
 
 _TIME_TYPE_TO_PERIOD = {"Year": "year", "Month": "month", "Week": "week", "Day": "day"}
 
 
 def _period_timestamp_match(date_str: str, time_type: str) -> dict:
-    dt = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+    from zoneinfo import ZoneInfo
+
+    dt_local = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S").replace(
+        tzinfo=ZoneInfo("Europe/Stockholm")
+    )
+    keys = period_keys(dt_local)
     period = _TIME_TYPE_TO_PERIOD[time_type]
     if period == "year":
-        return timestamp_range_match(*calendar_bounds("year", year=dt.year))
+        return timestamp_range_match(*calendar_bounds("year", year=int(keys.year)))
     if period == "month":
-        return timestamp_range_match(*calendar_bounds("month", year=dt.year, month=dt.month))
+        return timestamp_range_match(
+            *calendar_bounds("month", year=int(keys.year), month=int(keys.month))
+        )
     if period == "week":
-        iso_year, iso_week, _ = dt.isocalendar()
-        return timestamp_range_match(*calendar_bounds("week", year=iso_year, week=iso_week))
-    return timestamp_range_match(*calendar_bounds("day", year=dt.year, month=dt.month, day=dt.day))
+        return timestamp_range_match(
+            *calendar_bounds("week", year=int(keys.iso_week_year), week=int(keys.iso_week))
+        )
+    return timestamp_range_match(
+        *calendar_bounds("day", year=int(keys.year), month=int(keys.month), day=int(keys.day))
+    )
 
 
 _TIME_BY_USER_GROUP = {"$group": {"_id": "$user", "time": {"$sum": "$elapsed_time"}}}
@@ -631,21 +609,14 @@ def check_and_update_highscores(user, elapsed_time, dt):
     """
     Check and update all relevant highscores for a new entry
     """
-    # Format date for storage
-    date_str = dt.strftime("%Y-%m-%d %H:%M:%S")
-    
-    # Track all broken records
+    date_str = format_date_str(dt)
     all_broken_records = []
-    
-    year = dt.strftime("%Y")
-    month = dt.strftime("%m")
-    day = dt.strftime("%d")
-    week_year, week = calendar_week_key(dt)
+    keys = period_keys(dt)
 
     year_pipeline = [
         {
             "$match": {
-                **timestamp_range_match(*calendar_bounds("year", year=int(year))),
+                **timestamp_range_match(*calendar_bounds("year", year=int(keys.year))),
                 "user": user,
             }
         },
@@ -661,7 +632,7 @@ def check_and_update_highscores(user, elapsed_time, dt):
     if year_data:
         year_time = year_data[0]["total_time"]
         year_active_days = len(year_data[0]["active_days"])
-        year_total_days = total_days_in_period(year)
+        year_total_days = total_days_in_period(keys.year)
         year_activity_data = {
             "active_days": year_active_days,
             "total_days": year_total_days,
@@ -674,7 +645,9 @@ def check_and_update_highscores(user, elapsed_time, dt):
     month_pipeline = [
         {
             "$match": {
-                **timestamp_range_match(*calendar_bounds("month", year=int(year), month=int(month))),
+                **timestamp_range_match(
+                    *calendar_bounds("month", year=int(keys.year), month=int(keys.month))
+                ),
                 "user": user,
             }
         },
@@ -690,7 +663,7 @@ def check_and_update_highscores(user, elapsed_time, dt):
     if month_data:
         month_time = month_data[0]["total_time"]
         month_active_days = len(month_data[0]["active_days"])
-        month_total_days = total_days_in_period(year, month)
+        month_total_days = total_days_in_period(keys.year, keys.month)
         month_activity_data = {
             "active_days": month_active_days,
             "total_days": month_total_days,
@@ -703,7 +676,11 @@ def check_and_update_highscores(user, elapsed_time, dt):
     week_pipeline = [
         {
             "$match": {
-                **timestamp_range_match(*calendar_bounds("week", year=int(week_year), week=int(week))),
+                **timestamp_range_match(
+                    *calendar_bounds(
+                        "week", year=int(keys.iso_week_year), week=int(keys.iso_week)
+                    )
+                ),
                 "user": user,
             }
         },
@@ -732,7 +709,14 @@ def check_and_update_highscores(user, elapsed_time, dt):
     day_pipeline = [
         {
             "$match": {
-                **timestamp_range_match(*calendar_bounds("day", year=dt.year, month=dt.month, day=dt.day)),
+                **timestamp_range_match(
+                    *calendar_bounds(
+                        "day",
+                        year=int(keys.year),
+                        month=int(keys.month),
+                        day=int(keys.day),
+                    )
+                ),
                 "user": user,
             }
         },
@@ -763,40 +747,19 @@ def log_entry():
     global name, description, local_start, elapsed_time, running
 
     ms_since_local_start = int((time.time() - local_start) * 1000)
-    new_id = ObjectId()
-    
-    doc = collection.find_one_and_update(
-        {"_id": new_id},
-        [{
-            "$set": {
-                "name": name,
-                "user": user,
-                "description": description,
-                "elapsed_time": int(elapsed_time),
-                "timestamp": {"$subtract": ["$$NOW", ms_since_local_start]}
-            }
-        }],
-        upsert=True,
-        return_document=ReturnDocument.AFTER,
-        projection={"timestamp": 1, "_id": 0}
+    timestamp = commit_log(
+        collection,
+        aggregations,
+        client,
+        name=name,
+        user=user,
+        description=description,
+        elapsed_time=int(elapsed_time),
+        ms_since_local_start=ms_since_local_start,
     )
-    
-    timestamp = doc["timestamp"]
-
-    year = timestamp.strftime("%Y")
-    month = timestamp.strftime("%m")
-    day = timestamp.strftime("%d")
-    week_year, week = calendar_week_key(timestamp)
-    weekday = timestamp.strftime("%u")
-
-    aggregate("year", user, year=year)
-    aggregate("month", user, year=year, month=month)
-    aggregate("day", user, year=year, month=month, day=day)
-    aggregate("week", user, week_year=week_year, week=week)
-    aggregate("weekday", user, year=year, month=month, day=day, week_year=week_year, week=week, weekday=weekday)
 
     check_and_update_highscores(user, int(elapsed_time), timestamp)
-    
+
     reset_state()
 
 # Reset state and UI
@@ -843,26 +806,6 @@ def show_entry_overlay():
 
     ctk.CTkButton(overlay_canvas, text="Log Entry", fg_color="#000000", hover_color="#121212", 
                    command=submit_entry, text_color="white", font=("Arial", 14)).grid(row=2, column=1, padx=4, pady=4, sticky='nsew')
-
-def total_days_in_period(year: str | int | None = None, month: str | int | None = None, ) -> int:
-    if year is not None and month is None:
-        year = int(year)
-        if (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0):
-            return 366
-        return 365
-
-    if year is not None and month is not None:
-        year = int(year)
-        month = int(month)
-        if month == 2:
-            if (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0):
-                return 29
-            return 28
-        if month in [1, 3, 5, 7, 8, 10, 12]:
-            return 31
-        return 30
-
-    return 7
 
 def days_since_record(old_date_str):
     """
