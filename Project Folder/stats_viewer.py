@@ -356,6 +356,53 @@ class StatsViewer(ctk.CTk):
                             text_color="white"
                         )
                         date_label.grid(row=1, column=0, columnspan=2, sticky="w", padx=10)
+
+        if "consecutive" in records:
+            period_frame = ctk.CTkFrame(parent)
+            period_frame.grid(row=len(parent.winfo_children()), column=0, sticky="ew", padx=10, pady=5)
+            period_frame.grid_columnconfigure(0, weight=1)
+
+            title = ctk.CTkLabel(
+                period_frame,
+                text="Lifetime Consecutive",
+                font=("Arial", 20, "bold"),
+                text_color="white",
+            )
+            title.grid(row=0, column=0, sticky="w", padx=10, pady=5)
+
+            for row_idx, (streak_kind, label) in enumerate((("days", "Days"), ("weeks", "Weeks")), start=1):
+                streak = records["consecutive"].get(streak_kind)
+                if not streak:
+                    continue
+                streak_frame = ctk.CTkFrame(period_frame)
+                streak_frame.grid(row=row_idx, column=0, sticky="ew", padx=10, pady=5)
+                streak_frame.grid_columnconfigure(1, weight=1)
+
+                ctk.CTkLabel(
+                    streak_frame,
+                    text=f"Consecutive {label}:",
+                    font=("Arial", 16),
+                    text_color="white",
+                ).grid(row=0, column=0, padx=10)
+
+                ctk.CTkLabel(
+                    streak_frame,
+                    text=str(streak.get("value", 0)),
+                    font=("Arial", 16),
+                    text_color="white",
+                ).grid(row=0, column=1, sticky="w", padx=10)
+
+                if streak.get("date"):
+                    date_text = f"Set on: {streak['date']}"
+                    author = streak.get("user") or streak.get("author")
+                    if is_global and author:
+                        date_text += f" by {author}"
+                    ctk.CTkLabel(
+                        streak_frame,
+                        text=date_text,
+                        font=("Arial", 12),
+                        text_color="white",
+                    ).grid(row=1, column=0, columnspan=2, sticky="w", padx=10)
     
     def format_time(self, seconds):
         if seconds is None:
