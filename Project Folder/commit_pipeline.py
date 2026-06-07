@@ -3,6 +3,7 @@ from period_model import (
     active_inc_expr,
     period_key_set_stage,
     prior_log_lookup_stage,
+    streak_key_set_stage,
 )
 
 _TEMP_FIELDS = [
@@ -376,6 +377,127 @@ def _lookups_and_activity_stages(*, filter_user: bool) -> list[dict]:
     return stages
 
 
+def _set_streaks() -> dict:
+    return {
+        "$set": {
+            "streaks": {
+                "$let": {
+                    "vars": {
+                        "dayExisting": {
+                            "$ifNull": [
+                                "$streaks.days",
+                                {"current": 0, "best": 0, "last_active_day": None},
+                            ]
+                        },
+                        "weekExisting": {
+                            "$ifNull": [
+                                "$streaks.weeks",
+                                {"current": 0, "best": 0, "last_active_week": None},
+                            ]
+                        },
+                    },
+                    "in": {
+                        "days": {
+                            "$let": {
+                                "vars": {
+                                    "newCurrent": {
+                                        "$cond": [
+                                            {"$eq": ["$$yearActiveInc", 0]},
+                                            "$$dayExisting.current",
+                                            {
+                                                "$cond": [
+                                                    {
+                                                        "$eq": [
+                                                            "$$dayExisting.last_active_day",
+                                                            "$$yesterdayDayKey",
+                                                        ]
+                                                    },
+                                                    {"$add": ["$$dayExisting.current", 1]},
+                                                    {
+                                                        "$cond": [
+                                                            {
+                                                                "$eq": [
+                                                                    "$$dayExisting.last_active_day",
+                                                                    "$$dayKey",
+                                                                ]
+                                                            },
+                                                            "$$dayExisting.current",
+                                                            1,
+                                                        ]
+                                                    },
+                                                ]
+                                            },
+                                        ]
+                                    },
+                                    "newLast": {
+                                        "$cond": [
+                                            {"$eq": ["$$yearActiveInc", 0]},
+                                            "$$dayExisting.last_active_day",
+                                            "$$dayKey",
+                                        ]
+                                    },
+                                },
+                                "in": {
+                                    "current": "$$newCurrent",
+                                    "best": {"$max": ["$$dayExisting.best", "$$newCurrent"]},
+                                    "last_active_day": "$$newLast",
+                                },
+                            }
+                        },
+                        "weeks": {
+                            "$let": {
+                                "vars": {
+                                    "newCurrent": {
+                                        "$cond": [
+                                            {"$eq": ["$$weekActiveInc", 0]},
+                                            "$$weekExisting.current",
+                                            {
+                                                "$cond": [
+                                                    {
+                                                        "$eq": [
+                                                            "$$weekExisting.last_active_week",
+                                                            "$$priorWeekKey",
+                                                        ]
+                                                    },
+                                                    {"$add": ["$$weekExisting.current", 1]},
+                                                    {
+                                                        "$cond": [
+                                                            {
+                                                                "$eq": [
+                                                                    "$$weekExisting.last_active_week",
+                                                                    "$$weekKey",
+                                                                ]
+                                                            },
+                                                            "$$weekExisting.current",
+                                                            1,
+                                                        ]
+                                                    },
+                                                ]
+                                            },
+                                        ]
+                                    },
+                                    "newLast": {
+                                        "$cond": [
+                                            {"$eq": ["$$weekActiveInc", 0]},
+                                            "$$weekExisting.last_active_week",
+                                            "$$weekKey",
+                                        ]
+                                    },
+                                },
+                                "in": {
+                                    "current": "$$newCurrent",
+                                    "best": {"$max": ["$$weekExisting.best", "$$newCurrent"]},
+                                    "last_active_week": "$$newLast",
+                                },
+                            }
+                        },
+                    },
+                }
+            }
+        }
+    }
+
+
 def _bucket_update_stages() -> list[dict]:
     return [
         _set_year_bucket("$$yearActiveInc", "$$yearTotalDays"),
@@ -383,6 +505,7 @@ def _bucket_update_stages() -> list[dict]:
         _set_week_bucket("$$weekActiveInc", "$$weekTotalDays"),
         _set_day_bucket(),
         _set_weekday_bucket(),
+        _set_streaks(),
     ]
 
 
@@ -395,6 +518,7 @@ def _context_from_log_stages(*, include_log_user: bool) -> list[dict]:
     ]
     if include_log_user:
         stages.append({"$set": {"logUser": "$$logUser"}})
+    stages.append(streak_key_set_stage())
     stages.extend(_lookups_and_activity_stages(filter_user=include_log_user))
     stages.append(_CONTEXT_PROJECT)
     return stages
@@ -409,6 +533,10 @@ _CONTEXT_PROJECT = {
         "weekdayStr": 1,
         "weekYearStr": 1,
         "weekStr": 1,
+        "dayKey": 1,
+        "weekKey": 1,
+        "yesterdayDayKey": 1,
+        "priorWeekKey": 1,
         "yearTotalDays": 1,
         "monthTotalDays": 1,
         "weekTotalDays": 1,
@@ -427,6 +555,7 @@ COMMIT_CONTEXT_PIPELINE = [
     {"$match": {"$expr": {"$eq": ["$_id", "$$logId"]}}},
     {"$set": {"logTs": "$timestamp"}},
     period_key_set_stage("$logTs"),
+    streak_key_set_stage(),
     {
         "$facet": {
             "user": _context_facet_branch(filter_user=True),

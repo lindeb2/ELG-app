@@ -10,6 +10,14 @@ from highscore_pipeline import HIGHSCORE_FETCH_PIPELINE
 from period_model import PeriodKeys, format_date_str, period_keys
 
 _PERIOD_TYPES = ("Year", "Month", "Week", "Day")
+_LIFETIME_TYPE = "Lifetime"
+
+
+def _empty_consecutive() -> dict:
+    return {
+        "days": {"value": 0, "date": None},
+        "weeks": {"value": 0, "date": None},
+    }
 
 
 def _empty_user_highscores() -> dict:
@@ -27,43 +35,87 @@ def _empty_user_highscores() -> dict:
             "activity": {"value": 0, "active_days": 0, "total_days": 0, "date": None},
         },
         "Day": {"time": {"value": 0, "date": None}},
+        "consecutive": _empty_consecutive(),
     }
+
+
+def _empty_global_scope() -> dict:
+    return {
+        "Year": {
+            "time": {"value": 0, "date": None, "user": None},
+            "activity": {"value": 0, "active_days": 0, "total_days": 0, "date": None, "user": None},
+        },
+        "Month": {
+            "time": {"value": 0, "date": None, "user": None},
+            "activity": {"value": 0, "active_days": 0, "total_days": 0, "date": None, "user": None},
+        },
+        "Week": {
+            "time": {"value": 0, "date": None, "user": None},
+            "activity": {"value": 0, "active_days": 0, "total_days": 0, "date": None, "user": None},
+        },
+        "Day": {"time": {"value": 0, "date": None, "user": None}},
+        "consecutive": {
+            "days": {"value": 0, "date": None, "user": None},
+            "weeks": {"value": 0, "date": None, "user": None},
+        },
+    }
+
+
+def _empty_combined_scope() -> dict:
+    return {
+        "Year": {
+            "time": {"value": 0, "date": None},
+            "activity": {"value": 0, "active_days": 0, "total_days": 0, "date": None},
+        },
+        "Month": {
+            "time": {"value": 0, "date": None},
+            "activity": {"value": 0, "active_days": 0, "total_days": 0, "date": None},
+        },
+        "Week": {
+            "time": {"value": 0, "date": None},
+            "activity": {"value": 0, "active_days": 0, "total_days": 0, "date": None},
+        },
+        "Day": {"time": {"value": 0, "date": None}},
+        "consecutive": _empty_consecutive(),
+    }
+
+
+def _ensure_scope_shape(scope: dict, *, global_scope: bool) -> None:
+    if "consecutive" not in scope:
+        scope["consecutive"] = (
+            {
+                "days": {"value": 0, "date": None, "user": None},
+                "weeks": {"value": 0, "date": None, "user": None},
+            }
+            if global_scope
+            else _empty_consecutive()
+        )
 
 
 def _default_highscores_doc(user: str) -> dict:
     return {
         "_id": "Highscores",
         user: _empty_user_highscores(),
-        "Global": {
-            "Year": {
-                "time": {"value": 0, "date": None, "user": None},
-                "activity": {"value": 0, "active_days": 0, "total_days": 0, "date": None, "user": None},
-            },
-            "Month": {
-                "time": {"value": 0, "date": None, "user": None},
-                "activity": {"value": 0, "active_days": 0, "total_days": 0, "date": None, "user": None},
-            },
-            "Week": {
-                "time": {"value": 0, "date": None, "user": None},
-                "activity": {"value": 0, "active_days": 0, "total_days": 0, "date": None, "user": None},
-            },
-            "Day": {"time": {"value": 0, "date": None, "user": None}},
-        },
-        "Combined": {
-            "Year": {
-                "time": {"value": 0, "date": None},
-                "activity": {"value": 0, "active_days": 0, "total_days": 0, "date": None},
-            },
-            "Month": {
-                "time": {"value": 0, "date": None},
-                "activity": {"value": 0, "active_days": 0, "total_days": 0, "date": None},
-            },
-            "Week": {
-                "time": {"value": 0, "date": None},
-                "activity": {"value": 0, "active_days": 0, "total_days": 0, "date": None},
-            },
-            "Day": {"time": {"value": 0, "date": None}},
-        },
+        "Global": _empty_global_scope(),
+        "Combined": _empty_combined_scope(),
+    }
+
+
+def _streak_value(agg: dict, streak_kind: str) -> int:
+    return int(((agg.get("streaks") or {}).get(streak_kind) or {}).get("best") or 0)
+
+
+def _consecutive_value(highscore: dict, streak_kind: str) -> int:
+    return int((highscore.get("consecutive") or {}).get(streak_kind, {}).get("value") or 0)
+
+
+def _streak_broken_value(streak: int) -> dict:
+    return {
+        "streak": streak,
+        "total_time": None,
+        "active_days": None,
+        "total_days": None,
+        "percentage": None,
     }
 
 
@@ -316,6 +368,76 @@ def _apply_period_highscores(
     return broken_records
 
 
+def _apply_consecutive_highscores(
+    highscores: dict,
+    user: str,
+    date_str: str,
+    user_agg: dict,
+    combined_agg: dict,
+    *,
+    global_scope: bool = True,
+    combined_scope: bool = True,
+) -> list[dict]:
+    broken_records: list[dict] = []
+    user_days = _streak_value(user_agg, "days")
+    user_weeks = _streak_value(user_agg, "weeks")
+    combined_days = _streak_value(combined_agg, "days")
+    combined_weeks = _streak_value(combined_agg, "weeks")
+
+    for metric, streak_kind, user_value, combined_value in (
+        ("consecutive_days", "days", user_days, combined_days),
+        ("consecutive_weeks", "weeks", user_weeks, combined_weeks),
+    ):
+        if user_value > _consecutive_value(highscores[user], streak_kind):
+            broken_records.append(_broken_pair(
+                "personal",
+                _LIFETIME_TYPE,
+                metric,
+                _streak_broken_value(_consecutive_value(highscores[user], streak_kind)),
+                _streak_broken_value(user_value),
+                highscores[user]["consecutive"][streak_kind]["date"],
+                date_str,
+            ))
+            highscores[user]["consecutive"][streak_kind] = {
+                "value": user_value,
+                "date": date_str,
+            }
+
+            if global_scope and user_value > _consecutive_value(highscores["Global"], streak_kind):
+                broken_records.append(_broken_pair(
+                    "global",
+                    _LIFETIME_TYPE,
+                    metric,
+                    _streak_broken_value(_consecutive_value(highscores["Global"], streak_kind)),
+                    _streak_broken_value(user_value),
+                    highscores["Global"]["consecutive"][streak_kind]["date"],
+                    date_str,
+                    highscores["Global"]["consecutive"][streak_kind].get("user"),
+                ))
+                highscores["Global"]["consecutive"][streak_kind] = {
+                    "value": user_value,
+                    "date": date_str,
+                    "user": user,
+                }
+
+        if combined_scope and combined_value > _consecutive_value(highscores["Combined"], streak_kind):
+            broken_records.append(_broken_pair(
+                "combined",
+                _LIFETIME_TYPE,
+                metric,
+                _streak_broken_value(_consecutive_value(highscores["Combined"], streak_kind)),
+                _streak_broken_value(combined_value),
+                highscores["Combined"]["consecutive"][streak_kind]["date"],
+                date_str,
+            ))
+            highscores["Combined"]["consecutive"][streak_kind] = {
+                "value": combined_value,
+                "date": date_str,
+            }
+
+    return broken_records
+
+
 def _fetch_agg_docs(aggregations: Collection, user: str, session) -> tuple[dict, dict, dict]:
     rows = list(
         aggregations.aggregate(
@@ -335,6 +457,18 @@ def _fetch_agg_docs(aggregations: Collection, user: str, session) -> tuple[dict,
         highscores = deepcopy(highscores)
         if user not in highscores:
             highscores[user] = _empty_user_highscores()
+        else:
+            _ensure_scope_shape(highscores[user], global_scope=False)
+
+    if "Global" not in highscores:
+        highscores["Global"] = _empty_global_scope()
+    else:
+        _ensure_scope_shape(highscores["Global"], global_scope=True)
+
+    if "Combined" not in highscores:
+        highscores["Combined"] = _empty_combined_scope()
+    else:
+        _ensure_scope_shape(highscores["Combined"], global_scope=False)
 
     user_agg = docs_by_id.get(user) or {}
     combined_agg = docs_by_id.get("Combined") or {}
@@ -359,6 +493,15 @@ def update_highscores(
         all_broken.extend(
             _apply_period_highscores(highscores, user, date_str, time_type, period_stats[time_type])
         )
+    all_broken.extend(
+        _apply_consecutive_highscores(
+            highscores,
+            user,
+            date_str,
+            user_agg,
+            combined_agg,
+        )
+    )
 
     aggregations.replace_one({"_id": "Highscores"}, highscores, upsert=True, session=session)
     return all_broken
@@ -385,6 +528,10 @@ def update_highscore(
         highscores = deepcopy(highscores)
         if user not in highscores:
             highscores[user] = _empty_user_highscores()
+        else:
+            _ensure_scope_shape(highscores[user], global_scope=False)
+    _ensure_scope_shape(highscores.setdefault("Global", _empty_global_scope()), global_scope=True)
+    _ensure_scope_shape(highscores.setdefault("Combined", _empty_combined_scope()), global_scope=False)
 
     keys = period_keys(datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S"))
     combined_bucket = _bucket_doc(
@@ -416,5 +563,19 @@ def update_highscore(
         global_scope=is_global,
         combined_scope=is_global,
     )
+    if is_global:
+        user_agg = aggregations.find_one({"_id": user}) or {}
+        combined_agg = aggregations.find_one({"_id": "Combined"}) or {}
+        broken.extend(
+            _apply_consecutive_highscores(
+                highscores,
+                user,
+                date_str,
+                user_agg,
+                combined_agg,
+                global_scope=True,
+                combined_scope=True,
+            )
+        )
     aggregations.replace_one({"_id": "Highscores"}, highscores, upsert=True)
     return broken

@@ -2,6 +2,7 @@
 from datetime import datetime
 
 from period_model import calendar_bounds, period_keys
+from streak_recalculate import streaks_from_log_entries
 from Timetable import (
     aggregate,
     aggregations,
@@ -53,6 +54,18 @@ def recalculate_all_aggregations():
 
     for week_year, week in sorted(seen_weeks):
         aggregate("week", user, week_year=week_year, week=week)
+
+
+def recalculate_all_streaks():
+    """Rebuild lifetime streak counters on user and Combined aggregation docs."""
+    for entry_user in collection.distinct("user"):
+        entries = list(collection.find({"user": entry_user}, {"timestamp": 1}))
+        streaks = streaks_from_log_entries(entries)
+        aggregations.update_one({"_id": entry_user}, {"$set": {"streaks": streaks}}, upsert=True)
+
+    combined_entries = list(collection.find({}, {"timestamp": 1}))
+    combined_streaks = streaks_from_log_entries(combined_entries)
+    aggregations.update_one({"_id": "Combined"}, {"$set": {"streaks": combined_streaks}}, upsert=True)
 
 
 def recalculate_all_highscores():

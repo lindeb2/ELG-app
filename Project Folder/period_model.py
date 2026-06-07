@@ -267,3 +267,45 @@ def prior_log_lookup_stage(
 
 def active_inc_expr(prior_array: str) -> dict:
     return {"$cond": [{"$eq": [{"$size": prior_array}, 0]}, 1, 0]}
+
+
+def streak_key_set_stage() -> dict:
+    """$set stage: local day/week keys and prior period keys for streak updates."""
+    prior_week_start = {
+        "$dateSubtract": {"startDate": "$weekStart", "unit": "day", "amount": 7},
+    }
+    return {
+        "$set": {
+            "dayKey": {"$concat": ["$yearStr", "-", "$monthStr", "-", "$dayStr"]},
+            "weekKey": {"$concat": ["$weekYearStr", "-W", "$weekStr"]},
+            "yesterdayDayKey": _date_to_string(
+                "%Y-%m-%d",
+                {"$dateSubtract": {"startDate": "$dayStart", "unit": "day", "amount": 1}},
+            ),
+            "priorWeekKey": {
+                "$concat": [
+                    {
+                        "$toString": {
+                            "$isoWeekYear": {"date": prior_week_start, "timezone": APP_TIMEZONE},
+                        }
+                    },
+                    "-W",
+                    {
+                        "$toString": {
+                            "$isoWeek": {"date": prior_week_start, "timezone": APP_TIMEZONE},
+                        }
+                    },
+                ]
+            },
+        }
+    }
+
+
+def day_key_from_dt(dt: datetime) -> str:
+    return to_local(dt).strftime("%Y-%m-%d")
+
+
+def week_key_from_dt(dt: datetime) -> str:
+    local = to_local(dt)
+    iso_year, iso_week, _ = local.isocalendar()
+    return f"{iso_year}-W{iso_week}"

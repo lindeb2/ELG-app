@@ -354,10 +354,18 @@ def format_record_message(record_pair, days):
         old_time = format_time(old_record['value']['total_time'])
         new_time = format_time(new_record['value']['total_time'])
         return f"{record_holder} {days} days old {time_period} time {record_type}: {old_time} → {new_time}\n"
-    else:  # days_active
-        old_ratio = f"{old_record['value']['active_days']}/{old_record['value']['total_days']} ({old_record['value']['percentage']:.1%})"
-        new_ratio = f"{new_record['value']['active_days']}/{new_record['value']['total_days']} ({new_record['value']['percentage']:.1%})"
-        return f"{record_holder} {days} days old {time_period} activity {record_type}: {old_ratio} → {new_ratio}\n"
+    if old_record["metric"] in ("consecutive_days", "consecutive_weeks"):
+        unit = "days" if old_record["metric"] == "consecutive_days" else "weeks"
+        old_streak = old_record["value"]["streak"]
+        new_streak = new_record["value"]["streak"]
+        return (
+            f"{record_holder} {days} days old lifetime consecutive {unit} {record_type}: "
+            f"{old_streak} → {new_streak}\n"
+        )
+
+    old_ratio = f"{old_record['value']['active_days']}/{old_record['value']['total_days']} ({old_record['value']['percentage']:.1%})"
+    new_ratio = f"{new_record['value']['active_days']}/{new_record['value']['total_days']} ({new_record['value']['percentage']:.1%})"
+    return f"{record_holder} {days} days old {time_period} activity {record_type}: {old_ratio} → {new_ratio}\n"
 
 def create_broken_records_notification(user, global_records, personal_records, combined_records):
     """

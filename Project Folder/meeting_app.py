@@ -1535,6 +1535,18 @@ class MeetingApp(ctk.CTk):
                                     "value": f"{active_days}/{total_days} days ({activity_ratio:.1%})",
                                     "date": date_str
                                 })
+                if "consecutive" in user_records:
+                    for streak_kind, label in (("days", "Consecutive days"), ("weeks", "Consecutive weeks")):
+                        record = user_records["consecutive"].get(streak_kind)
+                        if record and record.get("date") and is_in_current_week(record["date"]):
+                            records_found.append({
+                                "type": "Personal Best",
+                                "user": user,
+                                "time_type": "Lifetime",
+                                "metric": label,
+                                "value": str(record["value"]),
+                                "date": record["date"],
+                            })
         # Check world records
         if "Global" in highscores:
             global_records = highscores["Global"]
@@ -1568,6 +1580,18 @@ class MeetingApp(ctk.CTk):
                                 "value": f"{active_days}/{total_days} days ({activity_ratio:.1%})",
                                 "date": date_str
                             })
+            if "consecutive" in global_records:
+                for streak_kind, label in (("days", "Consecutive days"), ("weeks", "Consecutive weeks")):
+                    record = global_records["consecutive"].get(streak_kind)
+                    if record and record.get("date") and is_in_current_week(record["date"]):
+                        records_found.append({
+                            "type": "World Record",
+                            "user": record.get("user", "?"),
+                            "time_type": "Lifetime",
+                            "metric": label,
+                            "value": str(record["value"]),
+                            "date": record["date"],
+                        })
         # Check team records
         if "Combined" in highscores:
             combined_records = highscores["Combined"]
@@ -1601,6 +1625,18 @@ class MeetingApp(ctk.CTk):
                                 "value": f"{active_days}/{total_days} days ({activity_ratio:.1%})",
                                 "date": date_str
                             })
+            if "consecutive" in combined_records:
+                for streak_kind, label in (("days", "Consecutive days"), ("weeks", "Consecutive weeks")):
+                    record = combined_records["consecutive"].get(streak_kind)
+                    if record and record.get("date") and is_in_current_week(record["date"]):
+                        records_found.append({
+                            "type": "Team Record",
+                            "user": "All users",
+                            "time_type": "Lifetime",
+                            "metric": label,
+                            "value": str(record["value"]),
+                            "date": record["date"],
+                        })
         # Sort records by date (newest first)
         records_found.sort(key=lambda x: datetime.datetime.strptime(x["date"], "%Y-%m-%d %H:%M:%S"), reverse=True)
         # Display records
