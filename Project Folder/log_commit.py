@@ -13,6 +13,7 @@ from commit_pipeline import (
     USER_BUCKET_PIPELINE,
     USER_CONTEXT_PIPELINE,
 )
+from highscore_commit import update_highscores
 
 
 def _fetch_context(collection: Collection, pipeline: list, let_vars: dict, session) -> dict:
@@ -32,8 +33,8 @@ def commit_log(
     description: str,
     elapsed_time: int,
     ms_since_local_start: int,
-) -> datetime:
-    """Insert log and apply aggregation pipeline updates in one transaction."""
+) -> tuple[datetime, list[dict]]:
+    """Insert log, apply aggregation updates, and refresh highscores in one transaction."""
     new_id = ObjectId()
     elapsed_time = int(elapsed_time)
 
@@ -88,7 +89,13 @@ def commit_log(
             upsert=True,
             session=session,
         )
-        return timestamp
+        broken_records = update_highscores(
+            aggregations,
+            user,
+            timestamp,
+            session=session,
+        )
+        return timestamp, broken_records
 
     with client.start_session() as session:
         return session.with_transaction(callback)
