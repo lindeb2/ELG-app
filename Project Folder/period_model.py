@@ -53,6 +53,29 @@ def calendar_week_key(dt: datetime) -> tuple[str, str]:
     return keys.iso_week_year, keys.iso_week
 
 
+def legacy_log_timestamp(doc: dict) -> datetime | None:
+    """Derive UTC-naive BSON timestamp from legacy start_* fields (Europe/Stockholm local)."""
+    if not all(key in doc for key in ("start_year", "start_month", "start_day")):
+        start_unix = doc.get("start_time")
+        if isinstance(start_unix, int):
+            return datetime.fromtimestamp(start_unix, tz=timezone.utc).replace(tzinfo=None)
+        return None
+
+    try:
+        year = int(doc["start_year"])
+        month = int(doc["start_month"])
+        day = int(doc["start_day"])
+        start_time = doc.get("start_time", "00:00:00")
+        if isinstance(start_time, int):
+            local = datetime.fromtimestamp(start_time, tz=_TZ)
+        else:
+            hour, minute, second = map(int, str(start_time).split(":"))
+            local = datetime(year, month, day, hour, minute, second, tzinfo=_TZ)
+        return to_bson_naive(local)
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def agg_path(period: str, keys: PeriodKeys) -> str:
     if period == "year":
         return f"years.{keys.year}"

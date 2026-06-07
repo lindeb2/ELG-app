@@ -41,17 +41,22 @@ def _current_run(sorted_keys: list[str]) -> int:
     return run
 
 
+def _parse_week_key(key: str) -> tuple[int, int]:
+    year_str, week_str = key.split("-W", 1)
+    return int(year_str), int(week_str)
+
+
+def _sort_week_keys(week_keys: set[str]) -> list[str]:
+    return sorted(week_keys, key=_parse_week_key)
+
+
 def _best_run_weeks(sorted_keys: list[str]) -> int:
     if not sorted_keys:
         return 0
 
-    def parse_week(key: str) -> tuple[int, int]:
-        year_str, week_str = key.split("-W", 1)
-        return int(year_str), int(week_str)
-
     def is_consecutive(prev_key: str, key: str) -> bool:
-        py, pw = parse_week(prev_key)
-        y, w = parse_week(key)
+        py, pw = _parse_week_key(prev_key)
+        y, w = _parse_week_key(key)
         prev_monday = datetime.fromisocalendar(py, pw, 1)
         monday = datetime.fromisocalendar(y, w, 1)
         return (monday - prev_monday).days == 7
@@ -73,15 +78,11 @@ def _current_run_weeks(sorted_keys: list[str]) -> int:
     if not sorted_keys:
         return 0
 
-    def parse_week(key: str) -> tuple[int, int]:
-        year_str, week_str = key.split("-W", 1)
-        return int(year_str), int(week_str)
-
     run = 1
-    py, pw = parse_week(sorted_keys[-1])
+    py, pw = _parse_week_key(sorted_keys[-1])
     prev_monday = datetime.fromisocalendar(py, pw, 1)
     for key in reversed(sorted_keys[:-1]):
-        y, w = parse_week(key)
+        y, w = _parse_week_key(key)
         monday = datetime.fromisocalendar(y, w, 1)
         if (prev_monday - monday).days == 7:
             run += 1
@@ -93,7 +94,7 @@ def _current_run_weeks(sorted_keys: list[str]) -> int:
 
 def streaks_from_day_keys(day_keys: set[str], week_keys: set[str]) -> dict:
     sorted_days = sorted(day_keys)
-    sorted_weeks = sorted(week_keys)
+    sorted_weeks = _sort_week_keys(week_keys)
     day_current = _current_run(sorted_days)
     week_current = _current_run_weeks(sorted_weeks)
     return {

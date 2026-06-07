@@ -219,52 +219,49 @@ class StatsViewer(ctk.CTk):
         )
         title.grid(row=0, column=1, padx=10)
         
-        # Create author selection area
-        author_frame = ctk.CTkFrame(self.main_container)
-        author_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=10)
-        author_frame.grid_columnconfigure(1, weight=1)
+        # Create user selection area
+        user_frame = ctk.CTkFrame(self.main_container)
+        user_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=10)
+        user_frame.grid_columnconfigure(1, weight=1)
         
-        author_label = ctk.CTkLabel(
-            author_frame,
-            text="Select Author:",
+        user_label = ctk.CTkLabel(
+            user_frame,
+            text="Select User:",
             font=("Arial", 16),
             text_color="white"
         )
-        author_label.grid(row=0, column=0, padx=10)
+        user_label.grid(row=0, column=0, padx=10)
         
-        # Get list of authors
-        authors = collection.distinct("author")
-        author_var = ctk.StringVar(value=authors[0] if authors else "")
+        users = collection.distinct("user")
+        user_var = ctk.StringVar(value=users[0] if users else "")
         
-        author_dropdown = ctk.CTkOptionMenu(
-            author_frame,
-            values=authors,
-            variable=author_var,
+        user_dropdown = ctk.CTkOptionMenu(
+            user_frame,
+            values=users,
+            variable=user_var,
             command=lambda x: self.update_personal_bests(x),
             fg_color="#000000",
             button_color="#121212",
             button_hover_color="#2C2C2C",
             text_color="white"
         )
-        author_dropdown.grid(row=0, column=1, padx=10, sticky="ew")
+        user_dropdown.grid(row=0, column=1, padx=10, sticky="ew")
         
         # Create content area
         self.content = CtkSmartScrollableFrame(self.main_container)
         self.content.grid(row=2, column=0, sticky="nsew", padx=10, pady=10)
         
-        # Show initial author's records
-        if authors:
-            self.update_personal_bests(authors[0])
+        if users:
+            self.update_personal_bests(users[0])
     
-    def update_personal_bests(self, author):
+    def update_personal_bests(self, user):
         # Clear content area
         for widget in self.content.winfo_children():
             widget.destroy()
         
-        # Get author's records from database
         highscores = aggregations.find_one({"_id": "Highscores"})
-        if highscores and author in highscores:
-            self.display_records(self.content, highscores[author], is_global=False)
+        if highscores and user in highscores:
+            self.display_records(self.content, highscores[user], is_global=False)
     
     def display_records(self, parent, records, is_global=False):
         # Configure grid
@@ -311,9 +308,9 @@ class StatsViewer(ctk.CTk):
                     
                     if records[time_type]["time"]["date"]:
                         date_text = f"Set on: {records[time_type]['time']['date']}"
-                        author = records[time_type]["time"].get("author")
-                        if is_global and author:
-                            date_text += f" by {author}"
+                        record_user = records[time_type]["time"].get("user")
+                        if is_global and record_user:
+                            date_text += f" by {record_user}"
                         date_label = ctk.CTkLabel(
                             time_frame,
                             text=date_text,
@@ -346,9 +343,9 @@ class StatsViewer(ctk.CTk):
                     
                     if records[time_type]["activity"]["date"]:
                         date_text = f"Set on: {records[time_type]['activity']['date']}"
-                        author = records[time_type]["activity"].get("author")
-                        if is_global and author:
-                            date_text += f" by {author}"
+                        record_user = records[time_type]["activity"].get("user")
+                        if is_global and record_user:
+                            date_text += f" by {record_user}"
                         date_label = ctk.CTkLabel(
                             activity_frame,
                             text=date_text,
@@ -394,9 +391,9 @@ class StatsViewer(ctk.CTk):
 
                 if streak.get("date"):
                     date_text = f"Set on: {streak['date']}"
-                    author = streak.get("user") or streak.get("author")
-                    if is_global and author:
-                        date_text += f" by {author}"
+                    record_user = streak.get("user")
+                    if is_global and record_user:
+                        date_text += f" by {record_user}"
                     ctk.CTkLabel(
                         streak_frame,
                         text=date_text,

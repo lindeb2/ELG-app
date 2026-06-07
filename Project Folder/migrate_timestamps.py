@@ -3,8 +3,9 @@ import argparse
 import json
 import os
 
-from datetime import datetime, timezone
 from pymongo import MongoClient, UpdateOne
+
+from period_model import legacy_log_timestamp
 
 MONGO_URI = (
     "mongodb+srv://johan:baLlbeTtertRacer@elg-timetable.txhpj.mongodb.net/"
@@ -16,55 +17,41 @@ project_root = os.path.dirname(script_dir)
 config_path = os.path.join(project_root, "config.json")
 
 
-def legacy_timestamp(doc: dict) -> datetime | None:
-    """Derive timestamp from pre-SSOT log fields (migration only)."""
-    ts = doc.get("timestamp")
-    if ts is not None:
-        return ts
-    start_unix = doc.get("start_time")
-    if isinstance(start_unix, int):
-        return datetime.fromtimestamp(start_unix, tz=timezone.utc).replace(tzinfo=None)
-    try:
-        return datetime(
-            int(doc["start_year"]),
-            int(doc["start_month"]),
-            int(doc["start_day"]),
-            *map(int, doc.get("start_time", "00:00:00").split(":")),
-        )
-    except (KeyError, TypeError, ValueError):
-        return None
-
-
 def resolve_db_name(cli_name: str | None) -> str:
     if cli_name:
         return cli_name
     try:
         with open(config_path, encoding="utf-8") as f:
-            return json.load(f).get("database", "ELG-Dev")
+            return json.load(f).get("database", "ELG-Database")
     except FileNotFoundError:
-        return "ELG-Dev"
+        return "ELG-Database"
 
 
 def main():
     parser = argparse.ArgumentParser(description="Backfill timestamp field on Timetable collection.")
-    parser.add_argument("--database", type=str, help="Database name (default from config or ELG-Dev).")
+    parser.add_argument("--database", type=str, help="Database name (default from config or ELG-Database).")
+    parser.add_argument(
+        "--rebuild-from-legacy",
+        action="store_true",
+        help="Recompute timestamp from start_* even when timestamp already exists.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Report only; do not write.")
     args = parser.parse_args()
 
     db_name = resolve_db_name(args.database)
     client = MongoClient(MONGO_URI)
-    db = client[db_name]
-    collection = db["Timetable"]
+    collection = client[db_name]["Timetable"]
 
     ops = []
     unmigratable = 0
     already_ok = 0
 
     for doc in collection.find({}):
-        if doc.get("timestamp") is not None:
+        has_legacy = all(key in doc for key in ("start_year", "start_month", "start_day"))
+        if doc.get("timestamp") is not None and not (args.rebuild_from_legacy and has_legacy):
             already_ok += 1
             continue
-        ts = legacy_timestamp(doc)
+        ts = legacy_log_timestamp(doc)
         if ts is None:
             unmigratable += 1
             continue

@@ -1,32 +1,9 @@
 import customtkinter as ctk
 import time
 from datetime import datetime
-from pymongo import ReturnDocument
 from log_commit import commit_log
-from highscore_commit import update_highscore as _update_highscore
-from period_model import (
-    active_day_expr,
-    calendar_bounds,
-    calendar_week_key,
-    format_date_str,
-    period_keys,
-    timestamp_range_match,
-    total_days_in_period,
-)
-from pymongo.mongo_client import MongoClient
-from pymongo.server_api import ServerApi
-import os
-import json
+from timetable_db import aggregations, client, collection, user
 import requests
-
-# MongoDB connection
-client = MongoClient(
-    "mongodb+srv://johan:baLlbeTtertRacer@elg-timetable.txhpj.mongodb.net/?retryWrites=true&w=majority&appName=ELG-timetable",
-    server_api=ServerApi('1')
-)
-db = client['ELG-Dev']
-collection = db['Timetable']
-aggregations = db['Timetable Aggregations']
 
 # Google App Engine URL for notifications
 GAE_URL = "https://your-app-engine-url.appspot.com/notify"  # Replace with your actual GAE URL
@@ -72,122 +49,6 @@ name = description = local_start = None
 elapsed_time = _monotonic_anchor = 0.0
 running = False
 
-# Get the directory of the current script
-script_dir = os.path.dirname(os.path.abspath(__file__))
-# Go up one level to the project root
-project_root = os.path.dirname(script_dir)
-# Construct the path to config.json
-config_path = os.path.join(project_root, "config.json")
-
-with open(config_path) as file:
-    config = json.load(file)
-    user = config["user"]
-
-_ACTIVE_DAY_EXPR = active_day_expr()
-
-_TIME_BY_USER_GROUP = {"$group": {"_id": "$user", "time": {"$sum": "$elapsed_time"}}}
-_TIME_AND_DAYS_BY_USER_GROUP = {
-    "$group": {
-        "_id": "$user",
-        "time": {"$sum": "$elapsed_time"},
-        "active_days": {"$addToSet": _ACTIVE_DAY_EXPR},
-    }
-}
-
-
-def _sum_time_by_user(start: datetime, end: datetime) -> list:
-    pipeline = [{"$match": timestamp_range_match(start, end)}, _TIME_BY_USER_GROUP]
-    return list(collection.aggregate(pipeline))
-
-
-def _sum_time_and_days_by_user(start: datetime, end: datetime) -> list:
-    pipeline = [
-        {"$match": timestamp_range_match(start, end)},
-        _TIME_AND_DAYS_BY_USER_GROUP,
-    ]
-    return list(collection.aggregate(pipeline))
-
-
-def _upsert_aggregation(doc_id: str, fields: dict) -> None:
-    aggregations.update_one({"_id": doc_id}, {"$set": fields}, upsert=True)
-
-
-def _write_time_field(result: list, user: str, base_path: str) -> None:
-    combined_time = sum(entry["time"] for entry in result)
-    user_time = next((entry["time"] for entry in result if entry["_id"] == user), 0)
-    _upsert_aggregation("Combined", {f"{base_path}.time": combined_time,})
-    _upsert_aggregation(user, {f"{base_path}.time": user_time})
-
-
-def _write_activity_fields(result: list, user: str, base_path: str, total_days: int) -> None:
-    combined_time = sum(entry["time"] for entry in result)
-    combined_active_days = len({day for entry in result for day in entry["active_days"]})
-    combined_ratio = combined_active_days / total_days
-
-    _upsert_aggregation("Combined", {
-        f"{base_path}.time": combined_time,
-        f"{base_path}.active_days": combined_active_days,
-        f"{base_path}.total_days": total_days,
-        f"{base_path}.activity_ratio": combined_ratio,
-    })
-
-    user_entry = next((entry for entry in result if entry["_id"] == user), None)
-    if user_entry:
-        user_active_days = len(user_entry["active_days"])
-        _upsert_aggregation(user, {
-            f"{base_path}.time": user_entry["time"],
-            f"{base_path}.active_days": user_active_days,
-            f"{base_path}.total_days": total_days,
-            f"{base_path}.activity_ratio": user_active_days / total_days,
-        })
-
-def aggregate(
-    period: str,
-    user: str,
-    *,
-    year: str,
-    month: str | None = None,
-    day: str | None = None,
-    week_year: str | None = None,
-    week: str | None = None,
-    weekday: str | None = None
-) -> None:
-
-    y = int(year) if year is not None else None
-    m = int(month) if month is not None else None
-    d = int(day) if day is not None else None
-    wy = int(week_year) if week_year is not None else None
-    w = int(week) if week is not None else None
-    wd = int(weekday) if weekday is not None else None
-
-    if period == "year":
-        start, end = calendar_bounds("year", year=y)
-        total_days = total_days_in_period(y)
-        path_base = f"years.{year}"
-    elif period == "month":
-        path_base = f"years.{year}.months.{month}"
-        start, end = calendar_bounds("month", year=y, month=m)
-        total_days = total_days_in_period(y, m)
-    elif period == "week":
-        path_base = f"years.{week_year}.weeks.{week}"
-        start, end = calendar_bounds("week", year=wy, week=w)
-        total_days = total_days_in_period()
-    else:
-        start, end = calendar_bounds("day", year=y, month=m, day=d)
-        total_days = None
-        if period == "day":
-            path_base = f"years.{year}.months.{month}.days.{day}"
-        elif period == "weekday":
-            path_base = f"years.{week_year}.weeks.{week}.weekdays.{weekday}"
-
-
-    if total_days is not None:
-        result = _sum_time_and_days_by_user(start, end)
-        _write_activity_fields(result, user, path_base, total_days)
-        return
-    result = _sum_time_by_user(start, end)
-    _write_time_field(result, user, path_base)
-
 # Toggle button function
 def toggle_button():
     global local_start, running, elapsed_time, _monotonic_anchor
@@ -219,19 +80,6 @@ def update_timer():
         time_until_next_second = 1.0 - (elapsed_time % 1.0)
         delay = int(time_until_next_second * 1000)
         root.after(delay, update_timer)
-
-def update_highscore(user, time_type, time_value, date_str, is_global=False, activity_data=None):
-    """Admin/recalculate wrapper around highscore_commit.update_highscore."""
-    return _update_highscore(
-        user,
-        time_type,
-        time_value,
-        date_str,
-        aggregations,
-        is_global=is_global,
-        activity_data=activity_data,
-    )
-
 
 def log_entry():
     global name, description, local_start, elapsed_time, running
