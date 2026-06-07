@@ -26,7 +26,7 @@ from period_model import APP_TIMEZONE
 
 # MongoDB connection
 client = MongoClient("mongodb+srv://johan:baLlbeTtertRacer@elg-timetable.txhpj.mongodb.net/?retryWrites=true&w=majority&appName=ELG-timetable")
-db = client['ELG-Dev']
+db = client['ELG-Database']
 main_collection = db['Timetable']  # Only used once
 status_meeting_collection = db['Status Meeting']  # Collection for meeting status
 aggregations_collection = db['Timetable Aggregations']
