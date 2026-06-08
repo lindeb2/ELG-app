@@ -3,6 +3,7 @@ import time
 from datetime import datetime
 from log_commit import commit_log
 from timetable_db import aggregations, client, collection, user
+from utils import flash_error
 import requests
 
 # Google App Engine URL for notifications
@@ -120,34 +121,38 @@ class TimetableApp(ctk.CTk):
 
     def submit_entry(self):
         ms_since_local_start = int((time.perf_counter() - self.local_start) * 1000)
-        timestamp, broken_records = commit_log(
-            collection,
-            aggregations,
-            client,
-            name=self.name_var.get().strip(),
-            user=user,
-            description=self.desc_var.get().strip(),
-            elapsed_time=int(self.elapsed_time),
-            ms_since_local_start=ms_since_local_start,
-        )
-
-        if broken_records:
-            global_records = [r for r in broken_records if r["old_record"]["scope"] == "global"]
-            personal_records = [r for r in broken_records if r["old_record"]["scope"] == "personal"]
-            combined_records = [r for r in broken_records if r["old_record"]["scope"] == "combined"]
-            message = self.create_broken_records_notification(
-                user, global_records, personal_records, combined_records
+        try:
+            timestamp, broken_records = commit_log(
+                collection,
+                aggregations,
+                client,
+                name=self.name_var.get().strip(),
+                user=user,
+                description=self.desc_var.get().strip(),
+                elapsed_time=int(self.elapsed_time),
+                ms_since_local_start=ms_since_local_start,
             )
-            self.send_notification(message)
 
-        self.local_start = None
-        self.elapsed_time = 0.0
-        self.time_label.configure(text="00:00")
-        self.hide_done_button("Start")
-        self.name_var.set("")
-        self.desc_var.set("")
+            if broken_records:
+                global_records = [r for r in broken_records if r["old_record"]["scope"] == "global"]
+                personal_records = [r for r in broken_records if r["old_record"]["scope"] == "personal"]
+                combined_records = [r for r in broken_records if r["old_record"]["scope"] == "combined"]
+                message = self.create_broken_records_notification(
+                    user, global_records, personal_records, combined_records
+                )
+                self.send_notification(message)
 
-        self.overlay_canvas.grid_forget()
+            self.local_start = None
+            self.elapsed_time = 0.0
+            self.time_label.configure(text="00:00")
+            self.hide_done_button("Start")
+            self.name_var.set("")
+            self.desc_var.set("")
+
+            self.overlay_canvas.grid_forget()
+
+        except Exception as e:
+            flash_error(self.log_button)
 
     def continue_timer(self):
         self.toggle_button()

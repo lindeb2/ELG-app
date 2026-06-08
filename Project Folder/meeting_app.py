@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from CtkSmartScrollableFrame import CtkSmartScrollableFrame
 from CTkPieChart import CTkPieChart
 from CTkFlexToolTip import *
+from utils import flash_error
 import random
 from openai import OpenAI
 from collections import defaultdict
@@ -2364,22 +2365,6 @@ class MeetingApp(ctk.CTk):
             else:
                 btn.configure(fg_color=inactive_color)
 
-    def s4_flash_error(self, widget, times=3):
-        """Flash a widget's text color red to indicate error and play a sound"""
-        original_color = widget.cget("text_color")
-        if original_color == "red":
-            return
-        self.bell()
-
-        def flash(count):
-            if count > 0:
-                widget.configure(text_color="red" if count % 2 == 1 else original_color)
-                widget.after(100, lambda: flash(count - 1))
-            else:
-                widget.configure(text_color=original_color)
-
-        flash(times * 2)
-
     def s4_show_input(self):
         """Show the goals input frame"""
         self.s4_in_input = True
@@ -2518,7 +2503,7 @@ class MeetingApp(ctk.CTk):
                 raise ValueError
         except ValueError:
             if show_summary:
-                self.s4_flash_error(self.hours_entry) # type: ignore[attr-defined]
+                flash_error(self.hours_entry) # type: ignore[attr-defined]
             return
 
         self._s4_update_goal_data("hours", hours)
