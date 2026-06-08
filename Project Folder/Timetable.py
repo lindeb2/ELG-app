@@ -54,7 +54,7 @@ def toggle_button():
     global local_start, running, elapsed_time, _monotonic_anchor
     if not running:
         if local_start is None:
-            local_start = time.time()
+            local_start = time.perf_counter()
         _monotonic_anchor = time.perf_counter()
         running = True
         button.configure(text="Pause", font=("Arial", 24))
@@ -84,7 +84,7 @@ def update_timer():
 def log_entry():
     global name, description, local_start, elapsed_time, running
 
-    ms_since_local_start = int((time.time() - local_start) * 1000)
+    ms_since_local_start = int((time.perf_counter()() - local_start) * 1000)
     timestamp, broken_records = commit_log(
         collection,
         aggregations,
