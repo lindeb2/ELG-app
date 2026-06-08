@@ -1,118 +1,156 @@
 """Rebuild period aggregations from raw Timetable logs (admin/recalculate only)."""
-from datetime import datetime
+from __future__ import annotations
 
-from period_model import active_day_expr, calendar_bounds, total_days_in_period, timestamp_range_match
+from period_model import (
+    PeriodKeys,
+    active_day_expr,
+    period_group_id,
+    total_days,
+)
 from timetable_db import aggregations, collection
 
-_ACTIVE_DAY_EXPR = active_day_expr()
+_ACTIVITY_PERIODS = frozenset({"year", "month", "week"})
 
-_TIME_BY_USER_GROUP = {"$group": {"_id": "$user", "time": {"$sum": "$elapsed_time"}}}
-_TIME_AND_DAYS_BY_USER_GROUP = {
-    "$group": {
-        "_id": "$user",
+
+def _group_pipeline(period: str, *, include_user: bool) -> list[dict]:
+    group_id = period_group_id(period)
+    if include_user:
+        group_id = {"user": "$user", **group_id}
+
+    group: dict = {
+        "_id": group_id,
         "time": {"$sum": "$elapsed_time"},
-        "active_days": {"$addToSet": _ACTIVE_DAY_EXPR},
     }
-}
+    if period in _ACTIVITY_PERIODS:
+        group["active_days"] = {"$addToSet": active_day_expr()}
 
-
-def _sum_time_by_user(start: datetime, end: datetime) -> list:
-    pipeline = [{"$match": timestamp_range_match(start, end)}, _TIME_BY_USER_GROUP]
-    return list(collection.aggregate(pipeline))
-
-
-def _sum_time_and_days_by_user(start: datetime, end: datetime) -> list:
-    pipeline = [
-        {"$match": timestamp_range_match(start, end)},
-        _TIME_AND_DAYS_BY_USER_GROUP,
-    ]
-    return list(collection.aggregate(pipeline))
-
-
-def _upsert_aggregation(doc_id: str, fields: dict) -> None:
-    aggregations.update_one({"_id": doc_id}, {"$set": fields}, upsert=True)
-
-
-def _write_time_field(result: list, base_path: str) -> None:
-    combined_time = sum(entry["time"] for entry in result if entry["_id"])
-    _upsert_aggregation("Combined", {f"{base_path}.time": combined_time})
-    for entry in result:
-        user_id = entry["_id"]
-        if user_id:
-            _upsert_aggregation(user_id, {f"{base_path}.time": entry["time"]})
-
-
-def _write_activity_fields(result: list, base_path: str, total_days: int) -> None:
-    combined_time = sum(entry["time"] for entry in result if entry["_id"])
-    combined_active_days = len({day for entry in result for day in entry["active_days"]})
-    combined_ratio = combined_active_days / total_days
-
-    _upsert_aggregation(
-        "Combined",
+    return [
         {
-            f"{base_path}.time": combined_time,
-            f"{base_path}.active_days": combined_active_days,
-            f"{base_path}.total_days": total_days,
-            f"{base_path}.activity_ratio": combined_ratio,
+            "$match": {
+                "timestamp": {"$type": "date"},
+                "user": {"$nin": [None, ""]},
+            }
         },
-    )
+        {"$group": group},
+    ]
 
-    for entry in result:
-        user_id = entry["_id"]
-        if not user_id:
-            continue
-        user_active_days = len(entry["active_days"])
-        _upsert_aggregation(
-            user_id,
-            {
-                f"{base_path}.time": entry["time"],
-                f"{base_path}.active_days": user_active_days,
-                f"{base_path}.total_days": total_days,
-                f"{base_path}.activity_ratio": user_active_days / total_days,
-            },
+
+def _activity_fields(period: str, gid: dict, time: int, active_days: list[str]) -> dict:
+    active_count = len(active_days)
+    if period == "year":
+        keys = PeriodKeys(gid["year"], "01", "01", gid["year"], "01", "1")
+        total = total_days("year", keys)
+    elif period == "month":
+        keys = PeriodKeys(gid["year"], gid["month"], "01", gid["year"], "01", "1")
+        total = total_days("month", keys)
+    else:
+        total = 7
+    return {
+        "time": time,
+        "active_days": active_count,
+        "total_days": total,
+        "activity_ratio": active_count / total,
+    }
+
+
+def _time_fields(time: int) -> dict:
+    return {"time": time}
+
+
+def _bucket_fields(period: str, gid: dict, entry: dict) -> dict:
+    time = int(entry["time"])
+    if period in _ACTIVITY_PERIODS:
+        return _activity_fields(period, gid, time, entry["active_days"])
+    return _time_fields(time)
+
+
+def _apply_user_bucket(years: dict, period: str, gid: dict, entry: dict) -> None:
+    fields = _bucket_fields(period, gid, entry)
+    if period == "year":
+        years.setdefault(gid["year"], {}).update(fields)
+    elif period == "month":
+        (
+            years.setdefault(gid["year"], {})
+            .setdefault("months", {})
+            .setdefault(gid["month"], {})
+            .update(fields)
+        )
+    elif period == "week":
+        (
+            years.setdefault(gid["week_year"], {})
+            .setdefault("weeks", {})
+            .setdefault(gid["week"], {})
+            .update(fields)
+        )
+    elif period == "day":
+        (
+            years.setdefault(gid["year"], {})
+            .setdefault("months", {})
+            .setdefault(gid["month"], {})
+            .setdefault("days", {})
+            .setdefault(gid["day"], {})
+            .update(fields)
+        )
+    elif period == "weekday":
+        (
+            years.setdefault(gid["week_year"], {})
+            .setdefault("weeks", {})
+            .setdefault(gid["week"], {})
+            .setdefault("weekdays", {})
+            .setdefault(gid["weekday"], {})
+            .update(fields)
         )
 
 
-def aggregate(
-    period: str,
-    *,
-    year: str | None = None,
-    month: str | None = None,
-    day: str | None = None,
-    week_year: str | None = None,
-    week: str | None = None,
-    weekday: str | None = None,
-) -> None:
-    y = int(year) if year is not None else None
-    m = int(month) if month is not None else None
-    d = int(day) if day is not None else None
-    wy = int(week_year) if week_year is not None else None
-    w = int(week) if week is not None else None
-    wd = int(weekday) if weekday is not None else None
+def _apply_combined_bucket(years: dict, period: str, gid: dict, entry: dict) -> None:
+    _apply_user_bucket(years, period, gid, entry)
 
-    if period == "year":
-        start, end = calendar_bounds("year", year=y)
-        total_days = total_days_in_period(y)
-        path_base = f"years.{year}"
-    elif period == "month":
-        path_base = f"years.{year}.months.{month}"
-        start, end = calendar_bounds("month", year=y, month=m)
-        total_days = total_days_in_period(y, m)
-    elif period == "week":
-        path_base = f"years.{week_year}.weeks.{week}"
-        start, end = calendar_bounds("week", year=wy, week=w)
-        total_days = total_days_in_period()
-    else:
-        start, end = calendar_bounds("day", year=y, month=m, day=d)
-        total_days = None
-        if period == "day":
-            path_base = f"years.{year}.months.{month}.days.{day}"
-        elif period == "weekday":
-            path_base = f"years.{week_year}.weeks.{week}.weekdays.{weekday}"
 
-    if total_days is not None:
-        result = _sum_time_and_days_by_user(start, end)
-        _write_activity_fields(result, path_base, total_days)
-        return
-    result = _sum_time_by_user(start, end)
-    _write_time_field(result, path_base)
+def _collect_period_results(period: str) -> tuple[dict[str, dict], dict]:
+    user_years: dict[str, dict] = {}
+    combined_years: dict = {}
+
+    for entry in collection.aggregate(_group_pipeline(period, include_user=True)):
+        gid = entry["_id"]
+        user = gid.pop("user")
+        if user:
+            _apply_user_bucket(user_years.setdefault(user, {}), period, gid, entry)
+
+    for entry in collection.aggregate(_group_pipeline(period, include_user=False)):
+        gid = entry["_id"]
+        _apply_combined_bucket(combined_years, period, gid, entry)
+
+    return user_years, combined_years
+
+
+def _merge_years(existing: dict, incoming: dict) -> dict:
+    for key, value in incoming.items():
+        if key not in existing:
+            existing[key] = value
+            continue
+        if isinstance(value, dict) and isinstance(existing[key], dict):
+            for sub_key, sub_value in value.items():
+                if isinstance(sub_value, dict) and isinstance(existing[key].get(sub_key), dict):
+                    _merge_years(existing[key][sub_key], sub_value)
+                else:
+                    existing[key][sub_key] = sub_value
+        else:
+            existing[key] = value
+    return existing
+
+
+def rebuild_all_aggregations() -> None:
+    """Rebuild all period buckets in one pass per period type using MongoDB date grouping."""
+    user_years: dict[str, dict] = {}
+    combined_years: dict = {}
+
+    for period in ("year", "month", "week", "day", "weekday"):
+        period_users, period_combined = _collect_period_results(period)
+        for user, years in period_users.items():
+            _merge_years(user_years.setdefault(user, {}), years)
+        _merge_years(combined_years, period_combined)
+
+    for user, years in user_years.items():
+        aggregations.update_one({"_id": user}, {"$set": {"years": years}}, upsert=True)
+
+    aggregations.update_one({"_id": "Combined"}, {"$set": {"years": combined_years}}, upsert=True)

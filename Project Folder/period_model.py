@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import calendar
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 APP_TIMEZONE = "Europe/Stockholm"
@@ -27,10 +27,6 @@ def as_utc(dt: datetime) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
-def to_bson_naive(dt_utc: datetime) -> datetime:
-    return dt_utc.astimezone(timezone.utc).replace(tzinfo=None)
-
-
 def to_local(dt: datetime) -> datetime:
     return as_utc(dt).astimezone(_TZ)
 
@@ -46,92 +42,6 @@ def period_keys(dt: datetime) -> PeriodKeys:
         iso_week=str(iso_week),
         weekday=str(iso_weekday),
     )
-
-
-def calendar_week_key(dt: datetime) -> tuple[str, str]:
-    keys = period_keys(dt)
-    return keys.iso_week_year, keys.iso_week
-
-
-def legacy_log_timestamp(doc: dict) -> datetime | None:
-    """Derive UTC-naive BSON timestamp from legacy start_* fields (Europe/Stockholm local)."""
-    if not all(key in doc for key in ("start_year", "start_month", "start_day")):
-        start_unix = doc.get("start_time")
-        if isinstance(start_unix, int):
-            return datetime.fromtimestamp(start_unix, tz=timezone.utc).replace(tzinfo=None)
-        return None
-
-    try:
-        year = int(doc["start_year"])
-        month = int(doc["start_month"])
-        day = int(doc["start_day"])
-        start_time = doc.get("start_time", "00:00:00")
-        if isinstance(start_time, int):
-            local = datetime.fromtimestamp(start_time, tz=_TZ)
-        else:
-            hour, minute, second = map(int, str(start_time).split(":"))
-            local = datetime(year, month, day, hour, minute, second, tzinfo=_TZ)
-        return to_bson_naive(local)
-    except (KeyError, TypeError, ValueError):
-        return None
-
-
-def agg_path(period: str, keys: PeriodKeys) -> str:
-    if period == "year":
-        return f"years.{keys.year}"
-    if period == "month":
-        return f"years.{keys.year}.months.{keys.month}"
-    if period == "day":
-        return f"years.{keys.year}.months.{keys.month}.days.{keys.day}"
-    if period == "week":
-        return f"years.{keys.iso_week_year}.weeks.{keys.iso_week}"
-    if period == "weekday":
-        return f"years.{keys.iso_week_year}.weeks.{keys.iso_week}.weekdays.{keys.weekday}"
-    raise ValueError(f"Unknown period: {period}")
-
-
-def period_bounds(
-    period: str,
-    *,
-    year: int,
-    month: int | None = None,
-    day: int | None = None,
-    week: int | None = None,
-) -> tuple[datetime, datetime]:
-    """Inclusive start, exclusive end as UTC-naive BSON instants (local calendar)."""
-    if period == "day":
-        start_local = datetime(year, month, day, tzinfo=_TZ)
-        return to_bson_naive(start_local), to_bson_naive(start_local + timedelta(days=1))
-
-    if period == "week":
-        start_local = datetime.fromisocalendar(year, week, 1).replace(tzinfo=_TZ)
-        return to_bson_naive(start_local), to_bson_naive(start_local + timedelta(weeks=1))
-
-    if period == "month":
-        start_local = datetime(year, month, 1, tzinfo=_TZ)
-        if month == 12:
-            end_local = datetime(year + 1, 1, 1, tzinfo=_TZ)
-        else:
-            end_local = datetime(year, month + 1, 1, tzinfo=_TZ)
-        return to_bson_naive(start_local), to_bson_naive(end_local)
-
-    if period == "year":
-        start_local = datetime(year, 1, 1, tzinfo=_TZ)
-        end_local = datetime(year + 1, 1, 1, tzinfo=_TZ)
-        return to_bson_naive(start_local), to_bson_naive(end_local)
-
-    raise ValueError(f"Unknown period: {period}")
-
-
-def calendar_bounds(
-    period: str,
-    *,
-    year: int | None = None,
-    month: int | None = None,
-    day: int | None = None,
-    week: int | None = None,
-) -> tuple[datetime, datetime]:
-    return period_bounds(period, year=year, month=month, day=day, week=week)
 
 
 def total_days(period: str, keys: PeriodKeys) -> int:
@@ -167,30 +77,35 @@ def active_day_expr() -> dict:
     }
 
 
-def active_day_trunc_expr(field: str = "$timestamp") -> dict:
-    return {
-        "$dateTrunc": {
-            "date": field,
-            "unit": "day",
-            "timezone": APP_TIMEZONE,
-        }
-    }
-
-
-def day_start_for_keys(keys: PeriodKeys) -> datetime:
-    start, _ = period_bounds("day", year=int(keys.year), month=int(keys.month), day=int(keys.day))
-    return start
-
-
 def format_date_str(dt: datetime) -> str:
     return to_local(dt).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def timestamp_range_match(start: datetime, end: datetime) -> dict:
-    return {"timestamp": {"$gte": start, "$lt": end}}
-
-
 # --- MongoDB aggregation expression helpers (commit pipeline SSOT) ---
+
+def period_group_id(period: str) -> dict:
+    """$group._id fields derived from $timestamp (Europe/Stockholm)."""
+    ts = "$timestamp"
+    year = _date_to_string("%Y", ts)
+    month = _date_to_string("%m", ts)
+    day = _date_to_string("%d", ts)
+    week_year = {"$toString": {"$isoWeekYear": {"date": ts, "timezone": APP_TIMEZONE}}}
+    week = {"$toString": {"$isoWeek": {"date": ts, "timezone": APP_TIMEZONE}}}
+    weekday = _date_to_string("%u", ts)
+
+    if period == "year":
+        return {"year": year}
+    if period == "month":
+        return {"year": year, "month": month}
+    if period == "week":
+        return {"week_year": week_year, "week": week}
+    if period == "day":
+        return {"year": year, "month": month, "day": day}
+    if period == "weekday":
+        return {"week_year": week_year, "week": week, "weekday": weekday}
+    raise ValueError(f"Unknown period: {period}")
+
+
 
 def _trunc(unit: str, date_expr: str, *, start_of_week: str | None = None) -> dict:
     spec: dict = {"date": date_expr, "unit": unit, "timezone": APP_TIMEZONE}

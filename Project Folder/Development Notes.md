@@ -32,7 +32,7 @@
    - [ ]  Round-trips
      - [X] Batch init / DB-init function
      - [ ] Watcher Pipeline
-   - [ ]  Rework DB with ISODate instead of multiple fields
+   - [X]  Rework DB with ISODate instead of multiple fields
 - [ ]  Merge into one app
    - [ ]  Correct local data storage
    - [ ]  Integrate all parts
