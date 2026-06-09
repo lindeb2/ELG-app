@@ -229,6 +229,30 @@ def abort_commit(open_commit: OpenCommit | None) -> None:
         session.end_session()
 
 
+def commit_log(
+    collection: Collection,
+    aggregations: Collection,
+    client,
+    *,
+    name: str,
+    user: str,
+    description: str,
+    log_ts: datetime,
+    elapsed_time: int,
+) -> tuple[datetime, list[dict]]:
+    """One-shot begin + finalize; for scripts and integration tests."""
+    open_commit = begin_commit(
+        client, collection, aggregations, user, log_ts, elapsed_time
+    )
+    try:
+        return finalize_commit(
+            open_commit, name=name, description=description
+        )
+    except Exception:
+        abort_commit(open_commit)
+        raise
+
+
 class CommitTransactionManager:
     """Single worker thread owns the open ClientSession (not thread-safe)."""
 

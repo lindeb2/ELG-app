@@ -9,7 +9,6 @@ from bson import ObjectId
 from pymongo.collection import Collection
 
 from commit_context_local import build_commit_context, project_agg_after_commit
-from commit_prefetch import prefetch_for_log_ts
 from highscore_commit import update_highscores
 
 
@@ -18,8 +17,6 @@ class CommitPlan:
     log_id: ObjectId
     log_ts: datetime
     elapsed_time: int
-    user_ctx: dict
-    combined_ctx: dict
     user_agg: dict
     combined_agg: dict
     highscores: dict
@@ -66,24 +63,8 @@ def build_commit_plan(
         log_id=log_id,
         log_ts=log_ts,
         elapsed_time=elapsed_time,
-        user_ctx=user_ctx,
-        combined_ctx=combined_ctx,
         user_agg=_agg_doc_with_id(projected_user, user),
         combined_agg=_agg_doc_with_id(projected_combined, "Combined"),
         highscores=_agg_doc_with_id(highscores, "Highscores"),
         broken_records=broken_records,
     )
-
-
-def prepare_commit_plan(
-    collection: Collection,
-    aggregations: Collection,
-    user: str,
-    log_ts: datetime,
-    elapsed_time: int,
-    *,
-    session=None,
-) -> CommitPlan:
-    """Prefetch and build a plan (optionally inside an existing session)."""
-    prefetch = prefetch_for_log_ts(collection, user, log_ts, session=session)
-    return build_commit_plan(prefetch, user, elapsed_time, aggregations=aggregations)

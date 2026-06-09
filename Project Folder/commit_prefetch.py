@@ -59,18 +59,6 @@ _PREFETCH_TAIL = [
     },
 ]
 
-PREFETCH_COMMIT_PIPELINE = [
-    {"$documents": [{}]},
-    {
-        "$set": {
-            "logTs": {"$subtract": ["$$NOW", "$$msSinceStart"]},
-            "logUser": "$$logUser",
-            "logId": "$$logId",
-        }
-    },
-    *_PREFETCH_TAIL,
-]
-
 PREFETCH_FOR_LOG_TS_PIPELINE = [
     {"$documents": [{}]},
     {
@@ -147,31 +135,6 @@ def _run_prefetch(
     if not rows:
         raise RuntimeError("prefetch: pipeline returned no rows")
     return _parse_prefetch_row(rows[0], user, log_id)
-
-
-def prefetch_commit_context(
-    collection: Collection,
-    user: str,
-    ms_since_start: int,
-    *,
-    log_id: ObjectId | None = None,
-    session=None,
-) -> dict:
-    """Fetch log timestamp, commit context, and aggregation docs in one aggregate."""
-    log_id = log_id or ObjectId()
-    return _run_prefetch(
-        collection,
-        PREFETCH_COMMIT_PIPELINE,
-        {
-            "logUser": user,
-            "msSinceStart": int(ms_since_start),
-            "logId": log_id,
-            "elapsed": 0,
-        },
-        user,
-        log_id,
-        session=session,
-    )
 
 
 def prefetch_for_log_ts(
