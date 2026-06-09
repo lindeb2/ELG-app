@@ -143,3 +143,41 @@ deactivate
 pip install pre-commit
 pre-commit install --hook-type commit-msg
 ```
+
+## 4. Project Layout
+
+```
+ELG-app/
+├── config.json          # Per-machine user identity (gitignored)
+├── src/                 # Application code (run from repo root with src on PYTHONPATH)
+├── scripts/             # Admin-only CLI tools
+├── tools/               # Dev-only utilities
+└── docs/                # Design notes and diagrams
+```
+
+### Run applications
+
+From the repo root (with venv active):
+
+```bash
+python src/Timetable.py
+python src/meeting_app.py
+python src/meeting_point_manager.py
+python src/stats_viewer.py
+```
+
+Or set `PYTHONPATH=src` (Windows: `set PYTHONPATH=src`) if you prefer running modules by name.
+
+### Admin scripts
+
+```bash
+python scripts/db_init.py
+python scripts/recalculate_all.py
+```
+
+### Dev tools
+
+```bash
+python tools/test_commit.py
+python tools/callgraph/static_callgraph_generator.py
+```

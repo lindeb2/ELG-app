@@ -1,5 +1,6 @@
 import customtkinter as ctk
 import datetime
+import os
 from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
 from CtkSmartScrollableFrame import CtkSmartScrollableFrame
@@ -22,7 +23,8 @@ class MeetingPointManagerApp:
         self.root = root
         self.root.title("")
         self.root.geometry("200x170")
-        self.root.iconbitmap("Project Folder\ELG Studio 0.1_16_clean_big.ico")
+        icon_path = os.path.join(os.path.dirname(__file__), "ELG Studio 0.1_16_clean_big.ico")
+        self.root.iconbitmap(icon_path)
 
         # State variables
         self.in_edit_screen = False

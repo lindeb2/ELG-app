@@ -1,5 +1,10 @@
 import argparse
 import importlib
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "src"))
+
 from pycallgraph2 import PyCallGraph, Config, GlobbingFilter
 from pycallgraph2.output import GraphvizOutput
 

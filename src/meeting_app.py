@@ -1,6 +1,7 @@
 import customtkinter as ctk
 from pymongo import MongoClient, UpdateOne
 import datetime
+import os
 from datetime import timedelta
 import json
 import threading
@@ -52,7 +53,8 @@ ctk.set_appearance_mode("Dark")
 def _get_user_name():
     """Get user name from configfile"""
     try:
-        with open("config.json", "r") as f:
+        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.json")
+        with open(config_path, "r") as f:
             config = json.load(f)
             return config.get("user", "Unknown")
     except FileNotFoundError:

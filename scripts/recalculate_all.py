@@ -1,4 +1,10 @@
 """Admin-only: rebuild aggregations, streaks, and highscores from raw Timetable logs."""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import path_setup  # noqa: F401, E402
+
 from aggregation_rebuild import rebuild_all_aggregations
 from highscore_commit import rebuild_highscores_from_logs
 from streak_recalculate import streaks_from_log_entries

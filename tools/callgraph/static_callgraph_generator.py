@@ -2,7 +2,7 @@ import pyan
 import glob
 import os
 
-PROJECT_PATH = r"C:\Users\Johan\Desktop\ELG-app\Project Folder"
+PROJECT_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 # - "dot" = GraphViz format (kräver GraphViz för att visa)
 # - "svg" = SVG bild (kräver GraphViz installerat)
@@ -37,7 +37,7 @@ callgraph = pyan.create_callgraph(
     grouped=GROUPED
 )
 file_extension = FORMAT if FORMAT != "dot" else "dot"
-output_path = os.path.join(PROJECT_PATH, f"callgraph.{file_extension}")
+output_path = os.path.join(os.path.dirname(__file__), f"callgraph.{file_extension}")
 with open(output_path, "w", encoding="utf-8") as f:
     f.write(callgraph)
 print(f"✓ Call graph saved as {output_path}")

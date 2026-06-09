@@ -5,6 +5,10 @@ import argparse
 import copy
 import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import path_setup  # noqa: F401, E402
 
 from commit_transaction import commit_log
 from timetable_db import aggregations, client, collection, user as config_user
