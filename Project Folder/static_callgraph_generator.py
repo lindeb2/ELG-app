@@ -2,7 +2,7 @@ import pyan
 import glob
 import os
 
-PROJECT_PATH = r"C:\Users\Johan\Desktop\Timetable\Project Folder"
+PROJECT_PATH = r"C:\Users\Johan\Desktop\ELG-app\Project Folder"
 
 # - "dot" = GraphViz format (kräver GraphViz för att visa)
 # - "svg" = SVG bild (kräver GraphViz installerat)
