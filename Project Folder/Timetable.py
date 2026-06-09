@@ -1,8 +1,9 @@
 import customtkinter as ctk
+import threading
 import time
-from datetime import datetime
-from log_commit import commit_log
-from timetable_db import aggregations, client, collection, user
+from datetime import datetime, timedelta, timezone
+from commit_transaction import CommitTransactionManager
+from timetable_db import aggregations, client, collection, db, user
 from utils import flash_error
 import requests
 
@@ -15,7 +16,7 @@ class TimetableApp(ctk.CTk):
         ctk.set_appearance_mode("Dark")
         self.title("Timetable")
         self.geometry("200x170")
-        self.local_start = None
+        self.local_start = self.log_ts = None
         self.elapsed_time = self._monotonic_anchor = 0.0
         self.running = False
 
@@ -34,7 +35,7 @@ class TimetableApp(ctk.CTk):
         self.toggle_run_button = ctk.CTkButton(self, text="Start", fg_color="#000000", hover_color="#121212", text_color="white", font=("Arial", 24), command=self.toggle_button)
         self.toggle_run_button.grid(row=0, column=0, sticky='nsew', padx=4, pady=4, columnspan=2)
 
-        self.done_button = ctk.CTkButton(self, text="Done", fg_color="#000000", hover_color="#121212", text_color="white", font=("Arial", 14), command=self.show_entry_overlay)
+        self.done_button = ctk.CTkButton(self, text="Done", fg_color="#000000", hover_color="#121212", text_color="white", font=("Arial", 14), command=self.show_entry_overlay, state="disabled")
 
         self.overlay_canvas = ctk.CTkFrame(self, corner_radius=0, fg_color="#2C2C2C")
         self.overlay_canvas.grid_rowconfigure([0, 1, 2], weight=1, uniform='a')
@@ -89,9 +90,9 @@ class TimetableApp(ctk.CTk):
             print(f"Failed to send notification: {e}")
 
     def toggle_button(self):
+        if self.log_ts is None:
+            threading.Thread(target=self.get_log_db_timestamp, name="get_log_db_timestamp", daemon=True).start()
         if not self.running:
-            if self.local_start is None:
-                self.local_start = time.perf_counter()
             self._monotonic_anchor = time.perf_counter()
             self.running = True
             self.update_timer()
@@ -103,6 +104,24 @@ class TimetableApp(ctk.CTk):
             self.time_label.configure(text=self.format_time(self.elapsed_time))
             self.done_button.grid(row=0, column=1, sticky='nsew', padx=4, pady=4)
             self.toggle_run_button.grid_configure(columnspan=1)
+
+    def get_log_db_timestamp(self):
+        """Sets self.log_ts."""
+        try:
+            t0 = time.perf_counter()
+            rows = list(db["Timetable"].aggregate([{"$project": {"server_time": "$$NOW"}}]))
+            t1 = time.perf_counter()
+            server_time = rows[0]["server_time"]
+            rtt = (t1 - t0) / 2
+            server_time -= timedelta(seconds=rtt)
+            if self.local_start is not None:
+                elapsed_local = t1 - self.local_start
+                server_time -= timedelta(seconds=elapsed_local)
+            self.log_ts = server_time
+            self.done_button.configure(state="normal")
+        except Exception as e:
+            if self.local_start == None:
+                self.local_start = t0
 
     def hide_done_button(self, text):
         self.toggle_run_button.configure(text=text, font=("Arial", 24))
