@@ -481,12 +481,17 @@ def update_highscores(
     user: str,
     timestamp: datetime,
     *,
+    highscores: dict | None = None,
+    user_agg: dict | None = None,
+    combined_agg: dict | None = None,
     session=None,
+    skip_write: bool = False,
 ) -> list[dict]:
     """Compare period totals from agg docs against peaks; one write; return broken records."""
     keys = period_keys(timestamp)
     date_str = format_date_str(timestamp)
-    highscores, user_agg, combined_agg = _fetch_agg_docs(aggregations, user, session)
+    if highscores is None or user_agg is None or combined_agg is None:
+        highscores, user_agg, combined_agg = _fetch_agg_docs(aggregations, user, session)
     period_stats = _period_stats(user_agg, combined_agg, keys)
 
     all_broken: list[dict] = []
@@ -504,7 +509,8 @@ def update_highscores(
         )
     )
 
-    aggregations.replace_one({"_id": "Highscores"}, highscores, upsert=True, session=session)
+    if not skip_write:
+        aggregations.replace_one({"_id": "Highscores"}, highscores, upsert=True, session=session)
     return all_broken
 
 

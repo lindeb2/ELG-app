@@ -2,7 +2,7 @@ import customtkinter as ctk
 import threading
 import time
 from datetime import datetime, timedelta, timezone
-from commit_transaction import CommitTransactionManager
+from commit_transaction import CommitTransactionManager, TXN_REFRESH_INTERVAL_MS
 from timetable_db import aggregations, client, collection, db, user
 from utils import flash_error
 import requests
@@ -19,6 +19,13 @@ class TimetableApp(ctk.CTk):
         self.local_start = self.log_ts = None
         self.elapsed_time = self._monotonic_anchor = 0.0
         self.running = False
+        self._commit_plan = None
+        self._commit_prepare_generation = 0
+        self._plan_refresh_job = None
+        self._prepare_retry_job = None
+        self._timestamp_capture_thread = None
+
+        self._commit_txn = CommitTransactionManager(collection, aggregations, client, user)
 
         self.name_var = ctk.StringVar()
         self.desc_var = ctk.StringVar()
@@ -138,53 +145,125 @@ class TimetableApp(ctk.CTk):
             delay = int(time_until_next_second * 1000)
             self.after(delay, self.update_timer)
 
+    def _cancel_commit_jobs(self):
+        if self._plan_refresh_job is not None:
+            self.after_cancel(self._plan_refresh_job)
+            self._plan_refresh_job = None
+        if self._prepare_retry_job is not None:
+            self.after_cancel(self._prepare_retry_job)
+            self._prepare_retry_job = None
+
+    def _clear_commit_state(self):
+        self._cancel_commit_jobs()
+        self._commit_txn.abort_async()
+        self._commit_plan = None
+        self.log_button.configure(state="disabled")
+
+    def _schedule_plan_refresh(self):
+        self._cancel_commit_jobs()
+        self._plan_refresh_job = self.after(
+            TXN_REFRESH_INTERVAL_MS, self._on_plan_refresh_due
+        )
+
+    def _on_plan_refresh_due(self):
+        self._plan_refresh_job = None
+        if self._commit_plan is None:
+            return
+        generation = self._commit_prepare_generation
+        log_ts = self.log_ts
+        elapsed = int(self.elapsed_time)
+        self._commit_txn.refresh_async(
+            log_ts,
+            elapsed,
+            on_ready=lambda plan, _changed: self.after(0, lambda: self._on_commit_plan_refreshed(plan, generation)),
+            on_error=lambda _exc: self.after(0, lambda: self._on_commit_refresh_failed(generation)),
+        )
+
+    def _on_commit_plan_refreshed(self, plan, generation):
+        if generation != self._commit_prepare_generation:
+            return
+        self._commit_plan = plan
+        self._schedule_plan_refresh()
+        self.validate_inputs()
+
+    def _on_commit_refresh_failed(self, generation):
+        if generation != self._commit_prepare_generation:
+            return
+        self._prepare_retry_job = self.after(1000, self._on_plan_refresh_due)
+
+    def _start_prepare_commit(self):
+        self._commit_prepare_generation += 1
+        generation = self._commit_prepare_generation
+        log_ts = self.log_ts
+        elapsed = int(self.elapsed_time)
+        self.log_button.configure(state="disabled")
+
+        self._commit_txn.begin_async(
+            log_ts,
+            elapsed,
+            on_ready=lambda plan: self.after(0, lambda: self._on_commit_plan_ready(plan, generation)),
+            on_error=lambda _exc: self.after(0, lambda: self._on_commit_prepare_failed(generation)),
+        )
+
+    def _on_commit_plan_ready(self, plan, generation):
+        if generation != self._commit_prepare_generation:
+            return
+        self._commit_plan = plan
+        self._schedule_plan_refresh()
+        self.validate_inputs()
+
+    def _on_commit_prepare_failed(self, generation):
+        if generation != self._commit_prepare_generation:
+            return
+        self._prepare_retry_job = self.after(1000, self._start_prepare_commit)
+
     def submit_entry(self):
-        ms_since_local_start = int((time.perf_counter() - self.local_start) * 1000)
-        try:
-            timestamp, broken_records = commit_log(
-                collection,
-                aggregations,
-                client,
-                name=self.name_var.get().strip(),
-                user=user,
-                description=self.desc_var.get().strip(),
-                elapsed_time=int(self.elapsed_time),
-                ms_since_local_start=ms_since_local_start,
+        self.log_button.configure(state="disabled")
+        self._commit_txn.finalize_async(
+            self.name_var.get().strip(),
+            self.desc_var.get().strip(),
+            on_success=lambda ts, broken: self.after(0, lambda: self._on_commit_success(ts, broken)),
+            on_error=lambda _exc: self.after(0, lambda: self._on_commit_finalize_failed()),
+        )
+
+    def _on_commit_finalize_failed(self):
+        flash_error(self.log_button)
+        self.validate_inputs()
+
+    def _on_commit_success(self, timestamp, broken_records):
+        if broken_records:
+            global_records = [r for r in broken_records if r["old_record"]["scope"] == "global"]
+            personal_records = [r for r in broken_records if r["old_record"]["scope"] == "personal"]
+            combined_records = [r for r in broken_records if r["old_record"]["scope"] == "combined"]
+            message = self.create_broken_records_notification(
+                user, global_records, personal_records, combined_records
             )
+            self.send_notification(message)
 
-            if broken_records:
-                global_records = [r for r in broken_records if r["old_record"]["scope"] == "global"]
-                personal_records = [r for r in broken_records if r["old_record"]["scope"] == "personal"]
-                combined_records = [r for r in broken_records if r["old_record"]["scope"] == "combined"]
-                message = self.create_broken_records_notification(
-                    user, global_records, personal_records, combined_records
-                )
-                self.send_notification(message)
-
-            self.local_start = None
-            self.elapsed_time = 0.0
-            self.time_label.configure(text="00:00")
-            self.hide_done_button("Start")
-            self.name_var.set("")
-            self.desc_var.set("")
-
-            self.overlay_canvas.grid_forget()
-
-        except Exception as e:
-            flash_error(self.log_button)
-
-    def continue_timer(self):
-        self.toggle_button()
+        self._cancel_commit_jobs()
+        self.log_ts = self.local_start = self._commit_plan = None
+        self.elapsed_time = 0.0
+        self.time_label.configure(text="00:00")
+        self.hide_done_button("Start")
+        self.done_button.configure(state="disabled")
+        self.name_var.set("")
+        self.desc_var.set("")
         self.overlay_canvas.grid_forget()
 
+    def continue_timer(self):
+        self._clear_commit_state()
+        self.overlay_canvas.grid_forget()
+        self.toggle_button()
+
     def validate_inputs(self, *args):
-        if self.name_var.get().strip() and self.desc_var.get().strip():
+        if self._commit_plan and self.name_var.get().strip() and self.desc_var.get().strip():
             self.log_button.configure(state="normal")
         else:
             self.log_button.configure(state="disabled")
 
     def show_entry_overlay(self):
         self.overlay_canvas.grid(row=0, column=0, sticky="nsew", columnspan=2, rowspan=2)
+        self._start_prepare_commit()
 
     def days_since_record(self, old_date_str):
         """
