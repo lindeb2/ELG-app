@@ -8,7 +8,7 @@ from datetime import datetime
 from bson import ObjectId
 from pymongo.collection import Collection
 
-from commit_context_local import build_commit_context, project_agg_after_commit
+from commit_context_local import project_agg_after_commit
 from highscore_commit import update_highscores
 
 
@@ -40,7 +40,7 @@ def build_commit_plan(
     log_id = prefetch.get("logId") or ObjectId()
     log_ts = prefetch["logTs"]
     elapsed_time = int(elapsed_time)
-    user_ctx, combined_ctx = build_commit_context(prefetch)
+    user_ctx, combined_ctx = prefetch["user_ctx"], prefetch["combined_ctx"]
 
     projected_user = project_agg_after_commit(
         prefetch["user_agg"], user_ctx, elapsed_time

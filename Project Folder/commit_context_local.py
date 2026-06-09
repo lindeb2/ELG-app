@@ -1,12 +1,6 @@
 """Local commit context extraction and post-commit aggregation projection."""
 from __future__ import annotations
-
 from copy import deepcopy
-
-
-def build_commit_context(prefetch: dict) -> tuple[dict, dict]:
-    """Return user/combined context dicts for bucket pipeline let vars."""
-    return prefetch["user_ctx"], prefetch["combined_ctx"]
 
 
 def _activity_merge(existing: dict, active_inc: int, total_days: int, elapsed: int) -> dict:
