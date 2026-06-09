@@ -14,11 +14,6 @@ from commit_pipeline import (
 )
 from highscore_commit import update_highscores
 
-try:
-    from atlas_commit import atlas_commit_settings
-except ImportError:
-    atlas_commit_settings = None
-
 
 def _fetch_commit_context(
     collection: Collection,
@@ -64,7 +59,7 @@ def _apply_bucket_updates(
     )
 
 
-def _commit_log_local(
+def commit_log(
     collection: Collection,
     aggregations: Collection,
     client,
@@ -75,6 +70,7 @@ def _commit_log_local(
     elapsed_time: int,
     ms_since_local_start: int,
 ) -> tuple[datetime, list[dict]]:
+    """Insert log, apply aggregation updates, and refresh highscores in one transaction."""
     new_id = ObjectId()
     elapsed_time = int(elapsed_time)
 
@@ -126,34 +122,3 @@ def _commit_log_local(
 
     with client.start_session() as session:
         return session.with_transaction(callback)
-
-
-def commit_log(
-    collection: Collection,
-    aggregations: Collection,
-    client,
-    *,
-    name: str,
-    user: str,
-    description: str,
-    elapsed_time: int,
-    ms_since_local_start: int,
-) -> tuple[datetime, list[dict]]:
-    """Insert log, apply aggregation updates, and refresh highscores.
-
-    Uses local PyMongo ``with_transaction``. If ``atlas_commit.enabled`` is true in
-    config.json, raises with guidance (App Services HTTPS endpoints — EOL Sep 2025).
-    """
-    if atlas_commit_settings is not None:
-        atlas_commit_settings()
-
-    return _commit_log_local(
-        collection,
-        aggregations,
-        client,
-        name=name,
-        user=user,
-        description=description,
-        elapsed_time=elapsed_time,
-        ms_since_local_start=ms_since_local_start,
-    )
