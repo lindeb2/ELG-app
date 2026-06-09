@@ -1,0 +1,7 @@
+{
+  "user": "YourUsername",
+  "atlas_commit": {
+    "enabled": false,
+    "_note": "App Services HTTPS endpoints were deprecated (EOL Sep 2025). Leave enabled false and use local PyMongo via log_commit.commit_log()."
+  }
+}
