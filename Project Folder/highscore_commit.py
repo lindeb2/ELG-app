@@ -7,8 +7,21 @@ from datetime import datetime
 
 from pymongo.collection import Collection
 
-from highscore_pipeline import HIGHSCORE_FETCH_PIPELINE
 from period_model import PeriodKeys, format_date_str, period_keys, total_days_in_period
+
+_HIGHSCORE_FETCH_PIPELINE = [
+    {
+        "$match": {
+            "$expr": {"$in": ["$_id", ["Highscores", "$$logUser", "Combined"]]},
+        }
+    },
+    {
+        "$group": {
+            "_id": None,
+            "docs": {"$push": {"k": "$_id", "v": "$$ROOT"}},
+        }
+    },
+]
 
 _PERIOD_TYPES = ("Year", "Month", "Week", "Day")
 _LIFETIME_TYPE = "Lifetime"
@@ -442,7 +455,7 @@ def _apply_consecutive_highscores(
 def _fetch_agg_docs(aggregations: Collection, user: str, session) -> tuple[dict, dict, dict]:
     rows = list(
         aggregations.aggregate(
-            HIGHSCORE_FETCH_PIPELINE,
+            _HIGHSCORE_FETCH_PIPELINE,
             let={"logUser": user},
             session=session,
         )

@@ -1,17 +1,79 @@
 """Single-round-trip prefetch for log commit (context + aggregation docs)."""
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from datetime import datetime
 
-from bson import ObjectId
+from bson import ObjectId, json_util
 from pymongo.collection import Collection
 
-from commit_pipeline import _context_facet_branch
 from highscore_commit import _default_highscores_doc, _ensure_scope_shape
-from period_model import period_key_set_stage, streak_key_set_stage
+from period_model import (
+    active_inc_expr,
+    period_key_set_stage,
+    prior_log_lookup_stage,
+    streak_key_set_stage,
+)
 
 AGGREGATIONS_COLLECTION = "Timetable Aggregations"
+
+_CONTEXT_PROJECT = {
+    "$project": {
+        "_id": 0,
+        "yearStr": 1,
+        "monthStr": 1,
+        "dayStr": 1,
+        "weekdayStr": 1,
+        "weekYearStr": 1,
+        "weekStr": 1,
+        "dayKey": 1,
+        "weekKey": 1,
+        "yesterdayDayKey": 1,
+        "priorWeekKey": 1,
+        "yearTotalDays": 1,
+        "monthTotalDays": 1,
+        "weekTotalDays": 1,
+        "yearActiveInc": 1,
+        "monthActiveInc": 1,
+        "weekActiveInc": 1,
+    }
+}
+
+
+def _lookups_and_activity_stages(*, filter_user: bool) -> list[dict]:
+    return [
+        prior_log_lookup_stage(
+            as_name="priorYear",
+            period_start="$yearStart",
+            period_end="$yearEnd",
+            filter_user=filter_user,
+        ),
+        prior_log_lookup_stage(
+            as_name="priorMonth",
+            period_start="$monthStart",
+            period_end="$monthEnd",
+            filter_user=filter_user,
+        ),
+        prior_log_lookup_stage(
+            as_name="priorWeek",
+            period_start="$weekStart",
+            period_end="$weekEnd",
+            filter_user=filter_user,
+        ),
+        {
+            "$set": {
+                "yearActiveInc": active_inc_expr("$priorYear"),
+                "monthActiveInc": active_inc_expr("$priorMonth"),
+                "weekActiveInc": active_inc_expr("$priorWeek"),
+            }
+        },
+    ]
+
+
+def _context_facet_branch(*, filter_user: bool) -> list[dict]:
+    return _lookups_and_activity_stages(filter_user=filter_user) + [_CONTEXT_PROJECT]
+
 
 _PREFETCH_TAIL = [
     period_key_set_stage("$logTs"),
@@ -70,6 +132,14 @@ PREFETCH_FOR_LOG_TS_PIPELINE = [
     },
     *_PREFETCH_TAIL,
 ]
+
+
+def prefetch_digest(prefetch: dict) -> str:
+    payload = {
+        k: prefetch[k]
+        for k in ("user_ctx", "combined_ctx", "user_agg", "combined_agg", "highscores")
+    }
+    return json.dumps(payload, default=json_util.default, sort_keys=True)
 
 
 def _normalize_highscores(highscores: dict | None, user: str) -> dict:

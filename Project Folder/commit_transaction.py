@@ -1,20 +1,18 @@
 """Open commit transaction at Done; write at Log Entry; retry on conflict."""
 from __future__ import annotations
 
-import json
 import queue
 import threading
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable
 
-from bson import ObjectId, json_util
+from bson import ObjectId
 from pymongo import ReplaceOne
 from pymongo.collection import Collection
 from pymongo.errors import OperationFailure, PyMongoError
 
-from commit_plan import CommitPlan, build_commit_plan
-from commit_prefetch import prefetch_for_log_ts
+from commit_plan import CommitPlan, build_plan_from_log_ts
 
 _MAX_COMMIT_RETRIES = 3
 
@@ -37,14 +35,6 @@ class OpenCommit:
     aggregations: Collection
 
 
-def _prefetch_digest(prefetch: dict) -> str:
-    payload = {
-        k: prefetch[k]
-        for k in ("user_ctx", "combined_ctx", "user_agg", "combined_agg", "highscores")
-    }
-    return json.dumps(payload, default=json_util.default, sort_keys=True)
-
-
 def _is_retryable_transaction_error(exc: Exception) -> bool:
     if isinstance(exc, OperationFailure) and exc.code == 112:
         return True
@@ -54,26 +44,6 @@ def _is_retryable_transaction_error(exc: Exception) -> bool:
             or exc.has_error_label("UnknownTransactionCommitResult")
         )
     return False
-
-
-def _prefetch_in_transaction(
-    collection: Collection,
-    user: str,
-    log_ts: datetime,
-    elapsed_time: int,
-    aggregations: Collection,
-    *,
-    session,
-    log_id: ObjectId | None = None,
-) -> tuple[CommitPlan, str]:
-    log_id = log_id or ObjectId()
-    prefetch = prefetch_for_log_ts(
-        collection, user, log_ts, log_id=log_id, session=session
-    )
-    plan = build_commit_plan(
-        prefetch, user, elapsed_time, aggregations=aggregations
-    )
-    return plan, _prefetch_digest(prefetch)
 
 
 def begin_commit(
@@ -91,12 +61,12 @@ def begin_commit(
     session = client.start_session()
     session.start_transaction()
     try:
-        plan, digest = _prefetch_in_transaction(
+        plan, digest = build_plan_from_log_ts(
             collection,
+            aggregations,
             user,
             log_ts,
             int(elapsed_time),
-            aggregations,
             session=session,
             log_id=log_id,
         )
@@ -176,12 +146,12 @@ def finalize_commit(
 
             session.abort_transaction()
             session.start_transaction()
-            new_plan, new_digest = _prefetch_in_transaction(
+            new_plan, new_digest = build_plan_from_log_ts(
                 open_commit.collection,
+                open_commit.aggregations,
                 open_commit.user,
                 open_commit.log_ts,
                 open_commit.elapsed_time,
-                open_commit.aggregations,
                 session=session,
                 log_id=open_commit.plan.log_id,
             )
