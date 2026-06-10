@@ -271,7 +271,7 @@ class TimetableApp(ctk.CTk):
         Calculate the number of days between the old record date and now.
 
         Args:
-            old_date: BSON datetime or legacy "YYYY-MM-DD HH:MM:SS" string, or None
+            old_date: BSON datetime when the record was set, or None
 
         Returns:
             int: Number of days since the old record, or 0 if no previous record

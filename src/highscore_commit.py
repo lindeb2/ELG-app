@@ -388,15 +388,8 @@ def _apply_period_highscores(
     return broken_records
 
 
-def _streak_gates_from_ctx(user_ctx: dict | None, combined_ctx: dict | None) -> dict[str, bool]:
+def _streak_gates_from_ctx(user_ctx: dict, combined_ctx: dict) -> dict[str, bool]:
     """Derive consecutive check gates from prefetch context."""
-    if user_ctx is None or combined_ctx is None:
-        return {
-            "user_day_gate": True,
-            "user_week_gate": True,
-            "combined_day_gate": True,
-            "combined_week_gate": True,
-        }
     return {
         "user_day_gate": int(user_ctx.get("yearActiveInc") or 0) == 1,
         "user_week_gate": int(user_ctx.get("weekActiveInc") or 0) == 1,
@@ -521,12 +514,12 @@ def update_highscores(
     aggregations: Collection,
     user: str,
     timestamp: datetime,
+    user_ctx: dict,
+    combined_ctx: dict,
     *,
     highscores: dict | None = None,
     user_agg: dict | None = None,
     combined_agg: dict | None = None,
-    user_ctx: dict | None = None,
-    combined_ctx: dict | None = None,
     session=None,
     skip_write: bool = False,
 ) -> list[dict]:

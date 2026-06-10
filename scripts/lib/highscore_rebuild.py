@@ -1,7 +1,6 @@
 """Admin-only: rebuild highscores from raw logs or explicit period totals."""
 from __future__ import annotations
 
-from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
@@ -10,17 +9,11 @@ from pymongo.collection import Collection
 from highscore_commit import (
     _apply_consecutive_highscores,
     _apply_period_highscores,
-    _bucket_doc,
     _default_highscores_doc,
-    _empty_combined_scope,
-    _empty_global_scope,
     _empty_user_highscores,
-    _ensure_scope_shape,
 )
 from period_model import PeriodKeys, day_key_from_dt, period_keys, to_local, total_days_in_period, week_key_from_dt
 from streak_model import project_streak
-
-_PERIOD_NAME = {"Year": "year", "Month": "month", "Week": "week", "Day": "day"}
 
 
 def _yesterday_day_key(dt: datetime) -> str:
@@ -69,77 +62,6 @@ class _StreakReplay:
                 "weeks": {"current": self.week_current},
             }
         }
-
-
-def update_highscore(
-    user: str,
-    time_type: str,
-    time_value: int,
-    record_ts: datetime,
-    aggregations: Collection,
-    *,
-    is_global: bool = False,
-    activity_data: dict | None = None,
-) -> list[dict]:
-    """Admin/recalculate path: update one period from explicit totals."""
-    highscores = aggregations.find_one({"_id": "Highscores"})
-    if not highscores:
-        highscores = _default_highscores_doc(user)
-    else:
-        highscores = deepcopy(highscores)
-        if user not in highscores:
-            highscores[user] = _empty_user_highscores()
-        else:
-            _ensure_scope_shape(highscores[user], global_scope=False)
-    _ensure_scope_shape(highscores.setdefault("Global", _empty_global_scope()), global_scope=True)
-    _ensure_scope_shape(highscores.setdefault("Combined", _empty_combined_scope()), global_scope=False)
-
-    keys = period_keys(record_ts)
-    combined_bucket = _bucket_doc(
-        aggregations.find_one({"_id": "Combined"}) or {},
-        keys,
-        _PERIOD_NAME[time_type],
-    )
-    combined_activity = None
-    if time_type != "Day":
-        combined_activity = {
-            "active_days": int(combined_bucket.get("active_days") or 0),
-            "total_days": int(combined_bucket.get("total_days") or 0),
-            "activity_ratio": float(combined_bucket.get("activity_ratio") or 0),
-        }
-
-    stats = {
-        "user_time": int(time_value),
-        "combined_time": int(combined_bucket.get("time") or 0) if is_global else 0,
-        "user_activity": activity_data,
-        "combined_activity": combined_activity if is_global else None,
-    }
-
-    broken = _apply_period_highscores(
-        highscores,
-        user,
-        record_ts,
-        time_type,
-        stats,
-        global_scope=is_global,
-        combined_scope=is_global,
-    )
-    if is_global:
-        user_agg = aggregations.find_one({"_id": user}) or {}
-        combined_agg = aggregations.find_one({"_id": "Combined"}) or {}
-        broken.extend(
-            _apply_consecutive_highscores(
-                highscores,
-                user,
-                record_ts,
-                user_agg,
-                combined_agg,
-                global_scope=True,
-                combined_scope=True,
-            )
-        )
-    aggregations.replace_one({"_id": "Highscores"}, highscores, upsert=True)
-    return broken
 
 
 @dataclass

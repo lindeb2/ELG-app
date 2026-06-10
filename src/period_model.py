@@ -82,11 +82,9 @@ def format_date_str(dt: datetime) -> str:
 
 
 def format_highscore_date(value) -> str:
-    """Accept BSON datetime or legacy string; return display string."""
+    """Format a highscore BSON date for display."""
     if value is None:
         return ""
-    if isinstance(value, str):
-        return value
     if isinstance(value, datetime):
         return format_date_str(value)
     return str(value)
@@ -94,12 +92,8 @@ def format_highscore_date(value) -> str:
 
 def coerce_highscore_datetime(value) -> datetime | None:
     """Normalize highscore date field to datetime for comparisons."""
-    if value is None:
-        return None
     if isinstance(value, datetime):
         return value
-    if isinstance(value, str):
-        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
     return None
 
 
@@ -309,26 +303,8 @@ def streak_key_set_stage() -> dict:
     }
     return {
         "$set": {
-            "dayKey": {"$concat": ["$yearStr", "-", "$monthStr", "-", "$dayStr"]},
-            "weekKey": {"$concat": ["$weekYearStr", "-W", "$weekStr"]},
-            "yesterdayDayKey": _date_to_string("%Y-%m-%d", yesterday_start),
             "yesterdayStart": yesterday_start,
             "priorWeekStart": prior_week_start,
-            "priorWeekKey": {
-                "$concat": [
-                    {
-                        "$toString": {
-                            "$isoWeekYear": {"date": prior_week_start, "timezone": APP_TIMEZONE},
-                        }
-                    },
-                    "-W",
-                    {
-                        "$toString": {
-                            "$isoWeek": {"date": prior_week_start, "timezone": APP_TIMEZONE},
-                        }
-                    },
-                ]
-            },
         }
     }
 

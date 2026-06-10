@@ -155,11 +155,11 @@ def build_commit_plan(
         aggregations,
         user,
         log_ts,
+        user_ctx,
+        combined_ctx,
         highscores=highscores,
         user_agg=projected_user,
         combined_agg=projected_combined,
-        user_ctx=user_ctx,
-        combined_ctx=combined_ctx,
         skip_write=True,
     )
 
