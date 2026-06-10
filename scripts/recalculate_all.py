@@ -2,14 +2,13 @@
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import path_setup  # noqa: F401, E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _bootstrap  # noqa: F401, E402
 
 from aggregation_rebuild import rebuild_all_aggregations
-from highscore_commit import rebuild_highscores_from_logs
+from highscore_rebuild import rebuild_highscores_from_logs
 from streak_recalculate import streaks_from_log_entries
 from timetable_db import aggregations, collection
-
 
 def _reset_aggregation_docs() -> None:
     for user_id in collection.distinct("user"):

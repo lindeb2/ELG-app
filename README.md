@@ -149,8 +149,9 @@ pre-commit install --hook-type commit-msg
 ```
 ELG-app/
 ├── config.json          # Per-machine user identity (gitignored)
-├── src/                 # Application code (run from repo root with src on PYTHONPATH)
-├── scripts/             # Admin-only CLI tools
+├── src/                 # Application code loaded at runtime
+├── scripts/             # Admin-only CLI entry points
+│   └── lib/             # Admin-only rebuild logic (not imported by src/)
 ├── tools/               # Dev-only utilities
 └── docs/                # Design notes and diagrams
 ```

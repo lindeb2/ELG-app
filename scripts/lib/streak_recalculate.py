@@ -1,8 +1,6 @@
 """Rebuild streak fields on aggregation docs from raw logs."""
 from __future__ import annotations
-
 from datetime import datetime
-
 from period_model import day_key_from_dt, week_key_from_dt
 
 def _parse_day_key(day_key: str) -> datetime:
