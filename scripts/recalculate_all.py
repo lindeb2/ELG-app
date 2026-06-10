@@ -2,7 +2,7 @@
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 import _bootstrap  # noqa: F401, E402
 
 from aggregation_rebuild import rebuild_all_aggregations
