@@ -4,6 +4,7 @@ from pymongo.server_api import ServerApi
 import os
 import json
 from CtkSmartScrollableFrame import CtkSmartScrollableFrame
+from period_model import format_highscore_date
 
 # MongoDB connection
 client = MongoClient(
@@ -307,7 +308,7 @@ class StatsViewer(ctk.CTk):
                     time_value.grid(row=0, column=1, sticky="w", padx=10)
                     
                     if records[time_type]["time"]["date"]:
-                        date_text = f"Set on: {records[time_type]['time']['date']}"
+                        date_text = f"Set on: {format_highscore_date(records[time_type]['time']['date'])}"
                         record_user = records[time_type]["time"].get("user")
                         if is_global and record_user:
                             date_text += f" by {record_user}"
@@ -342,7 +343,7 @@ class StatsViewer(ctk.CTk):
                     activity_value.grid(row=0, column=1, sticky="w", padx=10)
                     
                     if records[time_type]["activity"]["date"]:
-                        date_text = f"Set on: {records[time_type]['activity']['date']}"
+                        date_text = f"Set on: {format_highscore_date(records[time_type]['activity']['date'])}"
                         record_user = records[time_type]["activity"].get("user")
                         if is_global and record_user:
                             date_text += f" by {record_user}"
@@ -390,7 +391,7 @@ class StatsViewer(ctk.CTk):
                 ).grid(row=0, column=1, sticky="w", padx=10)
 
                 if streak.get("date"):
-                    date_text = f"Set on: {streak['date']}"
+                    date_text = f"Set on: {format_highscore_date(streak['date'])}"
                     record_user = streak.get("user")
                     if is_global and record_user:
                         date_text += f" by {record_user}"

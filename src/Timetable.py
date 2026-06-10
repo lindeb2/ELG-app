@@ -3,6 +3,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from commit_transaction import CommitTransactionManager, TXN_REFRESH_INTERVAL_MS
+from period_model import coerce_highscore_datetime
 from timetable_db import aggregations, client, collection, db, user
 from utils import flash_error
 import requests
@@ -265,23 +266,22 @@ class TimetableApp(ctk.CTk):
         self.overlay_canvas.grid(row=0, column=0, sticky="nsew", columnspan=2, rowspan=2)
         self._start_prepare_commit()
 
-    def days_since_record(self, old_date_str):
+    def days_since_record(self, old_date):
         """
         Calculate the number of days between the old record date and now.
 
         Args:
-            old_date_str (str): Date string in format "YYYY-MM-DD HH:MM:SS" or None
+            old_date: BSON datetime or legacy "YYYY-MM-DD HH:MM:SS" string, or None
 
         Returns:
             int: Number of days since the old record, or 0 if no previous record
         """
-        if old_date_str is None:
+        parsed = coerce_highscore_datetime(old_date)
+        if parsed is None:
             return 0
-
-        old_date = datetime.strptime(old_date_str, "%Y-%m-%d %H:%M:%S")
-        current_date = datetime.now()
-        delta = current_date - old_date
-        return delta.days
+        if parsed.tzinfo is not None:
+            parsed = parsed.replace(tzinfo=None)
+        return (datetime.now() - parsed).days
 
     def format_record_message(self, record_pair, days):
         """

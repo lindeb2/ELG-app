@@ -81,6 +81,28 @@ def format_date_str(dt: datetime) -> str:
     return to_local(dt).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def format_highscore_date(value) -> str:
+    """Accept BSON datetime or legacy string; return display string."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, datetime):
+        return format_date_str(value)
+    return str(value)
+
+
+def coerce_highscore_datetime(value) -> datetime | None:
+    """Normalize highscore date field to datetime for comparisons."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+    return None
+
+
 # --- MongoDB aggregation expression helpers (commit pipeline SSOT) ---
 
 def period_group_id(period: str) -> dict:
@@ -207,19 +229,91 @@ def active_inc_expr(prior_array: str) -> dict:
     return {"$cond": [{"$eq": [{"$size": prior_array}, 0]}, 1, 0]}
 
 
+def had_activity_expr(prior_array: str) -> dict:
+    return {"$gt": [{"$size": prior_array}, 0]}
+
+
+def prior_day_activity_lookup_stage(
+    *,
+    as_name: str,
+    filter_user: bool,
+    logs_collection: str = "Timetable",
+) -> dict:
+    """$lookup: any log on yesterday's local calendar day (excludes logId)."""
+    match_conditions = [
+        {"$ne": ["$_id", "$$logId"]},
+        {"$eq": [_trunc("day", "$timestamp"), "$$yesterdayStart"]},
+    ]
+    if filter_user:
+        match_conditions.append({"$eq": ["$user", "$$logUser"]})
+
+    return {
+        "$lookup": {
+            "from": logs_collection,
+            "let": {
+                "yesterdayStart": "$yesterdayStart",
+                "logId": "$logId",
+                "logUser": "$logUser",
+            },
+            "pipeline": [
+                {"$match": {"$expr": {"$and": match_conditions}}},
+                {"$limit": 1},
+                {"$project": {"_id": 1}},
+            ],
+            "as": as_name,
+        }
+    }
+
+
+def prior_week_activity_lookup_stage(
+    *,
+    as_name: str,
+    filter_user: bool,
+    logs_collection: str = "Timetable",
+) -> dict:
+    """$lookup: any log in the prior ISO week (excludes logId)."""
+    match_conditions = [
+        {"$ne": ["$_id", "$$logId"]},
+        {"$gte": ["$timestamp", "$$priorWeekStart"]},
+        {"$lt": ["$timestamp", "$$weekStart"]},
+    ]
+    if filter_user:
+        match_conditions.append({"$eq": ["$user", "$$logUser"]})
+
+    return {
+        "$lookup": {
+            "from": logs_collection,
+            "let": {
+                "priorWeekStart": "$priorWeekStart",
+                "weekStart": "$weekStart",
+                "logId": "$logId",
+                "logUser": "$logUser",
+            },
+            "pipeline": [
+                {"$match": {"$expr": {"$and": match_conditions}}},
+                {"$limit": 1},
+                {"$project": {"_id": 1}},
+            ],
+            "as": as_name,
+        }
+    }
+
+
 def streak_key_set_stage() -> dict:
-    """$set stage: local day/week keys and prior period keys for streak updates."""
+    """$set stage: local day/week keys and prior period bounds for streak updates."""
     prior_week_start = {
         "$dateSubtract": {"startDate": "$weekStart", "unit": "day", "amount": 7},
+    }
+    yesterday_start = {
+        "$dateSubtract": {"startDate": "$dayStart", "unit": "day", "amount": 1},
     }
     return {
         "$set": {
             "dayKey": {"$concat": ["$yearStr", "-", "$monthStr", "-", "$dayStr"]},
             "weekKey": {"$concat": ["$weekYearStr", "-W", "$weekStr"]},
-            "yesterdayDayKey": _date_to_string(
-                "%Y-%m-%d",
-                {"$dateSubtract": {"startDate": "$dayStart", "unit": "day", "amount": 1}},
-            ),
+            "yesterdayDayKey": _date_to_string("%Y-%m-%d", yesterday_start),
+            "yesterdayStart": yesterday_start,
+            "priorWeekStart": prior_week_start,
             "priorWeekKey": {
                 "$concat": [
                     {

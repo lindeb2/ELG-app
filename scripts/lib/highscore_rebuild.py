@@ -1,9 +1,12 @@
 """Admin-only: rebuild highscores from raw logs or explicit period totals."""
 from __future__ import annotations
+
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
+
 from pymongo.collection import Collection
+
 from highscore_commit import (
     _apply_consecutive_highscores,
     _apply_period_highscores,
@@ -14,16 +17,65 @@ from highscore_commit import (
     _empty_user_highscores,
     _ensure_scope_shape,
 )
-from period_model import PeriodKeys, format_date_str, period_keys, total_days_in_period
+from period_model import PeriodKeys, day_key_from_dt, period_keys, to_local, total_days_in_period, week_key_from_dt
+from streak_model import project_streak
 
 _PERIOD_NAME = {"Year": "year", "Month": "month", "Week": "week", "Day": "day"}
+
+
+def _yesterday_day_key(dt: datetime) -> str:
+    return (to_local(dt) - timedelta(days=1)).strftime("%Y-%m-%d")
+
+
+def _prior_week_key(dt: datetime) -> str:
+    return week_key_from_dt(to_local(dt) - timedelta(days=7))
+
+
+@dataclass
+class _StreakReplay:
+    day_current: int = 0
+    week_current: int = 0
+    active_days: set[str] = field(default_factory=set)
+    active_weeks: set[str] = field(default_factory=set)
+
+    def apply_log(self, dt: datetime) -> tuple[bool, bool]:
+        """Update running streak; return (day_gate, week_gate) for this log."""
+        day_key = day_key_from_dt(dt)
+        week_key = week_key_from_dt(dt)
+        day_gate = day_key not in self.active_days
+        week_gate = week_key not in self.active_weeks
+
+        self.day_current = project_streak(
+            self.day_current,
+            active_inc=1 if day_gate else 0,
+            prior_period_active=_yesterday_day_key(dt) in self.active_days,
+        )
+        self.week_current = project_streak(
+            self.week_current,
+            active_inc=1 if week_gate else 0,
+            prior_period_active=_prior_week_key(dt) in self.active_weeks,
+        )
+
+        if day_gate:
+            self.active_days.add(day_key)
+        if week_gate:
+            self.active_weeks.add(week_key)
+        return day_gate, week_gate
+
+    def as_agg(self) -> dict:
+        return {
+            "streaks": {
+                "days": {"current": self.day_current},
+                "weeks": {"current": self.week_current},
+            }
+        }
 
 
 def update_highscore(
     user: str,
     time_type: str,
     time_value: int,
-    date_str: str,
+    record_ts: datetime,
     aggregations: Collection,
     *,
     is_global: bool = False,
@@ -42,7 +94,7 @@ def update_highscore(
     _ensure_scope_shape(highscores.setdefault("Global", _empty_global_scope()), global_scope=True)
     _ensure_scope_shape(highscores.setdefault("Combined", _empty_combined_scope()), global_scope=False)
 
-    keys = period_keys(datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S"))
+    keys = period_keys(record_ts)
     combined_bucket = _bucket_doc(
         aggregations.find_one({"_id": "Combined"}) or {},
         keys,
@@ -66,7 +118,7 @@ def update_highscore(
     broken = _apply_period_highscores(
         highscores,
         user,
-        date_str,
+        record_ts,
         time_type,
         stats,
         global_scope=is_global,
@@ -79,7 +131,7 @@ def update_highscore(
             _apply_consecutive_highscores(
                 highscores,
                 user,
-                date_str,
+                record_ts,
                 user_agg,
                 combined_agg,
                 global_scope=True,
@@ -116,7 +168,7 @@ def _activity_data(active_days: set[str], total_days: int) -> dict:
 def _flush_user_period(
     highscores: dict,
     user: str,
-    date_str: str,
+    record_ts: datetime,
     time_type: str,
     totals: _PeriodTotals,
 ) -> None:
@@ -136,7 +188,7 @@ def _flush_user_period(
     _apply_period_highscores(
         highscores,
         user,
-        date_str,
+        record_ts,
         time_type,
         {
             "user_time": user_time,
@@ -152,7 +204,7 @@ def _flush_user_period(
 def _flush_combined_period(
     highscores: dict,
     anchor_user: str,
-    date_str: str,
+    record_ts: datetime,
     time_type: str,
     combined: _PeriodTotals,
 ) -> None:
@@ -178,7 +230,7 @@ def _flush_combined_period(
     _apply_period_highscores(
         highscores,
         anchor_user,
-        date_str,
+        record_ts,
         time_type,
         {
             "user_time": 0,
@@ -194,30 +246,30 @@ def _flush_combined_period(
 def _flush_user_periods(
     highscores: dict,
     user: str,
-    date_str: str,
+    record_ts: datetime,
     totals: _PeriodTotals,
     keys: PeriodKeys,
 ) -> None:
     if totals.year is not None and totals.year != keys.year:
-        _flush_user_period(highscores, user, date_str, "Year", totals)
+        _flush_user_period(highscores, user, record_ts, "Year", totals)
         totals.year = None
         totals.year_total = 0
         totals.year_active_days = set()
 
     if totals.month is not None and totals.month != (keys.year, keys.month):
-        _flush_user_period(highscores, user, date_str, "Month", totals)
+        _flush_user_period(highscores, user, record_ts, "Month", totals)
         totals.month = None
         totals.month_total = 0
         totals.month_active_days = set()
 
     if totals.week is not None and totals.week != (keys.iso_week_year, keys.iso_week):
-        _flush_user_period(highscores, user, date_str, "Week", totals)
+        _flush_user_period(highscores, user, record_ts, "Week", totals)
         totals.week = None
         totals.week_total = 0
         totals.week_active_days = set()
 
     if totals.day is not None and totals.day != (keys.year, keys.month, keys.day):
-        _flush_user_period(highscores, user, date_str, "Day", totals)
+        _flush_user_period(highscores, user, record_ts, "Day", totals)
         totals.day = None
         totals.day_total = 0
 
@@ -225,30 +277,30 @@ def _flush_user_periods(
 def _flush_combined_periods(
     highscores: dict,
     anchor_user: str,
-    date_str: str,
+    record_ts: datetime,
     combined: _PeriodTotals,
     keys: PeriodKeys,
 ) -> None:
     if combined.year is not None and combined.year != keys.year:
-        _flush_combined_period(highscores, anchor_user, date_str, "Year", combined)
+        _flush_combined_period(highscores, anchor_user, record_ts, "Year", combined)
         combined.year = None
         combined.year_total = 0
         combined.year_active_days = set()
 
     if combined.month is not None and combined.month != (keys.year, keys.month):
-        _flush_combined_period(highscores, anchor_user, date_str, "Month", combined)
+        _flush_combined_period(highscores, anchor_user, record_ts, "Month", combined)
         combined.month = None
         combined.month_total = 0
         combined.month_active_days = set()
 
     if combined.week is not None and combined.week != (keys.iso_week_year, keys.iso_week):
-        _flush_combined_period(highscores, anchor_user, date_str, "Week", combined)
+        _flush_combined_period(highscores, anchor_user, record_ts, "Week", combined)
         combined.week = None
         combined.week_total = 0
         combined.week_active_days = set()
 
     if combined.day is not None and combined.day != (keys.year, keys.month, keys.day):
-        _flush_combined_period(highscores, anchor_user, date_str, "Day", combined)
+        _flush_combined_period(highscores, anchor_user, record_ts, "Day", combined)
         combined.day = None
         combined.day_total = 0
 
@@ -289,33 +341,67 @@ def _accumulate_periods(totals: _PeriodTotals, keys: PeriodKeys, elapsed: int) -
 def _flush_open_user_periods(
     highscores: dict,
     user: str,
-    date_str: str,
+    record_ts: datetime,
     totals: _PeriodTotals,
 ) -> None:
     if totals.year is not None:
-        _flush_user_period(highscores, user, date_str, "Year", totals)
+        _flush_user_period(highscores, user, record_ts, "Year", totals)
     if totals.month is not None:
-        _flush_user_period(highscores, user, date_str, "Month", totals)
+        _flush_user_period(highscores, user, record_ts, "Month", totals)
     if totals.week is not None:
-        _flush_user_period(highscores, user, date_str, "Week", totals)
+        _flush_user_period(highscores, user, record_ts, "Week", totals)
     if totals.day is not None:
-        _flush_user_period(highscores, user, date_str, "Day", totals)
+        _flush_user_period(highscores, user, record_ts, "Day", totals)
 
 
 def _flush_open_combined_periods(
     highscores: dict,
     anchor_user: str,
-    date_str: str,
+    record_ts: datetime,
     combined: _PeriodTotals,
 ) -> None:
     if combined.year is not None:
-        _flush_combined_period(highscores, anchor_user, date_str, "Year", combined)
+        _flush_combined_period(highscores, anchor_user, record_ts, "Year", combined)
     if combined.month is not None:
-        _flush_combined_period(highscores, anchor_user, date_str, "Month", combined)
+        _flush_combined_period(highscores, anchor_user, record_ts, "Month", combined)
     if combined.week is not None:
-        _flush_combined_period(highscores, anchor_user, date_str, "Week", combined)
+        _flush_combined_period(highscores, anchor_user, record_ts, "Week", combined)
     if combined.day is not None:
-        _flush_combined_period(highscores, anchor_user, date_str, "Day", combined)
+        _flush_combined_period(highscores, anchor_user, record_ts, "Day", combined)
+
+
+def _replay_consecutive_highscores(
+    highscores: dict,
+    entries: list[tuple[datetime, dict]],
+    log_users: list[str],
+) -> None:
+    """Replay logs chronologically to set consecutive peaks in highscores."""
+    user_streaks: dict[str, _StreakReplay] = {u: _StreakReplay() for u in log_users}
+    combined_streak = _StreakReplay()
+
+    for dt, entry in entries:
+        user = entry["user"]
+        if user not in user_streaks:
+            user_streaks[user] = _StreakReplay()
+            if user not in highscores:
+                highscores[user] = _empty_user_highscores()
+
+        user_day_gate, user_week_gate = user_streaks[user].apply_log(dt)
+        combined_day_gate, combined_week_gate = combined_streak.apply_log(dt)
+
+        _apply_consecutive_highscores(
+            highscores,
+            user,
+            dt,
+            user_streaks[user].as_agg(),
+            combined_streak.as_agg(),
+            user_day_gate=user_day_gate,
+            user_week_gate=user_week_gate,
+            combined_day_gate=combined_day_gate,
+            combined_week_gate=combined_week_gate,
+            global_scope=True,
+            combined_scope=True,
+        )
 
 
 def rebuild_highscores_from_logs(collection: Collection, aggregations: Collection) -> None:
@@ -334,7 +420,7 @@ def rebuild_highscores_from_logs(collection: Collection, aggregations: Collectio
 
     combined = _PeriodTotals()
     users = {user: _PeriodTotals() for user in log_users}
-    last_date_str = format_date_str(datetime.now())
+    last_ts = datetime.now()
 
     for dt, entry in entries:
         user = entry["user"]
@@ -342,32 +428,20 @@ def rebuild_highscores_from_logs(collection: Collection, aggregations: Collectio
             users[user] = _PeriodTotals()
             highscores[user] = _empty_user_highscores()
 
-        date_str = format_date_str(dt)
-        last_date_str = date_str
+        last_ts = dt
         keys = period_keys(dt)
         elapsed = int(entry["elapsed_time"])
 
-        _flush_combined_periods(highscores, anchor_user, date_str, combined, keys)
-        _flush_user_periods(highscores, user, date_str, users[user], keys)
+        _flush_combined_periods(highscores, anchor_user, dt, combined, keys)
+        _flush_user_periods(highscores, user, dt, users[user], keys)
 
         _accumulate_periods(combined, keys, elapsed)
         _accumulate_periods(users[user], keys, elapsed)
 
-    _flush_open_combined_periods(highscores, anchor_user, last_date_str, combined)
+    _flush_open_combined_periods(highscores, anchor_user, last_ts, combined)
     for user in log_users:
-        _flush_open_user_periods(highscores, user, last_date_str, users[user])
+        _flush_open_user_periods(highscores, user, last_ts, users[user])
 
-    for user in log_users:
-        user_agg = aggregations.find_one({"_id": user}) or {}
-        combined_agg = aggregations.find_one({"_id": "Combined"}) or {}
-        _apply_consecutive_highscores(
-            highscores,
-            user,
-            last_date_str,
-            user_agg,
-            combined_agg,
-            global_scope=True,
-            combined_scope=True,
-        )
+    _replay_consecutive_highscores(highscores, entries, log_users)
 
     aggregations.replace_one({"_id": "Highscores"}, highscores, upsert=True)

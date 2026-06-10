@@ -11,8 +11,11 @@ from pymongo.collection import Collection
 from highscore_commit import _default_highscores_doc, _ensure_scope_shape
 from period_model import (
     active_inc_expr,
+    had_activity_expr,
     period_key_set_stage,
+    prior_day_activity_lookup_stage,
     prior_log_lookup_stage,
+    prior_week_activity_lookup_stage,
     streak_key_set_stage,
 )
 
@@ -37,6 +40,8 @@ _CONTEXT_PROJECT = {
         "yearActiveInc": 1,
         "monthActiveInc": 1,
         "weekActiveInc": 1,
+        "hadActivityYesterday": 1,
+        "hadActivityPriorWeek": 1,
     }
 }
 
@@ -61,11 +66,21 @@ def _lookups_and_activity_stages(*, filter_user: bool) -> list[dict]:
             period_end="$weekEnd",
             filter_user=filter_user,
         ),
+        prior_day_activity_lookup_stage(
+            as_name="priorDayActivity",
+            filter_user=filter_user,
+        ),
+        prior_week_activity_lookup_stage(
+            as_name="priorWeekActivity",
+            filter_user=filter_user,
+        ),
         {
             "$set": {
                 "yearActiveInc": active_inc_expr("$priorYear"),
                 "monthActiveInc": active_inc_expr("$priorMonth"),
                 "weekActiveInc": active_inc_expr("$priorWeek"),
+                "hadActivityYesterday": had_activity_expr("$priorDayActivity"),
+                "hadActivityPriorWeek": had_activity_expr("$priorWeekActivity"),
             }
         },
     ]

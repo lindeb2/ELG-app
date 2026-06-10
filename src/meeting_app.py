@@ -21,7 +21,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError, NetworkTimeout, AutoReconnect
 from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
-from period_model import APP_TIMEZONE
+from period_model import APP_TIMEZONE, coerce_highscore_datetime, format_highscore_date
 
 # TODO: Set up color scheme or theme
 # Improvements: Sync, No-activity weeks, Dry Dropdown, server-side slide_5
@@ -1496,12 +1496,13 @@ class MeetingApp(ctk.CTk):
         # Track records found
         records_found = []
 
-        # Helper: check if a date string is in the current week
-        def is_in_current_week(date_str):
-            try:
-                dt = datetime.datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
-            except (ValueError, TypeError):
+        # Helper: check if a highscore date is in the current week
+        def is_in_current_week(date_value):
+            dt = coerce_highscore_datetime(date_value)
+            if dt is None:
                 return False
+            if dt.tzinfo is not None:
+                dt = dt.replace(tzinfo=None)
             return self.current_week_start <= dt < self.next_week_start
 
         # Check personal records
@@ -1641,7 +1642,10 @@ class MeetingApp(ctk.CTk):
                             "date": record["date"],
                         })
         # Sort records by date (newest first)
-        records_found.sort(key=lambda x: datetime.datetime.strptime(x["date"], "%Y-%m-%d %H:%M:%S"), reverse=True)
+        records_found.sort(
+            key=lambda x: coerce_highscore_datetime(x["date"]) or datetime.datetime.min,
+            reverse=True,
+        )
         # Display records
         if records_found:
             for record in records_found:
@@ -1667,7 +1671,7 @@ class MeetingApp(ctk.CTk):
                 # Date
                 date_label = ctk.CTkLabel(
                     record_frame,
-                    text=f"Set on: {record['date']}",
+                    text=f"Set on: {format_highscore_date(record['date'])}",
                     font=("Arial", 10),
                     text_color="#B0B0B0"
                 )

@@ -93,19 +93,20 @@ def _current_run_weeks(sorted_keys: list[str]) -> int:
 def streaks_from_day_keys(day_keys: set[str], week_keys: set[str]) -> dict:
     sorted_days = sorted(day_keys)
     sorted_weeks = _sort_week_keys(week_keys)
+    return {
+        "days": {"current": _current_run(sorted_days)},
+        "weeks": {"current": _current_run_weeks(sorted_weeks)},
+    }
+
+
+def peak_streaks_from_day_keys(day_keys: set[str], week_keys: set[str]) -> dict[str, int]:
+    sorted_days = sorted(day_keys)
+    sorted_weeks = _sort_week_keys(week_keys)
     day_current = _current_run(sorted_days)
     week_current = _current_run_weeks(sorted_weeks)
     return {
-        "days": {
-            "current": day_current,
-            "best": max(_best_run(sorted_days), day_current),
-            "last_active_day": sorted_days[-1] if sorted_days else None,
-        },
-        "weeks": {
-            "current": week_current,
-            "best": max(_best_run_weeks(sorted_weeks), week_current),
-            "last_active_week": sorted_weeks[-1] if sorted_weeks else None,
-        },
+        "days": max(_best_run(sorted_days), day_current),
+        "weeks": max(_best_run_weeks(sorted_weeks), week_current),
     }
 
 

@@ -10,6 +10,7 @@ from pymongo.collection import Collection
 
 from commit_prefetch import prefetch_digest, prefetch_for_log_ts
 from highscore_commit import update_highscores
+from streak_model import ctx_bool, project_streak
 
 
 @dataclass
@@ -37,52 +38,22 @@ def _activity_merge(existing: dict, active_inc: int, total_days: int, elapsed: i
 
 def _apply_streaks(agg: dict, ctx: dict) -> None:
     streaks = dict(agg.get("streaks") or {})
-    day_existing = dict(streaks.get("days") or {"current": 0, "best": 0, "last_active_day": None})
-    week_existing = dict(streaks.get("weeks") or {"current": 0, "best": 0, "last_active_week": None})
-
-    year_active_inc = int(ctx.get("yearActiveInc") or 0)
-    week_active_inc = int(ctx.get("weekActiveInc") or 0)
-
-    if year_active_inc == 0:
-        new_day_current = int(day_existing.get("current") or 0)
-        new_day_last = day_existing.get("last_active_day")
-    else:
-        last_day = day_existing.get("last_active_day")
-        day_key = ctx["dayKey"]
-        yesterday = ctx["yesterdayDayKey"]
-        if last_day == yesterday:
-            new_day_current = int(day_existing.get("current") or 0) + 1
-        elif last_day == day_key:
-            new_day_current = int(day_existing.get("current") or 0)
-        else:
-            new_day_current = 1
-        new_day_last = day_key
+    day_current = int((streaks.get("days") or {}).get("current") or 0)
+    week_current = int((streaks.get("weeks") or {}).get("current") or 0)
 
     streaks["days"] = {
-        "current": new_day_current,
-        "best": max(int(day_existing.get("best") or 0), new_day_current),
-        "last_active_day": new_day_last,
+        "current": project_streak(
+            day_current,
+            active_inc=int(ctx.get("yearActiveInc") or 0),
+            prior_period_active=ctx_bool(ctx.get("hadActivityYesterday")),
+        ),
     }
-
-    if week_active_inc == 0:
-        new_week_current = int(week_existing.get("current") or 0)
-        new_week_last = week_existing.get("last_active_week")
-    else:
-        last_week = week_existing.get("last_active_week")
-        week_key = ctx["weekKey"]
-        prior_week = ctx["priorWeekKey"]
-        if last_week == prior_week:
-            new_week_current = int(week_existing.get("current") or 0) + 1
-        elif last_week == week_key:
-            new_week_current = int(week_existing.get("current") or 0)
-        else:
-            new_week_current = 1
-        new_week_last = week_key
-
     streaks["weeks"] = {
-        "current": new_week_current,
-        "best": max(int(week_existing.get("best") or 0), new_week_current),
-        "last_active_week": new_week_last,
+        "current": project_streak(
+            week_current,
+            active_inc=int(ctx.get("weekActiveInc") or 0),
+            prior_period_active=ctx_bool(ctx.get("hadActivityPriorWeek")),
+        ),
     }
     agg["streaks"] = streaks
 
@@ -187,6 +158,8 @@ def build_commit_plan(
         highscores=highscores,
         user_agg=projected_user,
         combined_agg=projected_combined,
+        user_ctx=user_ctx,
+        combined_ctx=combined_ctx,
         skip_write=True,
     )
 
