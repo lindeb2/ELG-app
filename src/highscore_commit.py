@@ -206,6 +206,10 @@ def _broken_pair(
     return {"old_record": old_record, "new_record": new_record}
 
 
+def _record_highscore_set(set_ops: dict, scope_key: str, path: str, value: dict) -> None:
+    set_ops[f"{scope_key}.{path}"] = value
+
+
 def _apply_period_highscores(
     highscores: dict,
     user: str,
@@ -215,6 +219,7 @@ def _apply_period_highscores(
     *,
     global_scope: bool = True,
     combined_scope: bool = True,
+    set_ops: dict | None = None,
 ) -> list[dict]:
     broken_records: list[dict] = []
     user_time = stats["user_time"]
@@ -242,7 +247,10 @@ def _apply_period_highscores(
             highscores[user][time_type]["time"]["date"],
             record_ts,
         ))
-        highscores[user][time_type]["time"] = {"value": user_time, "date": record_ts}
+        new_time = {"value": user_time, "date": record_ts}
+        highscores[user][time_type]["time"] = new_time
+        if set_ops is not None:
+            _record_highscore_set(set_ops, user, f"{time_type}.time", new_time)
 
         if global_scope and user_time > highscores["Global"][time_type]["time"]["value"]:
             broken_records.append(_broken_pair(
@@ -265,11 +273,14 @@ def _apply_period_highscores(
                 record_ts,
                 highscores["Global"][time_type]["time"].get("user"),
             ))
-            highscores["Global"][time_type]["time"] = {
+            new_global_time = {
                 "value": user_time,
                 "date": record_ts,
                 "user": user,
             }
+            highscores["Global"][time_type]["time"] = new_global_time
+            if set_ops is not None:
+                _record_highscore_set(set_ops, "Global", f"{time_type}.time", new_global_time)
 
     if (
         user_activity
@@ -295,12 +306,15 @@ def _apply_period_highscores(
             highscores[user][time_type]["activity"]["date"],
             record_ts,
         ))
-        highscores[user][time_type]["activity"] = {
+        new_activity = {
             "value": user_activity["activity_ratio"],
             "active_days": user_activity["active_days"],
             "total_days": user_activity["total_days"],
             "date": record_ts,
         }
+        highscores[user][time_type]["activity"] = new_activity
+        if set_ops is not None:
+            _record_highscore_set(set_ops, user, f"{time_type}.activity", new_activity)
 
         if global_scope and user_activity["activity_ratio"] > highscores["Global"][time_type]["activity"]["value"]:
             broken_records.append(_broken_pair(
@@ -323,13 +337,18 @@ def _apply_period_highscores(
                 record_ts,
                 highscores["Global"][time_type]["activity"].get("user"),
             ))
-            highscores["Global"][time_type]["activity"] = {
+            new_global_activity = {
                 "value": user_activity["activity_ratio"],
                 "active_days": user_activity["active_days"],
                 "total_days": user_activity["total_days"],
                 "date": record_ts,
                 "user": user,
             }
+            highscores["Global"][time_type]["activity"] = new_global_activity
+            if set_ops is not None:
+                _record_highscore_set(
+                    set_ops, "Global", f"{time_type}.activity", new_global_activity
+                )
 
     if combined_scope and combined_time > highscores["Combined"][time_type]["time"]["value"]:
         broken_records.append(_broken_pair(
@@ -351,7 +370,10 @@ def _apply_period_highscores(
             highscores["Combined"][time_type]["time"]["date"],
             record_ts,
         ))
-        highscores["Combined"][time_type]["time"] = {"value": combined_time, "date": record_ts}
+        new_combined_time = {"value": combined_time, "date": record_ts}
+        highscores["Combined"][time_type]["time"] = new_combined_time
+        if set_ops is not None:
+            _record_highscore_set(set_ops, "Combined", f"{time_type}.time", new_combined_time)
 
     if (
         combined_scope
@@ -378,12 +400,17 @@ def _apply_period_highscores(
             highscores["Combined"][time_type]["activity"]["date"],
             record_ts,
         ))
-        highscores["Combined"][time_type]["activity"] = {
+        new_combined_activity = {
             "value": combined_activity["activity_ratio"],
             "active_days": combined_activity["active_days"],
             "total_days": combined_activity["total_days"],
             "date": record_ts,
         }
+        highscores["Combined"][time_type]["activity"] = new_combined_activity
+        if set_ops is not None:
+            _record_highscore_set(
+                set_ops, "Combined", f"{time_type}.activity", new_combined_activity
+            )
 
     return broken_records
 
@@ -411,6 +438,7 @@ def _apply_consecutive_highscores(
     combined_week_gate: bool = True,
     global_scope: bool = True,
     combined_scope: bool = True,
+    set_ops: dict | None = None,
 ) -> list[dict]:
     broken_records: list[dict] = []
     user_days = _current_streak_value(user_agg, "days")
@@ -433,10 +461,12 @@ def _apply_consecutive_highscores(
                 highscores[user]["consecutive"][streak_kind]["date"],
                 record_ts,
             ))
-            highscores[user]["consecutive"][streak_kind] = {
-                "value": user_value,
-                "date": record_ts,
-            }
+            new_user_streak = {"value": user_value, "date": record_ts}
+            highscores[user]["consecutive"][streak_kind] = new_user_streak
+            if set_ops is not None:
+                _record_highscore_set(
+                    set_ops, user, f"consecutive.{streak_kind}", new_user_streak
+                )
 
             if global_scope and user_value > _consecutive_value(highscores["Global"], streak_kind):
                 broken_records.append(_broken_pair(
@@ -449,11 +479,19 @@ def _apply_consecutive_highscores(
                     record_ts,
                     highscores["Global"]["consecutive"][streak_kind].get("user"),
                 ))
-                highscores["Global"]["consecutive"][streak_kind] = {
+                new_global_streak = {
                     "value": user_value,
                     "date": record_ts,
                     "user": user,
                 }
+                highscores["Global"]["consecutive"][streak_kind] = new_global_streak
+                if set_ops is not None:
+                    _record_highscore_set(
+                        set_ops,
+                        "Global",
+                        f"consecutive.{streak_kind}",
+                        new_global_streak,
+                    )
 
         if combined_scope and c_gate and combined_value > _consecutive_value(highscores["Combined"], streak_kind):
             broken_records.append(_broken_pair(
@@ -465,10 +503,15 @@ def _apply_consecutive_highscores(
                 highscores["Combined"]["consecutive"][streak_kind]["date"],
                 record_ts,
             ))
-            highscores["Combined"]["consecutive"][streak_kind] = {
-                "value": combined_value,
-                "date": record_ts,
-            }
+            new_combined_streak = {"value": combined_value, "date": record_ts}
+            highscores["Combined"]["consecutive"][streak_kind] = new_combined_streak
+            if set_ops is not None:
+                _record_highscore_set(
+                    set_ops,
+                    "Combined",
+                    f"consecutive.{streak_kind}",
+                    new_combined_streak,
+                )
 
     return broken_records
 
@@ -510,6 +553,52 @@ def _fetch_agg_docs(aggregations: Collection, user: str, session) -> tuple[dict,
     return highscores, user_agg, combined_agg
 
 
+def build_highscore_update_ops(
+    user: str,
+    timestamp: datetime,
+    user_ctx: dict,
+    combined_ctx: dict,
+    *,
+    highscores: dict,
+    user_agg: dict,
+    combined_agg: dict,
+) -> tuple[list[dict], dict]:
+    """Compare projected stats against peaks; return broken records and $set ops."""
+    keys = period_keys(timestamp)
+    period_stats = _period_stats(user_agg, combined_agg, keys)
+    gates = _streak_gates_from_ctx(user_ctx, combined_ctx)
+    set_ops: dict = {}
+
+    all_broken: list[dict] = []
+    for time_type in _PERIOD_TYPES:
+        all_broken.extend(
+            _apply_period_highscores(
+                highscores,
+                user,
+                timestamp,
+                time_type,
+                period_stats[time_type],
+                set_ops=set_ops,
+            )
+        )
+    all_broken.extend(
+        _apply_consecutive_highscores(
+            highscores,
+            user,
+            timestamp,
+            user_agg,
+            combined_agg,
+            set_ops=set_ops,
+            **gates,
+        )
+    )
+
+    update: dict = {}
+    if set_ops:
+        update["$set"] = set_ops
+    return all_broken, update
+
+
 def update_highscores(
     aggregations: Collection,
     user: str,
@@ -522,30 +611,35 @@ def update_highscores(
     combined_agg: dict | None = None,
     session=None,
     skip_write: bool = False,
-) -> list[dict]:
-    """Compare period totals from agg docs against peaks; one write; return broken records."""
-    keys = period_keys(timestamp)
+) -> list[dict] | tuple[list[dict], dict]:
+    """Compare period totals from agg docs against peaks; return broken records."""
     if highscores is None or user_agg is None or combined_agg is None:
         highscores, user_agg, combined_agg = _fetch_agg_docs(aggregations, user, session)
-    period_stats = _period_stats(user_agg, combined_agg, keys)
-    gates = _streak_gates_from_ctx(user_ctx, combined_ctx)
 
-    all_broken: list[dict] = []
-    for time_type in _PERIOD_TYPES:
-        all_broken.extend(
-            _apply_period_highscores(highscores, user, timestamp, time_type, period_stats[time_type])
-        )
-    all_broken.extend(
-        _apply_consecutive_highscores(
-            highscores,
-            user,
-            timestamp,
-            user_agg,
-            combined_agg,
-            **gates,
-        )
+    broken_records, update = build_highscore_update_ops(
+        user,
+        timestamp,
+        user_ctx,
+        combined_ctx,
+        highscores=highscores,
+        user_agg=user_agg,
+        combined_agg=combined_agg,
     )
 
     if not skip_write:
-        aggregations.replace_one({"_id": "Highscores"}, highscores, upsert=True, session=session)
-    return all_broken
+        if update:
+            aggregations.update_one(
+                {"_id": "Highscores"},
+                update,
+                upsert=True,
+                session=session,
+            )
+        else:
+            aggregations.update_one(
+                {"_id": "Highscores"},
+                {"$setOnInsert": {"_id": "Highscores"}},
+                upsert=True,
+                session=session,
+            )
+        return broken_records
+    return broken_records, update

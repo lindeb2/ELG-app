@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Callable
 
 from bson import ObjectId
-from pymongo import ReplaceOne
+from pymongo import UpdateOne
 from pymongo.collection import Collection
 from pymongo.errors import OperationFailure, PyMongoError
 
@@ -63,7 +63,6 @@ def begin_commit(
     try:
         plan, digest = build_plan_from_log_ts(
             collection,
-            aggregations,
             user,
             log_ts,
             int(elapsed_time),
@@ -107,9 +106,9 @@ def _write_plan(
     )
     open_commit.aggregations.bulk_write(
         [
-            ReplaceOne({"_id": user}, plan.user_agg, upsert=True),
-            ReplaceOne({"_id": "Combined"}, plan.combined_agg, upsert=True),
-            ReplaceOne({"_id": "Highscores"}, plan.highscores, upsert=True),
+            UpdateOne({"_id": user}, plan.user_agg_update, upsert=True),
+            UpdateOne({"_id": "Combined"}, plan.combined_agg_update, upsert=True),
+            UpdateOne({"_id": "Highscores"}, plan.highscore_update, upsert=True),
         ],
         session=open_commit.session,
     )
@@ -148,7 +147,6 @@ def finalize_commit(
             session.start_transaction()
             new_plan, new_digest = build_plan_from_log_ts(
                 open_commit.collection,
-                open_commit.aggregations,
                 open_commit.user,
                 open_commit.log_ts,
                 open_commit.elapsed_time,

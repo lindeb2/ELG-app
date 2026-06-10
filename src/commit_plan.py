@@ -1,15 +1,22 @@
-"""Commit plan: local aggregation projection and write-ready documents."""
+"""Commit plan: partial aggregation updates and write-ready MongoDB ops."""
 from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from bson import ObjectId
 from pymongo.collection import Collection
 
-from commit_prefetch import prefetch_digest, prefetch_for_log_ts
-from highscore_commit import update_highscores
+from commit_prefetch import (
+    agg_doc_to_slice,
+    highscores_slice_to_doc,
+    prefetch_digest,
+    prefetch_for_log_ts,
+    slice_to_agg_doc,
+)
+from highscore_commit import build_highscore_update_ops
 from streak_model import ctx_bool, project_streak
 
 
@@ -18,9 +25,9 @@ class CommitPlan:
     log_id: ObjectId
     log_ts: datetime
     elapsed_time: int
-    user_agg: dict
-    combined_agg: dict
-    highscores: dict
+    user_agg_update: dict[str, Any]
+    combined_agg_update: dict[str, Any]
+    highscore_update: dict[str, Any]
     broken_records: list
 
 
@@ -36,31 +43,30 @@ def _activity_merge(existing: dict, active_inc: int, total_days: int, elapsed: i
     return merged
 
 
-def _apply_streaks(agg: dict, ctx: dict) -> None:
-    streaks = dict(agg.get("streaks") or {})
+def _project_streaks(streaks: dict, ctx: dict) -> dict:
     day_current = int((streaks.get("days") or {}).get("current") or 0)
     week_current = int((streaks.get("weeks") or {}).get("current") or 0)
-
-    streaks["days"] = {
-        "current": project_streak(
-            day_current,
-            active_inc=int(ctx.get("yearActiveInc") or 0),
-            prior_period_active=ctx_bool(ctx.get("hadActivityYesterday")),
-        ),
+    return {
+        "days": {
+            "current": project_streak(
+                day_current,
+                active_inc=int(ctx.get("yearActiveInc") or 0),
+                prior_period_active=ctx_bool(ctx.get("hadActivityYesterday")),
+            ),
+        },
+        "weeks": {
+            "current": project_streak(
+                week_current,
+                active_inc=int(ctx.get("weekActiveInc") or 0),
+                prior_period_active=ctx_bool(ctx.get("hadActivityPriorWeek")),
+            ),
+        },
     }
-    streaks["weeks"] = {
-        "current": project_streak(
-            week_current,
-            active_inc=int(ctx.get("weekActiveInc") or 0),
-            prior_period_active=ctx_bool(ctx.get("hadActivityPriorWeek")),
-        ),
-    }
-    agg["streaks"] = streaks
 
 
-def project_agg_after_commit(agg_doc: dict, ctx: dict, elapsed: int) -> dict:
-    """Project aggregation document state after applying this log entry."""
-    agg = deepcopy(agg_doc or {})
+def project_agg_from_slice(slice: dict, ctx: dict, elapsed: int) -> dict:
+    """Project full aggregation document from a slice after applying this log entry."""
+    agg = deepcopy(slice_to_agg_doc(slice, ctx))
     elapsed = int(elapsed)
     years = dict(agg.get("years") or {})
 
@@ -121,13 +127,77 @@ def project_agg_after_commit(agg_doc: dict, ctx: dict, elapsed: int) -> dict:
     years[week_year_str] = week_year_existing
 
     agg["years"] = years
-    _apply_streaks(agg, ctx)
+    agg["streaks"] = _project_streaks(agg.get("streaks") or {}, ctx)
     return agg
 
 
-def _agg_doc_with_id(doc: dict, doc_id) -> dict:
-    result = deepcopy(doc)
-    result["_id"] = doc_id
+def project_agg_after_commit(agg_doc: dict, ctx: dict, elapsed: int) -> dict:
+    """Project full aggregation document state after applying this log entry."""
+    return project_agg_from_slice(agg_doc_to_slice(agg_doc, ctx), ctx, elapsed)
+
+
+def build_agg_update_ops(ctx: dict, elapsed: int, slice: dict) -> dict[str, Any]:
+    """Build a MongoDB update document ($inc/$set) for one aggregation doc."""
+    elapsed = int(elapsed)
+    year_str = ctx["yearStr"]
+    month_str = ctx["monthStr"]
+    day_str = ctx["dayStr"]
+    week_year_str = ctx["weekYearStr"]
+    week_str = ctx["weekStr"]
+    weekday_str = ctx["weekdayStr"]
+
+    year_active_inc = int(ctx.get("yearActiveInc") or 0)
+    month_active_inc = int(ctx.get("monthActiveInc") or 0)
+    week_active_inc = int(ctx.get("weekActiveInc") or 0)
+    year_total_days = int(ctx.get("yearTotalDays") or 0)
+    month_total_days = int(ctx.get("monthTotalDays") or 0)
+    week_total_days = int(ctx.get("weekTotalDays") or 0)
+
+    year_bucket = slice.get("year_bucket") or {}
+    week_bucket = slice.get("week_bucket") or {}
+    streaks = slice.get("streaks") or {}
+
+    year_merged = _activity_merge(year_bucket, year_active_inc, year_total_days, elapsed)
+    month_existing = ((year_bucket.get("months") or {}).get(month_str) or {})
+    month_merged = _activity_merge(month_existing, month_active_inc, month_total_days, elapsed)
+    week_merged = _activity_merge(week_bucket, week_active_inc, week_total_days, elapsed)
+    projected_streaks = _project_streaks(streaks, ctx)
+
+    inc: dict[str, int] = {}
+    set_fields: dict[str, Any] = {}
+
+    def add_activity_paths(prefix: str, merged: dict, active_inc: int) -> None:
+        inc[f"{prefix}.time"] = elapsed
+        if active_inc:
+            inc[f"{prefix}.active_days"] = active_inc
+        set_fields[f"{prefix}.total_days"] = merged["total_days"]
+        set_fields[f"{prefix}.activity_ratio"] = merged["activity_ratio"]
+
+    add_activity_paths(f"years.{year_str}", year_merged, year_active_inc)
+    add_activity_paths(f"years.{year_str}.months.{month_str}", month_merged, month_active_inc)
+    inc[f"years.{year_str}.months.{month_str}.days.{day_str}.time"] = elapsed
+    add_activity_paths(
+        f"years.{week_year_str}.weeks.{week_str}",
+        week_merged,
+        week_active_inc,
+    )
+    inc[f"years.{week_year_str}.weeks.{week_str}.weekdays.{weekday_str}.time"] = elapsed
+    set_fields["streaks.days.current"] = projected_streaks["days"]["current"]
+    set_fields["streaks.weeks.current"] = projected_streaks["weeks"]["current"]
+
+    update: dict[str, Any] = {}
+    if inc:
+        update["$inc"] = inc
+    if set_fields:
+        update["$set"] = set_fields
+    return update
+
+
+def _with_set_on_insert(update: dict[str, Any], doc_id) -> dict[str, Any]:
+    result = dict(update)
+    set_on_insert = dict(result.get("$setOnInsert") or {})
+    set_on_insert["_id"] = doc_id
+    result["$setOnInsert"] = set_on_insert
     return result
 
 
@@ -135,8 +205,6 @@ def build_commit_plan(
     prefetch: dict,
     user: str,
     elapsed_time: int,
-    *,
-    aggregations: Collection | None = None,
 ) -> CommitPlan:
     """Build a write-ready commit plan from prefetch data."""
     log_id = prefetch.get("logId") or ObjectId()
@@ -144,15 +212,23 @@ def build_commit_plan(
     elapsed_time = int(elapsed_time)
     user_ctx, combined_ctx = prefetch["user_ctx"], prefetch["combined_ctx"]
 
-    projected_user = project_agg_after_commit(
-        prefetch["user_agg"], user_ctx, elapsed_time
+    user_agg_update = _with_set_on_insert(
+        build_agg_update_ops(user_ctx, elapsed_time, prefetch["user_agg_slice"]),
+        user,
     )
-    projected_combined = project_agg_after_commit(
-        prefetch["combined_agg"], combined_ctx, elapsed_time
+    combined_agg_update = _with_set_on_insert(
+        build_agg_update_ops(combined_ctx, elapsed_time, prefetch["combined_agg_slice"]),
+        "Combined",
     )
-    highscores = prefetch["highscores"]
-    broken_records = update_highscores(
-        aggregations,
+
+    projected_user = project_agg_from_slice(
+        prefetch["user_agg_slice"], user_ctx, elapsed_time
+    )
+    projected_combined = project_agg_from_slice(
+        prefetch["combined_agg_slice"], combined_ctx, elapsed_time
+    )
+    highscores = highscores_slice_to_doc(user, prefetch["highscores_slice"])
+    broken_records, highscore_update = build_highscore_update_ops(
         user,
         log_ts,
         user_ctx,
@@ -160,23 +236,22 @@ def build_commit_plan(
         highscores=highscores,
         user_agg=projected_user,
         combined_agg=projected_combined,
-        skip_write=True,
     )
+    highscore_update = _with_set_on_insert(highscore_update, "Highscores")
 
     return CommitPlan(
         log_id=log_id,
         log_ts=log_ts,
         elapsed_time=elapsed_time,
-        user_agg=_agg_doc_with_id(projected_user, user),
-        combined_agg=_agg_doc_with_id(projected_combined, "Combined"),
-        highscores=_agg_doc_with_id(highscores, "Highscores"),
+        user_agg_update=user_agg_update,
+        combined_agg_update=combined_agg_update,
+        highscore_update=highscore_update,
         broken_records=broken_records,
     )
 
 
 def build_plan_from_log_ts(
     collection: Collection,
-    aggregations: Collection,
     user: str,
     log_ts: datetime,
     elapsed_time: int,
@@ -189,7 +264,5 @@ def build_plan_from_log_ts(
     prefetch = prefetch_for_log_ts(
         collection, user, log_ts, log_id=log_id, session=session
     )
-    plan = build_commit_plan(
-        prefetch, user, elapsed_time, aggregations=aggregations
-    )
+    plan = build_commit_plan(prefetch, user, elapsed_time)
     return plan, prefetch_digest(prefetch)
