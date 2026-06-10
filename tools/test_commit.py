@@ -15,7 +15,6 @@ import path_setup  # noqa: F401, E402
 from commit_plan import (
     build_agg_update_ops,
     build_commit_plan,
-    project_agg_after_commit,
     project_agg_from_slice,
 )
 from commit_prefetch import highscores_slice_to_doc, prefetch_for_log_ts, slice_to_agg_doc
@@ -78,14 +77,13 @@ def apply_agg_update(base_doc: dict | None, update: dict) -> dict:
     return doc
 
 
-def _build_legacy_docs(prefetch: dict, user: str, elapsed: int) -> tuple[dict, dict, dict]:
-    user_full = slice_to_agg_doc(prefetch["user_agg_slice"], prefetch["user_ctx"])
-    combined_full = slice_to_agg_doc(prefetch["combined_agg_slice"], prefetch["combined_ctx"])
-    user_full["streaks"] = prefetch["user_agg_slice"].get("streaks") or {}
-    combined_full["streaks"] = prefetch["combined_agg_slice"].get("streaks") or {}
-
-    projected_user = project_agg_after_commit(user_full, prefetch["user_ctx"], elapsed)
-    projected_combined = project_agg_after_commit(combined_full, prefetch["combined_ctx"], elapsed)
+def _build_expected_docs(prefetch: dict, user: str, elapsed: int) -> tuple[dict, dict, dict]:
+    projected_user = project_agg_from_slice(
+        prefetch["user_agg_slice"], prefetch["user_ctx"], elapsed
+    )
+    projected_combined = project_agg_from_slice(
+        prefetch["combined_agg_slice"], prefetch["combined_ctx"], elapsed
+    )
     highscores = highscores_slice_to_doc(user, prefetch["highscores_slice"])
     build_highscore_update_ops(
         user,
@@ -120,7 +118,7 @@ def run_agg_ops_parity(user: str, log_ts: datetime, elapsed: int) -> bool:
 def run_plan_parity(user: str, log_ts: datetime, elapsed: int) -> bool:
     prefetch = prefetch_for_log_ts(collection, user, log_ts)
     plan = build_commit_plan(prefetch, user, elapsed)
-    legacy_user, legacy_combined, legacy_highscores = _build_legacy_docs(
+    expected_user, expected_combined, expected_highscores = _build_expected_docs(
         prefetch, user, elapsed
     )
 
@@ -153,14 +151,14 @@ def run_plan_parity(user: str, log_ts: datetime, elapsed: int) -> bool:
     high_applied = apply_agg_update(high_base, high_update)
 
     ok = True
-    if applied_user != legacy_user:
+    if applied_user != expected_user:
         print("[FAIL] plan parity: user agg mismatch")
         ok = False
-    if applied_combined != legacy_combined:
+    if applied_combined != expected_combined:
         print("[FAIL] plan parity: combined agg mismatch")
         ok = False
     for scope_key in (user, "Global", "Combined"):
-        if high_applied.get(scope_key) != legacy_highscores.get(scope_key):
+        if high_applied.get(scope_key) != expected_highscores.get(scope_key):
             print(f"[FAIL] plan parity: highscores.{scope_key} mismatch")
             ok = False
     if ok:

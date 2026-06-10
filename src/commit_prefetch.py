@@ -131,22 +131,6 @@ def slice_to_agg_doc(slice: dict, ctx: dict) -> dict:
     return {"years": years, "streaks": dict(slice.get("streaks") or {})}
 
 
-def agg_doc_to_slice(agg_doc: dict, ctx: dict) -> dict:
-    """Extract a prefetch slice from a full aggregation document."""
-    years = agg_doc.get("years") or {}
-    year_str = ctx["yearStr"]
-    week_year_str = ctx["weekYearStr"]
-    week_str = ctx["weekStr"]
-    year_bucket = dict(years.get(year_str) or {})
-    week_year_node = years.get(week_year_str) or {}
-    week_bucket = dict((week_year_node.get("weeks") or {}).get(week_str) or {})
-    return {
-        "year_bucket": year_bucket,
-        "week_bucket": week_bucket,
-        "streaks": dict(agg_doc.get("streaks") or {}),
-    }
-
-
 def _lookups_and_activity_stages(*, filter_user: bool) -> list[dict]:
     return [
         prior_log_lookup_stage(

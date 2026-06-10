@@ -1,24 +1,8 @@
-"""Highscore compare/update from aggregation docs (single fetch + single write)."""
+"""Highscore compare/update from projected aggregation documents."""
 from __future__ import annotations
 
-from copy import deepcopy
 from datetime import datetime
-from pymongo.collection import Collection
 from period_model import PeriodKeys, period_keys
-
-_HIGHSCORE_FETCH_PIPELINE = [
-    {
-        "$match": {
-            "$expr": {"$in": ["$_id", ["Highscores", "$$logUser", "Combined"]]},
-        }
-    },
-    {
-        "$group": {
-            "_id": None,
-            "docs": {"$push": {"k": "$_id", "v": "$$ROOT"}},
-        }
-    },
-]
 
 _PERIOD_TYPES = ("Year", "Month", "Week", "Day")
 _LIFETIME_TYPE = "Lifetime"
@@ -516,43 +500,6 @@ def _apply_consecutive_highscores(
     return broken_records
 
 
-def _fetch_agg_docs(aggregations: Collection, user: str, session) -> tuple[dict, dict, dict]:
-    rows = list(
-        aggregations.aggregate(
-            _HIGHSCORE_FETCH_PIPELINE,
-            let={"logUser": user},
-            session=session,
-        )
-    )
-    docs_by_id: dict = {}
-    if rows and rows[0].get("docs"):
-        docs_by_id = {entry["k"]: entry["v"] for entry in rows[0]["docs"]}
-
-    highscores = docs_by_id.get("Highscores")
-    if not highscores:
-        highscores = _default_highscores_doc(user)
-    else:
-        highscores = deepcopy(highscores)
-        if user not in highscores:
-            highscores[user] = _empty_user_highscores()
-        else:
-            _ensure_scope_shape(highscores[user], global_scope=False)
-
-    if "Global" not in highscores:
-        highscores["Global"] = _empty_global_scope()
-    else:
-        _ensure_scope_shape(highscores["Global"], global_scope=True)
-
-    if "Combined" not in highscores:
-        highscores["Combined"] = _empty_combined_scope()
-    else:
-        _ensure_scope_shape(highscores["Combined"], global_scope=False)
-
-    user_agg = docs_by_id.get(user) or {}
-    combined_agg = docs_by_id.get("Combined") or {}
-    return highscores, user_agg, combined_agg
-
-
 def build_highscore_update_ops(
     user: str,
     timestamp: datetime,
@@ -597,49 +544,3 @@ def build_highscore_update_ops(
     if set_ops:
         update["$set"] = set_ops
     return all_broken, update
-
-
-def update_highscores(
-    aggregations: Collection,
-    user: str,
-    timestamp: datetime,
-    user_ctx: dict,
-    combined_ctx: dict,
-    *,
-    highscores: dict | None = None,
-    user_agg: dict | None = None,
-    combined_agg: dict | None = None,
-    session=None,
-    skip_write: bool = False,
-) -> list[dict] | tuple[list[dict], dict]:
-    """Compare period totals from agg docs against peaks; return broken records."""
-    if highscores is None or user_agg is None or combined_agg is None:
-        highscores, user_agg, combined_agg = _fetch_agg_docs(aggregations, user, session)
-
-    broken_records, update = build_highscore_update_ops(
-        user,
-        timestamp,
-        user_ctx,
-        combined_ctx,
-        highscores=highscores,
-        user_agg=user_agg,
-        combined_agg=combined_agg,
-    )
-
-    if not skip_write:
-        if update:
-            aggregations.update_one(
-                {"_id": "Highscores"},
-                update,
-                upsert=True,
-                session=session,
-            )
-        else:
-            aggregations.update_one(
-                {"_id": "Highscores"},
-                {"$setOnInsert": {"_id": "Highscores"}},
-                upsert=True,
-                session=session,
-            )
-        return broken_records
-    return broken_records, update

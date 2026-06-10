@@ -10,7 +10,6 @@ from bson import ObjectId
 from pymongo.collection import Collection
 
 from commit_prefetch import (
-    agg_doc_to_slice,
     highscores_slice_to_doc,
     prefetch_digest,
     prefetch_for_log_ts,
@@ -129,11 +128,6 @@ def project_agg_from_slice(slice: dict, ctx: dict, elapsed: int) -> dict:
     agg["years"] = years
     agg["streaks"] = _project_streaks(agg.get("streaks") or {}, ctx)
     return agg
-
-
-def project_agg_after_commit(agg_doc: dict, ctx: dict, elapsed: int) -> dict:
-    """Project full aggregation document state after applying this log entry."""
-    return project_agg_from_slice(agg_doc_to_slice(agg_doc, ctx), ctx, elapsed)
 
 
 def build_agg_update_ops(ctx: dict, elapsed: int, slice: dict) -> dict[str, Any]:
