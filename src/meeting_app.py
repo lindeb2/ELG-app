@@ -21,7 +21,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError, NetworkTimeout, AutoReconnect
 from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
-from period_model import APP_TIMEZONE, coerce_highscore_datetime, format_highscore_date
+from period_model import APP_TIMEZONE, as_utc, coerce_highscore_datetime, format_highscore_date, to_local
 
 # TODO: Set up color scheme or theme
 # Improvements: Sync, No-activity weeks, Dry Dropdown, server-side slide_5
@@ -126,15 +126,15 @@ class MeetingApp(ctk.CTk):
 
     @staticmethod
     def fetch_state():
-        """Fetches the week anchor from the db. Meeting week is considered from Thursday to next week's Wednesday."""
+        """Fetches the week anchor from the db. Shows Mon-Sun until next Wed, rolls Thu."""
         projection = {"_id": 0, "slide": 1, "week": 1, "server_time": "$$NOW"}
         doc = status_meeting_collection.find_one_and_update({"_id": "State"}, WEEK_PIPELINE, projection=projection, return_document=ReturnDocument.AFTER)
         local_now = time.time()
         slide = doc["slide"]
-        current_week = doc["week"]
-        next_week = current_week + timedelta(weeks=1)
-        local_target_timestamp = local_now + (next_week + timedelta(days=3) - doc["server_time"]).total_seconds()
-        return slide, current_week, next_week, local_target_timestamp
+        current_week_start = doc["week"]
+        next_week_start = as_utc(to_local(current_week_start) + timedelta(days=7)).replace(tzinfo=None)
+        local_target_timestamp = local_now + (next_week_start + timedelta(days=3) - doc["server_time"]).total_seconds()
+        return slide, current_week_start, next_week_start, local_target_timestamp
 
     def _calculate_week_info(self):
         """Calculates current and next week's year and week numbers."""
