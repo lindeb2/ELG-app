@@ -3,7 +3,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from commit_transaction import CommitTransactionManager, TXN_REFRESH_INTERVAL_MS
-from period_model import coerce_highscore_datetime
+from period_model import coerce_highscore_datetime, to_local
 from timetable_db import aggregations, client, collection, db, user
 from utils import flash_error
 import requests
@@ -237,7 +237,7 @@ class TimetableApp(ctk.CTk):
             personal_records = [r for r in broken_records if r["old_record"]["scope"] == "personal"]
             combined_records = [r for r in broken_records if r["old_record"]["scope"] == "combined"]
             message = self.create_broken_records_notification(
-                user, global_records, personal_records, combined_records
+                user, global_records, personal_records, combined_records, timestamp
             )
             self.send_notification(message)
 
@@ -266,22 +266,24 @@ class TimetableApp(ctk.CTk):
         self.overlay_canvas.grid(row=0, column=0, sticky="nsew", columnspan=2, rowspan=2)
         self._start_prepare_commit()
 
-    def days_since_record(self, old_date):
+    def days_since_record(self, old_date, reference: datetime):
         """
-        Calculate the number of days between the old record date and now.
+        Whole Stockholm calendar days since the day after the old record was set.
 
-        Args:
-            old_date: BSON datetime when the record was set, or None
+        Counting starts at local midnight on the day after old_date; reference is the
+        current log timestamp (UTC instant from the server).
 
         Returns:
-            int: Number of days since the old record, or 0 if no previous record
+            int: Whole local days elapsed since count start, or 0 if still before it
         """
         parsed = coerce_highscore_datetime(old_date)
         if parsed is None:
             return 0
-        if parsed.tzinfo is not None:
-            parsed = parsed.replace(tzinfo=None)
-        return (datetime.now() - parsed).days
+        count_start = to_local(parsed).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        ref_local = to_local(reference)
+        if ref_local < count_start:
+            return 0
+        return (ref_local - count_start).days
 
     def format_record_message(self, record_pair, days):
         """
@@ -328,7 +330,9 @@ class TimetableApp(ctk.CTk):
         new_ratio = f"{new_record['value']['active_days']}/{new_record['value']['total_days']} ({new_record['value']['percentage']:.1%})"
         return f"{record_holder} {days} days old {time_period} activity {record_type}: {old_ratio} → {new_ratio}\n"
 
-    def create_broken_records_notification(self, user, global_records, personal_records, combined_records):
+    def create_broken_records_notification(
+        self, user, global_records, personal_records, combined_records, reference: datetime
+    ):
         """
         Creates a formatted message string for broken records notification.
 
@@ -337,6 +341,7 @@ class TimetableApp(ctk.CTk):
             global_records (list): List of global records broken
             personal_records (list): List of PBs broken
             combined_records (list): List of combined records broken
+            reference (datetime): Server timestamp for the current log
 
         Returns:
             str: Formatted message string
@@ -374,7 +379,7 @@ class TimetableApp(ctk.CTk):
         # Add details for all records
         all_records = global_records + filtered_personal_records + combined_records
         for record_pair in all_records:
-            days = self.days_since_record(record_pair["old_record"]["date"])
+            days = self.days_since_record(record_pair["old_record"]["date"], reference)
             message += self.format_record_message(record_pair, days)
 
         return message
