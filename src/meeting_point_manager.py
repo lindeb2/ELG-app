@@ -1,10 +1,13 @@
 import customtkinter as ctk
-import datetime
+import threading
+import time
+from datetime import timedelta
 import os
 from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
 from CtkSmartScrollableFrame import CtkSmartScrollableFrame
 from CTkFlexToolTip import CTkFlexToolTip
+from period_model import as_utc, to_local
 
 COLOR_BACKGROUND=   "#000000" # Background [Root, MenuBar, ScreenFrame, Add- Edit- & Editpoint-Screens, EditScreen.F, EditScreen.F.F] 0      0       0
 COLOR_SELECTED=     "#191919" # Selected buttons                                                                                      25     9.8     10
@@ -19,6 +22,40 @@ class MeetingPointManagerApp:
     db = client['ELG-Database']
     status_meeting_collection = db['Status Meeting']
 
+    @staticmethod
+    def _fetch_server_time():
+        rows = list(MeetingPointManagerApp.status_meeting_collection.aggregate(
+            [{"$project": {"server_time": "$$NOW", "_id": 0}}]
+        ))
+        return rows[0]["server_time"]
+
+    @staticmethod
+    def _week_bounds_from_server_time(server_time):
+        """ISO Mon–Sun week in Stockholm; rollover at Monday 00:00 local."""
+        local = to_local(server_time)
+        week_start_local = local.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=local.weekday())
+        current_week_start = as_utc(week_start_local).replace(tzinfo=None)
+        next_week_start = as_utc(week_start_local + timedelta(days=7)).replace(tzinfo=None)
+        return current_week_start, next_week_start
+
+    @staticmethod
+    def fetch_week_state():
+        """Fetch server time and derive current week + deadline for Monday rollover."""
+        server_time = MeetingPointManagerApp._fetch_server_time()
+        local_now = time.time()
+        current_week_start, next_week_start = MeetingPointManagerApp._week_bounds_from_server_time(server_time)
+        local_target_timestamp = local_now + (next_week_start - server_time).total_seconds()
+        return current_week_start, next_week_start, local_target_timestamp
+
+    @staticmethod
+    def _week_options_from_anchor(current_week_start):
+        options = []
+        for offset in (-1, 0, 1):
+            anchor = as_utc(to_local(current_week_start) + timedelta(days=7 * offset)).replace(tzinfo=None)
+            year, week, _ = to_local(anchor).isocalendar()
+            options.append((str(year), str(week)))
+        return options
+
     def __init__(self, root):
         self.root = root
         self.root.title("")
@@ -32,13 +69,10 @@ class MeetingPointManagerApp:
         self.active_overlay_point = None
         self.edit_point = None
 
-        # Week/year options
-        today = datetime.date.today()
-        self.week_options = []
-        for offset in [-1, 0, 1]:
-            dt = today + datetime.timedelta(weeks=offset)
-            year, week, _ = dt.isocalendar()
-            self.week_options.append((str(year), str(week)))
+        self.current_week_start, self.next_week_start, self.local_target_timestamp = self.fetch_week_state()
+
+        # Week/year options (prev, current, next) from server week anchor
+        self.week_options = self._week_options_from_anchor(self.current_week_start)
         self.selected_week_index = 1
         self.selected_year_week = self.week_options[1]
 
@@ -123,6 +157,30 @@ class MeetingPointManagerApp:
         self.description_entry = ctk.CTkEntry(self.add_screen, placeholder_text="Description (optional)", font=("Arial", 18), fg_color=COLOR_PRIMARY, border_color=COLOR_HOVER, placeholder_text_color=COLOR_DISABLED_TEXT, text_color=COLOR_TEXT)
         self.description_entry.grid(row=1, column=0, padx=6, pady=(3,6), sticky='nsew', columnspan=2)
         self.description_entry.bind("<Return>", lambda event: self.add())
+
+        threading.Thread(target=self.week_check, name="WeekSync", daemon=True).start()
+
+    def week_check(self):
+        while True:
+            try:
+                if time.time() >= self.local_target_timestamp:
+                    self._on_week_rollover_due()
+            except Exception:
+                pass
+            time.sleep(1)
+
+    def _on_week_rollover_due(self):
+        try:
+            server_time = self._fetch_server_time()
+            local_now = time.time()
+            current_week_anchor, next_week_start = self._week_bounds_from_server_time(server_time)
+            self.local_target_timestamp = local_now + (next_week_start - server_time).total_seconds()
+            if current_week_anchor != self.current_week_start:
+                self.current_week_start = current_week_anchor
+                self.next_week_start = next_week_start
+                # TODO: logic if new week
+        except Exception:
+            pass
 
     def show_edit_screen(self):
         self.edit_screen.lift()
