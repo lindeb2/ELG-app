@@ -528,8 +528,12 @@ class MeetingApp(ctk.CTk):
             if self._update_if_changed('current_slide', updated_fields["slide"]):
                 self.show_slide(old_slide)
         if "week" in updated_fields:
-            if self._update_if_changed('week_anchor', updated_fields["week"]):
-                self.local_target_timestamp += 604800  # 1 week
+            if self._update_if_changed('current_week_start', updated_fields["week"]):
+                local_now = time.time()
+                server_time = change["clusterTime"].as_datetime().replace(tzinfo=None)
+                week_anchor = updated_fields["week"]
+                next_week_start = as_utc(to_local(week_anchor) + timedelta(days=7)).replace(tzinfo=None)
+                self.local_target_timestamp = local_now + (next_week_start + timedelta(days=3) - server_time).total_seconds()
                 self.current_year, self.current_week, self.next_year, self.next_week = self._calculate_week_info()
                 # TODO: logic if new week
 
