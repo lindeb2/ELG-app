@@ -708,7 +708,7 @@ class MeetingApp(ctk.CTk):
         for log in self.logs:
             user = log["user"]
             dt = log["timestamp"]
-            weekday_idx = dt.weekday()
+            weekday_idx = to_local(dt).weekday()
             elapsed_seconds = log["elapsed_time"]
             user_day_seconds[user][weekday_idx] += elapsed_seconds
 
