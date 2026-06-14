@@ -138,8 +138,8 @@ class MeetingApp(ctk.CTk):
 
     def _calculate_week_info(self):
         """Calculates current and next week's year and week numbers."""
-        current_year, current_week, _ = self.current_week_start.isocalendar()
-        next_year, next_week, _ = self.next_week_start.isocalendar()
+        current_year, current_week, _ = to_local(self.current_week_start).isocalendar()
+        next_year, next_week, _ = to_local(self.next_week_start).isocalendar()
 
         return str(current_year), str(current_week), str(next_year), str(next_week)
 
