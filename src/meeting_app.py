@@ -2,7 +2,6 @@ import customtkinter as ctk
 from pymongo import MongoClient, UpdateOne
 import datetime
 import os
-from datetime import timedelta
 import json
 import threading
 import tkinter
@@ -21,7 +20,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError, NetworkTimeout, AutoReconnect
 from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
-from period_model import APP_TIMEZONE, as_utc, coerce_highscore_datetime, format_highscore_date, to_local
+from period_model import APP_TIMEZONE, coerce_highscore_datetime, format_highscore_date, to_local, utc_naive_after_calendar_days
 
 # TODO: Set up color scheme or theme
 # Improvements: Sync, No-activity weeks, Dry Dropdown, server-side slide_5
@@ -132,8 +131,10 @@ class MeetingApp(ctk.CTk):
         local_now = time.time()
         slide = doc["slide"]
         current_week_start = doc["week"]
-        next_week_start = as_utc(to_local(current_week_start) + timedelta(days=7)).replace(tzinfo=None)
-        local_target_timestamp = local_now + (next_week_start + timedelta(days=3) - doc["server_time"]).total_seconds()
+        next_week_start = utc_naive_after_calendar_days(current_week_start, 7)
+        local_target_timestamp = local_now + (
+            utc_naive_after_calendar_days(next_week_start, 3) - doc["server_time"]
+        ).total_seconds()
         return slide, current_week_start, next_week_start, local_target_timestamp
 
     def _calculate_week_info(self):
@@ -532,8 +533,10 @@ class MeetingApp(ctk.CTk):
                 local_now = time.time()
                 server_time = change["clusterTime"].as_datetime().replace(tzinfo=None)
                 week_anchor = updated_fields["week"]
-                next_week_start = as_utc(to_local(week_anchor) + timedelta(days=7)).replace(tzinfo=None)
-                self.local_target_timestamp = local_now + (next_week_start + timedelta(days=3) - server_time).total_seconds()
+                next_week_start = utc_naive_after_calendar_days(week_anchor, 7)
+                self.local_target_timestamp = local_now + (
+                    utc_naive_after_calendar_days(next_week_start, 3) - server_time
+                ).total_seconds()
                 self.current_year, self.current_week, self.next_year, self.next_week = self._calculate_week_info()
                 # TODO: logic if new week
 

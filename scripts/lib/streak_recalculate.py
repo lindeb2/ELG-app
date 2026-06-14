@@ -14,7 +14,7 @@ def _current_run(sorted_keys: list[str]) -> int:
     prev = _parse_day_key(sorted_keys[-1])
     for key in reversed(sorted_keys[:-1]):
         current = _parse_day_key(key)
-        if (prev - current).days == 1:
+        if (prev.date() - current.date()).days == 1:
             run += 1
             prev = current
         else:
@@ -41,7 +41,7 @@ def _current_run_weeks(sorted_keys: list[str]) -> int:
     for key in reversed(sorted_keys[:-1]):
         y, w = _parse_week_key(key)
         monday = datetime.fromisocalendar(y, w, 1)
-        if (prev_monday - monday).days == 7:
+        if (prev_monday.date() - monday.date()).days == 7:
             run += 1
             prev_monday = monday
         else:

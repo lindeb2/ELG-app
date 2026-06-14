@@ -3,7 +3,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from commit_transaction import CommitTransactionManager, TXN_REFRESH_INTERVAL_MS
-from period_model import coerce_highscore_datetime, to_local
+from period_model import add_calendar_days, coerce_highscore_datetime, to_local
 from timetable_db import aggregations, client, collection, db, user
 from utils import flash_error
 import requests
@@ -279,7 +279,10 @@ class TimetableApp(ctk.CTk):
         parsed = coerce_highscore_datetime(old_date)
         if parsed is None:
             return 0
-        count_start = to_local(parsed).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        count_start = add_calendar_days(
+            to_local(parsed).replace(hour=0, minute=0, second=0, microsecond=0),
+            1,
+        )
         ref_local = to_local(reference)
         if ref_local < count_start:
             return 0

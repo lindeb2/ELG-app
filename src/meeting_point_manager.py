@@ -1,13 +1,12 @@
 import customtkinter as ctk
 import threading
 import time
-from datetime import timedelta
 import os
 from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
 from CtkSmartScrollableFrame import CtkSmartScrollableFrame
 from CTkFlexToolTip import CTkFlexToolTip
-from period_model import as_utc, to_local
+from period_model import as_utc, monday_midnight_local, to_local, utc_naive_after_calendar_days
 
 COLOR_BACKGROUND=   "#000000" # Background [Root, MenuBar, ScreenFrame, Add- Edit- & Editpoint-Screens, EditScreen.F, EditScreen.F.F] 0      0       0
 COLOR_SELECTED=     "#191919" # Selected buttons                                                                                      25     9.8     10
@@ -32,10 +31,9 @@ class MeetingPointManagerApp:
     @staticmethod
     def _week_bounds_from_server_time(server_time):
         """ISO Mon–Sun week in Stockholm; rollover at Monday 00:00 local."""
-        local = to_local(server_time)
-        week_start_local = local.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=local.weekday())
+        week_start_local = monday_midnight_local(server_time)
         current_week_start = as_utc(week_start_local).replace(tzinfo=None)
-        next_week_start = as_utc(week_start_local + timedelta(days=7)).replace(tzinfo=None)
+        next_week_start = utc_naive_after_calendar_days(current_week_start, 7)
         return current_week_start, next_week_start
 
     @staticmethod
@@ -51,7 +49,7 @@ class MeetingPointManagerApp:
     def _week_options_from_anchor(current_week_start):
         options = []
         for offset in (-1, 0, 1):
-            anchor = as_utc(to_local(current_week_start) + timedelta(days=7 * offset)).replace(tzinfo=None)
+            anchor = utc_naive_after_calendar_days(current_week_start, 7 * offset)
             year, week, _ = to_local(anchor).isocalendar()
             options.append((str(year), str(week)))
         return options

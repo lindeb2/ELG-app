@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from pymongo.collection import Collection
 
@@ -12,16 +12,16 @@ from highscore_commit import (
     _default_highscores_doc,
     _empty_user_highscores,
 )
-from period_model import PeriodKeys, day_key_from_dt, period_keys, to_local, total_days_in_period, week_key_from_dt
+from period_model import PeriodKeys, add_calendar_days, day_key_from_dt, period_keys, total_days_in_period, week_key_from_dt
 from streak_model import project_streak
 
 
 def _yesterday_day_key(dt: datetime) -> str:
-    return (to_local(dt) - timedelta(days=1)).strftime("%Y-%m-%d")
+    return day_key_from_dt(add_calendar_days(dt, -1))
 
 
 def _prior_week_key(dt: datetime) -> str:
-    return week_key_from_dt(to_local(dt) - timedelta(days=7))
+    return week_key_from_dt(add_calendar_days(dt, -7))
 
 
 @dataclass

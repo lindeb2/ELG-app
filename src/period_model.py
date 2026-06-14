@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import calendar
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 APP_TIMEZONE = "Europe/Stockholm"
@@ -29,6 +29,33 @@ def as_utc(dt: datetime) -> datetime:
 
 def to_local(dt: datetime) -> datetime:
     return as_utc(dt).astimezone(_TZ)
+
+
+def add_calendar_days(dt: datetime, days: int) -> datetime:
+    """Advance by calendar days in APP_TIMEZONE, preserving local wall-clock time."""
+    local = to_local(dt)
+    new_date = local.date() + timedelta(days=days)
+    return local.replace(year=new_date.year, month=new_date.month, day=new_date.day)
+
+
+def utc_naive_after_calendar_days(dt: datetime, days: int) -> datetime:
+    """BSON naive UTC instant after calendar-day arithmetic in APP_TIMEZONE."""
+    return as_utc(add_calendar_days(dt, days)).replace(tzinfo=None)
+
+
+def monday_midnight_local(dt: datetime) -> datetime:
+    """Monday 00:00 local for the week containing dt."""
+    local = to_local(dt)
+    monday = local.date() - timedelta(days=local.weekday())
+    return local.replace(
+        year=monday.year,
+        month=monday.month,
+        day=monday.day,
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
 
 
 def period_keys(dt: datetime) -> PeriodKeys:
