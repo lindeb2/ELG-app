@@ -174,6 +174,17 @@ def _date_add(start_date, unit: str, amount: int) -> dict:
     }
 
 
+def _date_subtract(start_date, unit: str, amount: int) -> dict:
+    return {
+        "$dateSubtract": {
+            "startDate": start_date,
+            "unit": unit,
+            "amount": amount,
+            "timezone": APP_TIMEZONE,
+        }
+    }
+
+
 def _date_diff(start_date, end_date, unit: str) -> dict:
     return {
         "$dateDiff": {
@@ -336,16 +347,10 @@ def prior_week_activity_lookup_stage(
 
 def streak_key_set_stage() -> dict:
     """$set stage: local day/week keys and prior period bounds for streak updates."""
-    prior_week_start = {
-        "$dateSubtract": {"startDate": "$weekStart", "unit": "day", "amount": 7},
-    }
-    yesterday_start = {
-        "$dateSubtract": {"startDate": "$dayStart", "unit": "day", "amount": 1},
-    }
     return {
         "$set": {
-            "yesterdayStart": yesterday_start,
-            "priorWeekStart": prior_week_start,
+            "yesterdayStart": _date_subtract("$dayStart", "day", 1),
+            "priorWeekStart": _date_subtract("$weekStart", "day", 7),
         }
     }
 
