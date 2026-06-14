@@ -286,7 +286,7 @@ class TimetableApp(ctk.CTk):
         ref_local = to_local(reference)
         if ref_local < count_start:
             return 0
-        return (ref_local - count_start).days
+        return (ref_local.date() - count_start.date()).days
 
     def format_record_message(self, record_pair, days):
         """
