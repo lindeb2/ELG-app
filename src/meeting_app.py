@@ -33,7 +33,7 @@ status_meeting_collection = db['Status Meeting']  # Collection for meeting statu
 aggregations_collection = db['Timetable Aggregations']
 WEEK_PIPELINE = [{
     "$set": {"new_week": {"$dateTrunc": {
-        "date": {"$dateSubtract": {"startDate": "$$NOW", "unit": "day", "amount": 3}},
+        "date": {"$dateSubtract": {"startDate": "$$NOW", "unit": "day", "amount": 3, "timezone": APP_TIMEZONE}},
         "unit": "week",
         "startOfWeek": "monday",
         "timezone": APP_TIMEZONE}}}},{
