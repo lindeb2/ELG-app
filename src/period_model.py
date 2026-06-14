@@ -163,9 +163,35 @@ def _date_to_string(fmt: str, date_expr: str) -> dict:
     }
 
 
+def _date_add(start_date, unit: str, amount: int) -> dict:
+    return {
+        "$dateAdd": {
+            "startDate": start_date,
+            "unit": unit,
+            "amount": amount,
+            "timezone": APP_TIMEZONE,
+        }
+    }
+
+
+def _date_diff(start_date, end_date, unit: str) -> dict:
+    return {
+        "$dateDiff": {
+            "startDate": start_date,
+            "endDate": end_date,
+            "unit": unit,
+            "timezone": APP_TIMEZONE,
+        }
+    }
+
+
 def period_key_set_stage(log_ts: str = "$$logTs") -> dict:
     """$set stage: derive period key strings and bounds from a BSON date (let var)."""
     week_trunc = _trunc("week", log_ts, start_of_week="monday")
+    year_trunc = _trunc("year", log_ts)
+    month_trunc = _trunc("month", log_ts)
+    year_end = _date_add(year_trunc, "year", 1)
+    month_end = _date_add(month_trunc, "month", 1)
     return {
         "$set": {
             "logTs": log_ts,
@@ -178,26 +204,14 @@ def period_key_set_stage(log_ts: str = "$$logTs") -> dict:
             "weekYearStr": {"$toString": {"$isoWeekYear": {"date": log_ts, "timezone": APP_TIMEZONE}}},
             "weekStr": {"$toString": {"$isoWeek": {"date": log_ts, "timezone": APP_TIMEZONE}}},
             "dayStart": _trunc("day", log_ts),
-            "yearStart": _trunc("year", log_ts),
-            "yearEnd": {"$dateAdd": {"startDate": _trunc("year", log_ts), "unit": "year", "amount": 1}},
-            "monthStart": _trunc("month", log_ts),
-            "monthEnd": {"$dateAdd": {"startDate": _trunc("month", log_ts), "unit": "month", "amount": 1}},
+            "yearStart": year_trunc,
+            "yearEnd": year_end,
+            "monthStart": month_trunc,
+            "monthEnd": month_end,
             "weekStart": week_trunc,
-            "weekEnd": {"$dateAdd": {"startDate": week_trunc, "unit": "week", "amount": 1}},
-            "yearTotalDays": {
-                "$dateDiff": {
-                    "startDate": _trunc("year", log_ts),
-                    "endDate": {"$dateAdd": {"startDate": _trunc("year", log_ts), "unit": "year", "amount": 1}},
-                    "unit": "day",
-                }
-            },
-            "monthTotalDays": {
-                "$dateDiff": {
-                    "startDate": _trunc("month", log_ts),
-                    "endDate": {"$dateAdd": {"startDate": _trunc("month", log_ts), "unit": "month", "amount": 1}},
-                    "unit": "day",
-                }
-            },
+            "weekEnd": _date_add(week_trunc, "week", 1),
+            "yearTotalDays": _date_diff(year_trunc, year_end, "day"),
+            "monthTotalDays": _date_diff(month_trunc, month_end, "day"),
             "weekTotalDays": 7,
         }
     }
