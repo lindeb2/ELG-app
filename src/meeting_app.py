@@ -46,6 +46,20 @@ WEEK_PIPELINE = [{
     "$unset": "new_week"}
 ]
 
+STATUS_MEETING_WATCH_PIPELINE = [
+    {"$match": {"operationType": {"$in": ["update", "replace"]}}},
+    {"$match": {"$expr": {"$or": [
+        {"$ne": ["$documentKey._id", "Users"]},
+        {"$ne": ["$operationType", "update"]},
+        {"$gt": [{"$size": {"$ifNull": ["$updateDescription.removedFields", []]}}, 0]},
+        {"$gt": [{"$size": {"$filter": {
+            "input": {"$objectToArray": {"$ifNull": ["$updateDescription.updatedFields", {}]}},
+            "as": "field",
+            "cond": {"$not": {"$regexMatch": {
+                "input": "$$field.k",
+                "regex": "^data\\.[^.]+\\.last_seen$",}}},}}},
+            0,]},]}}},]
+
 # Initialize the customtkinter theme with dark mode
 ctk.set_appearance_mode("Dark")
 
@@ -256,8 +270,6 @@ class MeetingApp(ctk.CTk):
                 time.sleep(1)
 
     def status_meeting_watcher(self):
-        pipeline = [{"$match": {"operationType": {"$in": ["update", "replace"]}}}]
-
         def handle_status_change(change):
             doc_id = change["documentKey"]["_id"]
             if doc_id == "State":
@@ -271,8 +283,7 @@ class MeetingApp(ctk.CTk):
             elif doc_id == "End Strings":
                 self._store_or_process_change('strings', change)
 
-        # Call the generic watcher
-        self._run_watcher(status_meeting_collection, pipeline, handle_status_change)
+        self._run_watcher(status_meeting_collection, STATUS_MEETING_WATCH_PIPELINE, handle_status_change)
 
     def timetable_watcher(self):
         pipeline = [{"$match": {"operationType": {"$in": ["insert", "update", "replace"]}}}]
@@ -444,8 +455,8 @@ class MeetingApp(ctk.CTk):
 
     ### HELPERS ###
     @staticmethod
-    def fetch_online_users_info():
-        """Returns a set of 2-tuples (user, sel_user) from DB with users that are considered online (timestamp within 2 seconds)."""
+    def fetch_online_users_info() -> dict[str, str | None]:
+        """Returns online users mapped to their selected_user."""
         pipeline = [
             {"$match": {"_id": "Users"}},
             {"$project": {
@@ -460,11 +471,15 @@ class MeetingApp(ctk.CTk):
                 "_id": 0}}]
 
         data = next(status_meeting_collection.aggregate(pipeline))["online_users"]
-        return {(u[0], u[1]) for u in data}
+        return {user: selected_user for user, selected_user in data}
 
     def build_online_users(self):
-        """Returns a set of only the users from the 2-tuple-set self.online_users_info."""
-        return {user for user, _ in self.online_users_info}
+        """Returns the set of online usernames."""
+        return set(self.online_users_info)
+
+    def build_input_mode_users(self) -> set[str]:
+        """Returns users that another participant is entering goals for."""
+        return {sel for user, sel in self.online_users_info.items() if user != self.user_name and sel}
 
     def create_slide_dot(self):
         dot = ctk.CTkLabel(
@@ -509,18 +524,43 @@ class MeetingApp(ctk.CTk):
         while True:
             sel_user = self.s4_selected_user_var.get() if (self.current_slide == self.slide_map.index(4) and self.s4_in_input) else None # type: ignore[attr-defined]
             try:
-                status_meeting_collection.update_one(
-                    {"_id": "Users"},
-                    {
-                        "$currentDate": {last_seen_path: True},
-                        "$set": {selected_user_path: sel_user}
-                    },
-                    upsert=True
+                status_meeting_collection.update_one({"_id": "Users"},[{
+                    "$set": {
+                        last_seen_path: "$$NOW",
+                        selected_user_path: sel_user,}},{
+                    "$set": {"data": {"$arrayToObject": {"$filter": {
+                        "input": {"$objectToArray": {"$ifNull": ["$data", {}]}},
+                        "as": "entry",
+                        "cond": {"$gte": [
+                            "$$entry.v.last_seen",
+                            {"$subtract": ["$$NOW", 2000]},]},}}}}},],
+                    upsert=True,
                 )
             except Exception as e:
                 print(f"Presence update failed: {e}")
             self._presence_update_event.wait(timeout=1.0)
             self._presence_update_event.clear()
+
+    def _handle_users_change(self, change):
+        desc = change.get("updateDescription", {})
+        for path in desc.get("removedFields", []):
+            self.online_users_info.pop(path.split(".", 1)[1])
+        for path, value in desc.get("updatedFields", {}).items():
+            _, user, field = (path.split(".", 2) + [None])[:3]
+            if field: # New sel_user
+                selected_user = value
+            else: # New user
+                selected_user = value.get("selected_user")
+            self.online_users_info[user] = selected_user
+
+        users_changed = self._update_if_changed("online_users", self.build_online_users())
+        input_mode_changed = self._update_if_changed("input_mode_users", self.build_input_mode_users())
+        if users_changed:
+            self.users_count_label.configure(text=f"Participants ({len(self.online_users)})")
+            self.update_users_list()
+            self.s4_update_selectable_users()
+        if users_changed or input_mode_changed:
+            self.s4_update_display_ui()
 
     def _handle_state_change(self, change):
         updated_fields = change["updateDescription"]["updatedFields"]
@@ -545,18 +585,6 @@ class MeetingApp(ctk.CTk):
             return
         self.s4_update_display_ui()
         self.s4_update_input_ui(False)
-
-    def _handle_users_change(self, _change):
-        if not self._update_if_changed('online_users_info', self.fetch_online_users_info()):
-            return
-        users_changed = self._update_if_changed('online_users', self.build_online_users())
-        input_mode_changed = self._update_if_changed('input_mode_users', self.build_input_mode_users())
-        if users_changed:
-            self.users_count_label.configure(text=f"Participants ({len(self.online_users)})")
-            self.update_users_list()
-            self.s4_update_selectable_users()
-        if users_changed or input_mode_changed:
-            self.s4_update_display_ui()
 
     def _handle_logs_change(self, change):
         full_doc = change['fullDocument']
@@ -2501,10 +2529,6 @@ class MeetingApp(ctk.CTk):
                                    anchor="center")
         hours_label.grid(row=0, column=5, sticky="nsew")
         self._team_row_widget = frame_1
-
-    def build_input_mode_users(self) -> set[str]:
-        """Returns a set of users currently in input mode."""
-        return {sel_user for user, sel_user in self.online_users_info if user != self.user_name and sel_user}
 
     def s4_update_hourly_goal(self, show_summary=False):
         """Update only the hours goal for the current user. Optionally move to summary view if valid."""
