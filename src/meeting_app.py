@@ -98,8 +98,11 @@ class MeetingApp(ctk.CTk):
         self._init_complete = False
         self._presence_update_event = threading.Event()
         self._pending_changes = {}
+        self._sync_lock = threading.Lock()
+        self._watchers_ready_count = 0
+        self._watchers_ready_event = threading.Event()
         self.start_watchers()
-
+        self._watchers_ready_event.wait()
         self._update_event = threading.Event()
         self._lock = threading.Lock()
         self.update_buffer = {"slide": None, "goals": defaultdict(dict)}
@@ -256,13 +259,19 @@ class MeetingApp(ctk.CTk):
         for func in (self.status_meeting_watcher, self.timetable_watcher):
             threading.Thread(target=func, name=func.__name__, daemon=True).start()
 
-    @staticmethod
-    def _run_watcher(collection, pipeline, callback, **watch_kwargs):
+    def _run_watcher(self, collection, pipeline, callback, **watch_kwargs):
         resume_token = None
+        ready_signalled = False
         while True:
             # noinspection PyBroadException
             try:
                 with collection.watch(pipeline, resume_after=resume_token, **watch_kwargs) as stream:
+                    if not ready_signalled:
+                        with self._sync_lock:
+                            self._watchers_ready_count += 1
+                            if self._watchers_ready_count >= 2:
+                                self._watchers_ready_event.set()
+                        ready_signalled = True
                     for change in stream:
                         resume_token = stream.resume_token
                         callback(change)
@@ -303,11 +312,16 @@ class MeetingApp(ctk.CTk):
             time.sleep(1)
 
     def _complete_initialization(self):
-        self._init_complete = True
+        with self._sync_lock:
+            users_batch = self._pending_changes.pop("users", [])
+            other_pending = {name: change for name, change in self._pending_changes.items() if name != "users" and change}
 
-        for name, change in self._pending_changes.items():
-            if change:
-                self.after(0, getattr(self, f"_handle_{name}_change"), change)
+            self._handle_users_change(sorted(users_batch, key=lambda c: c["clusterTime"].time))
+
+            for name, change in other_pending.items():
+                getattr(self, f"_handle_{name}_change")(change)
+
+            self._init_complete = True
 
     ### ALL SLIDES ###
     def show_slide(self, old_slide=None):
@@ -512,10 +526,14 @@ class MeetingApp(ctk.CTk):
 
     ### SYNC ###
     def _store_or_process_change(self, name, change):
-        if self._init_complete:
-            self.after(0, getattr(self, f"_handle_{name}_change"), change)
-        else:
-            self._pending_changes[name] = change
+        with self._sync_lock:
+            if not self._init_complete:
+                if name == "users":
+                    self._pending_changes.setdefault("users", []).append(change)
+                else:
+                    self._pending_changes[name] = change
+                return
+        self.after(0, getattr(self, f"_handle_{name}_change"), change)
 
     def update_presence(self):
         user_path = f"data.{self.user_name}"
@@ -541,17 +559,20 @@ class MeetingApp(ctk.CTk):
             self._presence_update_event.wait(timeout=1.0)
             self._presence_update_event.clear()
 
-    def _handle_users_change(self, change):
-        desc = change.get("updateDescription", {})
-        for path in desc.get("removedFields", []):
-            self.online_users_info.pop(path.split(".", 1)[1])
-        for path, value in desc.get("updatedFields", {}).items():
-            _, user, field = (path.split(".", 2) + [None])[:3]
-            if field: # New sel_user
-                selected_user = value
-            else: # New user
-                selected_user = value.get("selected_user")
-            self.online_users_info[user] = selected_user
+    def _handle_users_change(self, changes):
+        if not isinstance(changes, list):
+            changes = [changes]
+        for change in changes:
+            desc = change.get("updateDescription", {})
+            for path in desc.get("removedFields", []):
+                self.online_users_info.pop(path.split(".", 1)[1])
+            for path, value in desc.get("updatedFields", {}).items():
+                _, user, field = (path.split(".", 2) + [None])[:3]
+                if field: # New sel_user
+                    selected_user = value
+                else:  # New user
+                    selected_user = value.get("selected_user")
+                self.online_users_info[user] = selected_user
 
         users_changed = self._update_if_changed("online_users", self.build_online_users())
         input_mode_changed = self._update_if_changed("input_mode_users", self.build_input_mode_users())
