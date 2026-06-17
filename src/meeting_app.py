@@ -119,7 +119,7 @@ class MeetingApp(ctk.CTk):
             future_curr_goals = executor.submit(self.s4_fetch_goals, self.current_year, self.current_week)
             future_next_goals = executor.submit(self.s4_fetch_goals, self.next_year, self.next_week)
             future_highscores = executor.submit(lambda: aggregations_collection.find_one({"_id": "Highscores"}))
-            future_users = executor.submit(self.fetch_online_users_info)
+            future_users = executor.submit(self.fetch_online_user_info)
 
             self.logs = future_logs.result()
             self.discussion_points = future_points.result()
@@ -127,6 +127,8 @@ class MeetingApp(ctk.CTk):
             self._next_week_goals = future_next_goals.result()
             self.highscores_data = future_highscores.result()
             self.online_users_info = future_users.result()
+            
+        threading.Thread(target=self.update_presence, name="update_presence", daemon=True).start()
 
         self.slide_map = self._create_slide_map()
 
@@ -137,7 +139,6 @@ class MeetingApp(ctk.CTk):
         self.initialize_slides()
         self.show_slide()
 
-        threading.Thread(target=self.update_presence, name="update_presence", daemon=True).start()
         self._complete_initialization()
 
     @staticmethod
@@ -468,24 +469,26 @@ class MeetingApp(ctk.CTk):
                 self.s4_show_input()
 
     ### HELPERS ###
-    @staticmethod
-    def fetch_online_users_info() -> dict[str, str | None]:
-        """Returns online users mapped to their selected_user."""
-        pipeline = [
-            {"$match": {"_id": "Users"}},
-            {"$project": {
-                "online_users": {
-                    "$map": {
-                        "input": {"$filter": {"input": {
-                            "$objectToArray": "$data"},
-                            "cond": {"$gte": [
-                                "$$this.v.last_seen",
-                                {"$subtract": ["$$NOW", 2000]}]}}},
-                        "in": ["$$this.k", "$$this.v.selected_user"]}},
-                "_id": 0}}]
+    def _presence_update_pipeline(self, sel_user):
+        user_path = f"data.{self.user_name}"
+        return [{
+            "$set": {
+                f"{user_path}.last_seen": "$$NOW",
+                f"{user_path}.selected_user": sel_user,}},
+            {"$set": {"data": {"$arrayToObject": {"$filter": {
+                "input": {"$objectToArray": {"$ifNull": ["$data", {}]}},
+                "as": "entry",
+                "cond": {"$gte": [
+                    "$$entry.v.last_seen",
+                    {"$subtract": ["$$NOW", 2000]},]},}}}}},]
 
-        data = next(status_meeting_collection.aggregate(pipeline))["online_users"]
-        return {user: selected_user for user, selected_user in data}
+    def fetch_online_user_info(self):
+        """Set presence, prune offline users, return the Users doc."""
+        doc = status_meeting_collection.find_one_and_update({"_id": "Users"},
+            self._presence_update_pipeline(None),
+            upsert=True, return_document=ReturnDocument.AFTER,
+        )
+        return {user: info.get("selected_user") for user, info in (doc.get("data")).items()}
 
     def build_online_users(self):
         """Returns the set of online usernames."""
@@ -536,28 +539,22 @@ class MeetingApp(ctk.CTk):
         self.after(0, getattr(self, f"_handle_{name}_change"), change)
 
     def update_presence(self):
-        user_path = f"data.{self.user_name}"
-        last_seen_path = f"{user_path}.last_seen"
-        selected_user_path = f"{user_path}.selected_user"
         while True:
-            sel_user = self.s4_selected_user_var.get() if (self.current_slide == self.slide_map.index(4) and self.s4_in_input) else None # type: ignore[attr-defined]
+            self._presence_update_event.wait(timeout=1.0)
+            self._presence_update_event.clear()
+            slide_map = getattr(self, "slide_map", None)
+            if slide_map and self.current_slide == slide_map.index(4) and getattr(self, "s4_in_input", False):
+                sel_user = self.s4_selected_user_var.get()  # type: ignore[attr-defined]
+            else:
+                sel_user = None
             try:
-                status_meeting_collection.update_one({"_id": "Users"},[{
-                    "$set": {
-                        last_seen_path: "$$NOW",
-                        selected_user_path: sel_user,}},{
-                    "$set": {"data": {"$arrayToObject": {"$filter": {
-                        "input": {"$objectToArray": {"$ifNull": ["$data", {}]}},
-                        "as": "entry",
-                        "cond": {"$gte": [
-                            "$$entry.v.last_seen",
-                            {"$subtract": ["$$NOW", 2000]},]},}}}}},],
+                status_meeting_collection.update_one(
+                    {"_id": "Users"},
+                    self._presence_update_pipeline(sel_user),
                     upsert=True,
                 )
             except Exception as e:
                 print(f"Presence update failed: {e}")
-            self._presence_update_event.wait(timeout=1.0)
-            self._presence_update_event.clear()
 
     def _handle_users_change(self, changes):
         if not isinstance(changes, list):
