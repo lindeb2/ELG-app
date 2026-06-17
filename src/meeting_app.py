@@ -1763,7 +1763,7 @@ class MeetingApp(ctk.CTk):
         """Logs"""
         title = ctk.CTkLabel(
             self.slide_frames[2],
-            text="user Logs",
+            text="User Logs",
             font=("Arial", 60, "bold"),
             text_color="white"
         )
