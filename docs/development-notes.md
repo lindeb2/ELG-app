@@ -1,5 +1,6 @@
 # Development Notes
 
+## Completed
 - [X]  Add updates in sync
   -  [X] Resume tokens
 - [X]  Handle DB goals with 0
@@ -14,14 +15,13 @@
 - [X]  handle_arrow direct return?
 - [X]  `_calculate_week_info` output
 - [X]  Goal color function
+- [X]  **Hours Graph:** Add Goal Lines?
+- [X]  **Days Chart:** Add Goal Lines?
+- [X]  **Team Hours Bar:** Add Goal Line?
 
-- [ ]  `self.days_chart_data_row.bind("<Configure>", update_day_bars)`?
-- [ ]  Create & Show functions
-- [ ]  **Hours Graph:** Add Goal Lines
-- [ ]  **Days Chart:** Add Goal Lines
-- [ ]  **Team Hours Bar:** Add Goal Line
-- [ ]  DRY (Don't Repeat Yourself) / First runs
-- [ ]  Ponder: Args vs Instance variables
+## Moved to Issues
+- [ ]  `self.days_chart_data_row.bind("<Configure>", update_day_bars)`? (Moved to issue)
+- [ ]  Watcher-handler-update-limit (Moved to issue)
 - [ ]  Optimize db
    - [X]  Consolidate watchers
    - [X]  Implement projections
@@ -33,6 +33,11 @@
      - [X] Batch init / DB-init function
      - [ ] Watcher Pipeline (Moved to issue)
    - [X]  Rework DB with ISODate instead of multiple fields
+
+## To-Do
+- [ ]  Create & Show functions
+- [ ]  DRY (Don't Repeat Yourself) / First runs
+- [ ]  Ponder: Args vs Instance variables
 - [ ]  Merge into one app
    - [ ]  Correct local data storage
    - [ ]  Integrate all parts
@@ -40,5 +45,4 @@
 - [ ]  S1 Highscore
 - [ ]  Stats_viewer
 - [ ]  Notification system
-- [ ]  Watcher-handler-update-limit (Moved to issue)
 - [ ]  Logic if new week
