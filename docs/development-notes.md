@@ -13,10 +13,10 @@
 - [X]  Merged s4_update_[]_goal method
 - [X]  handle_arrow direct return?
 - [X]  `_calculate_week_info` output
+- [X]  Goal color function
 
 - [ ]  `self.days_chart_data_row.bind("<Configure>", update_day_bars)`?
 - [ ]  Create & Show functions
-- [ ]  Goal color function?
 - [ ]  **Hours Graph:** Add Goal Lines
 - [ ]  **Days Chart:** Add Goal Lines
 - [ ]  **Team Hours Bar:** Add Goal Line
