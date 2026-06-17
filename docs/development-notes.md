@@ -12,7 +12,7 @@
 - [X]  Ensure client is on the correct week
 - [X]  Merged s4_update_[]_goal method
 - [X]  handle_arrow direct return?
-
+- [X]  `_calculate_week_info` output
 
 - [ ]  `self.days_chart_data_row.bind("<Configure>", update_day_bars)`?
 - [ ]  Create & Show functions
@@ -31,7 +31,7 @@
    - [X] Move `Update_one` into worker-thread
    - [ ]  Round-trips
      - [X] Batch init / DB-init function
-     - [ ] Watcher Pipeline
+     - [ ] Watcher Pipeline (Moved to issue)
    - [X]  Rework DB with ISODate instead of multiple fields
 - [ ]  Merge into one app
    - [ ]  Correct local data storage
@@ -40,6 +40,5 @@
 - [ ]  S1 Highscore
 - [ ]  Stats_viewer
 - [ ]  Notification system
-- [ ]  `_calculate_week_info` output
-- [ ]  Watcher-handler-update-limit
+- [ ]  Watcher-handler-update-limit (Moved to issue)
 - [ ]  Logic if new week

@@ -520,6 +520,11 @@ class MeetingApp(ctk.CTk):
             display_text = display_text + "..."
         return display_text
 
+    @staticmethod
+    def _goal_color(actual, goal) -> str:
+        """Returns green if actual meets goal, red otherwise."""
+        return "#00AD00" if actual >= goal else "#FF0000"
+
     def _update_if_changed(self, attr_name, new_value):
         old_value = getattr(self, attr_name)
         if old_value == new_value:
@@ -820,7 +825,7 @@ class MeetingApp(ctk.CTk):
             header_string = f" {self.s1_format_bar_header(total_hours, data['goal_hours'], decimals=1)} "
             if data["goal_hours"]:
                 goal_rel_y = 1.0 - (data["goal_hours"] / max_value)
-                goal_color = "#FF0000" if total_hours < data["goal_hours"] else "#00AD00"
+                goal_color = self._goal_color(total_hours, data["goal_hours"])
                 goal_line_string = f"{data['goal_hours']} hours"
                 goal_data = (goal_rel_y, goal_color, goal_line_string)
             else:
@@ -849,7 +854,7 @@ class MeetingApp(ctk.CTk):
             inactive_days = [i for i in range(7) if i not in active_days]
             day_order = active_days + inactive_days
             if goal_days > 0:
-                goal_color = "#FF0000" if len(active_days) < goal_days else "#00AD00"
+                goal_color = self._goal_color(len(active_days), goal_days)
                 goal_data = (goal_days - 1, goal_color)
             else:
                 goal_data = None
@@ -897,13 +902,12 @@ class MeetingApp(ctk.CTk):
                 }]
         team_header_string = self.s1_format_bar_header(team_hours, team_goal, decimals=0)
         if team_goal > 0:
+            team_goal_color = self._goal_color(team_hours, team_goal)
             if team_hours < team_goal:
                 team_rel_y = 0
-                team_goal_color = "#FF0000"
                 team_y_offset = 10
             else:
                 team_rel_y = 1.0 - (team_goal / team_hours)
-                team_goal_color = "#00AD00"
                 team_y_offset = 5
             goal_data_team = (team_rel_y, team_goal_color, team_y_offset)
         else:
