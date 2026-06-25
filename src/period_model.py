@@ -117,13 +117,6 @@ def format_highscore_date(value) -> str:
     return str(value)
 
 
-def coerce_highscore_datetime(value) -> datetime | None:
-    """Normalize highscore date field to datetime for comparisons."""
-    if isinstance(value, datetime):
-        return value
-    return None
-
-
 # --- MongoDB aggregation expression helpers (commit pipeline SSOT) ---
 
 def period_group_id(period: str) -> dict:

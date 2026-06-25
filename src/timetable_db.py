@@ -12,6 +12,7 @@ client = MongoClient(
 db = client["ELG-Database"]
 collection = db["Timetable"]
 aggregations = db["Timetable Aggregations"]
+status_meeting = db["Status Meeting"]
 
 _script_dir = os.path.dirname(os.path.abspath(__file__))
 _project_root = os.path.dirname(_script_dir)

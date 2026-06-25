@@ -20,7 +20,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError, NetworkTimeout, AutoReconnect
 from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
-from period_model import APP_TIMEZONE, coerce_highscore_datetime, format_highscore_date, to_local, utc_naive_after_calendar_days
+from period_model import APP_TIMEZONE, format_highscore_date, to_local, utc_naive_after_calendar_days
 
 # TODO: Set up color scheme or theme
 # Improvements: Sync, No-activity weeks, Dry Dropdown, server-side slide_5
@@ -47,7 +47,7 @@ WEEK_PIPELINE = [{
 ]
 
 STATUS_MEETING_WATCH_PIPELINE = [
-    {"$match": {"operationType": {"$in": ["update", "replace"]}}},
+    {"$match": {"operationType": {"$in": ["update", "replace", "insert"]}}},
     {"$match": {"$expr": {"$or": [
         {"$ne": ["$documentKey._id", "Users"]},
         {"$ne": ["$operationType", "update"]},
@@ -118,14 +118,14 @@ class MeetingApp(ctk.CTk):
             future_points = executor.submit(self._fetch_discussion_points)
             future_curr_goals = executor.submit(self.s4_fetch_goals, self.current_year, self.current_week)
             future_next_goals = executor.submit(self.s4_fetch_goals, self.next_year, self.next_week)
-            future_highscores = executor.submit(lambda: aggregations_collection.find_one({"_id": "Highscores"}))
+            future_records = executor.submit(self._fetch_week_records)
             future_users = executor.submit(self.fetch_online_user_info)
 
             self.logs = future_logs.result()
             self.discussion_points = future_points.result()
             self._current_week_goals = future_curr_goals.result()
             self._next_week_goals = future_next_goals.result()
-            self.highscores_data = future_highscores.result()
+            self.week_records = future_records.result()
             self.online_users_info = future_users.result()
             
         threading.Thread(target=self.update_presence, name="update_presence", daemon=True).start()
@@ -292,6 +292,8 @@ class MeetingApp(ctk.CTk):
                 self._store_or_process_change('points', change)
             elif doc_id == "End Strings":
                 self._store_or_process_change('strings', change)
+            elif doc_id == "Records":
+                self._store_or_process_change('records', change)
 
         self._run_watcher(status_meeting_collection, STATUS_MEETING_WATCH_PIPELINE, handle_status_change)
 
@@ -498,6 +500,52 @@ class MeetingApp(ctk.CTk):
         """Returns users that another participant is entering goals for."""
         return {sel for user, sel in self.online_users_info.items() if user != self.user_name and sel}
 
+    def _fetch_week_records(self):
+        """Fetch and flatten this week's broken records from Status Meeting > Records."""
+        doc = status_meeting_collection.find_one(
+            {"_id": "Records"},
+            projection={f"data.{self.current_year}.{self.current_week}": 1},
+        )
+        if not doc:
+            return []
+        week_data = (
+            doc.get("data", {})
+               .get(self.current_year, {})
+               .get(self.current_week, {})
+        )
+        records = []
+        # personal: { user: { time_type: { metric: slot } } }
+        for _user, user_data in week_data.get("personal", {}).items():
+            for time_type, metrics in user_data.items():
+                for metric, slot in metrics.items():
+                    records.append(slot)
+        # global: { time_type: { metric: slot } }
+        for time_type, metrics in week_data.get("global", {}).items():
+            for metric, slot in metrics.items():
+                records.append(slot)
+        # combined: { time_type: { metric: slot } }
+        for time_type, metrics in week_data.get("combined", {}).items():
+            for metric, slot in metrics.items():
+                records.append(slot)
+        records.sort(
+            key=lambda x: x.get("last_broken_ts") or datetime.datetime.min,
+            reverse=True,
+        )
+        return records
+
+    @staticmethod
+    def _format_record_value(metric, value):
+        """Format an old_value or new_value dict into a human-readable string."""
+        if metric == "total_time":
+            return format_time(value.get("total_time") or 0)
+        if metric == "days_active":
+            ad = value.get("active_days") or 0
+            td = value.get("total_days") or 0
+            pct = value.get("percentage") or 0.0
+            return f"{ad}/{td} ({pct:.1%})"
+        # consecutive_days or consecutive_weeks
+        return str(value.get("streak") or 0)
+
     def create_slide_dot(self):
         dot = ctk.CTkLabel(
             self.indicator_frame,
@@ -630,6 +678,12 @@ class MeetingApp(ctk.CTk):
             return
         self.ensure_slide(3)
         self.s3_update_discussion_points()
+
+    def _handle_records_change(self, _change):
+        if not self._update_if_changed("week_records", self._fetch_week_records()):
+            return
+        if 1 in self.slide_map:
+            self.s1_update_records_display()
 
     def _handle_strings_change(self, change):
         updated = change.get("updateDescription", {}).get("updatedFields", {})
@@ -1531,216 +1585,78 @@ class MeetingApp(ctk.CTk):
         self.s1_update_records_display()
 
     def s1_update_records_display(self):
-        # TODO: Fix records and achievements
-
-        """Update the records and achievements display for the current week (using self.current_year_num and self.current_week_num)."""
-        # Clear existing content
+        """Render this week's broken records from self.week_records."""
         for widget in self.records_content.winfo_children():
             widget.destroy()
 
-        # Get highscores data
-        highscores = self.highscores_data
-        if not highscores:
-            no_records_label = ctk.CTkLabel(
-                self.records_content,
-                text="No records found",
-                font=("Arial", 16),
-                text_color="#B0B0B0"
-            )
-            no_records_label.pack(pady=20)
-            return
+        records = self.week_records
 
-        # Track records found
-        records_found = []
-
-        # Helper: check if a highscore date is in the current week
-        def is_in_current_week(date_value):
-            dt = coerce_highscore_datetime(date_value)
-            if dt is None:
-                return False
-            if dt.tzinfo is not None:
-                dt = dt.replace(tzinfo=None)
-            return self.current_week_start <= dt < self.next_week_start
-
-        # Check personal records
-        for user in self.online_users:
-            if user in highscores:
-                user_records = highscores[user]
-                for time_type in ["Day", "Week", "Month", "Year"]:
-                    if time_type in user_records:
-                        # Check time records
-                        if "time" in user_records[time_type] and user_records[time_type]["time"]["date"]:
-                            date_str = user_records[time_type]["time"]["date"]
-                            if is_in_current_week(date_str):
-                                records_found.append({
-                                    "type": "Personal Best",
-                                    "user": user,
-                                    "time_type": time_type,
-                                    "metric": "Time",
-                                    "value": format_time(user_records[time_type]["time"]["value"]),
-                                    "date": date_str
-                                })
-                        # Check activity records (except for Day)
-                        if time_type != "Day" and "activity" in user_records[time_type] and \
-                                user_records[time_type]["activity"]["date"]:
-                            date_str = user_records[time_type]["activity"]["date"]
-                            if is_in_current_week(date_str):
-                                activity_ratio = user_records[time_type]["activity"]["value"]
-                                active_days = user_records[time_type]["activity"]["active_days"]
-                                total_days = user_records[time_type]["activity"]["total_days"]
-                                records_found.append({
-                                    "type": "Personal Best",
-                                    "user": user,
-                                    "time_type": time_type,
-                                    "metric": "Activity",
-                                    "value": f"{active_days}/{total_days} days ({activity_ratio:.1%})",
-                                    "date": date_str
-                                })
-                if "consecutive" in user_records:
-                    for streak_kind, label in (("days", "Consecutive days"), ("weeks", "Consecutive weeks")):
-                        record = user_records["consecutive"].get(streak_kind)
-                        if record and record.get("date") and is_in_current_week(record["date"]):
-                            records_found.append({
-                                "type": "Personal Best",
-                                "user": user,
-                                "time_type": "Lifetime",
-                                "metric": label,
-                                "value": str(record["value"]),
-                                "date": record["date"],
-                            })
-        # Check world records
-        if "Global" in highscores:
-            global_records = highscores["Global"]
-            for time_type in ["Day", "Week", "Month", "Year"]:
-                if time_type in global_records:
-                    # Check time records
-                    if "time" in global_records[time_type] and global_records[time_type]["time"]["date"]:
-                        date_str = global_records[time_type]["time"]["date"]
-                        if is_in_current_week(date_str):
-                            records_found.append({
-                                "type": "World Record",
-                                "user": global_records[time_type]["time"].get("user", "?"),
-                                "time_type": time_type,
-                                "metric": "Time",
-                                "value": format_time(global_records[time_type]["time"]["value"]),
-                                "date": date_str
-                            })
-                    # Check activity records (except for Day)
-                    if time_type != "Day" and "activity" in global_records[time_type] and \
-                            global_records[time_type]["activity"]["date"]:
-                        date_str = global_records[time_type]["activity"]["date"]
-                        if is_in_current_week(date_str):
-                            activity_ratio = global_records[time_type]["activity"]["value"]
-                            active_days = global_records[time_type]["activity"]["active_days"]
-                            total_days = global_records[time_type]["activity"]["total_days"]
-                            records_found.append({
-                                "type": "World Record",
-                                "user": global_records[time_type]["activity"].get("user", "?"),
-                                "time_type": time_type,
-                                "metric": "Activity",
-                                "value": f"{active_days}/{total_days} days ({activity_ratio:.1%})",
-                                "date": date_str
-                            })
-            if "consecutive" in global_records:
-                for streak_kind, label in (("days", "Consecutive days"), ("weeks", "Consecutive weeks")):
-                    record = global_records["consecutive"].get(streak_kind)
-                    if record and record.get("date") and is_in_current_week(record["date"]):
-                        records_found.append({
-                            "type": "World Record",
-                            "user": record.get("user", "?"),
-                            "time_type": "Lifetime",
-                            "metric": label,
-                            "value": str(record["value"]),
-                            "date": record["date"],
-                        })
-        # Check team records
-        if "Combined" in highscores:
-            combined_records = highscores["Combined"]
-            for time_type in ["Day", "Week", "Month", "Year"]:
-                if time_type in combined_records:
-                    # Check time records
-                    if "time" in combined_records[time_type] and combined_records[time_type]["time"]["date"]:
-                        date_str = combined_records[time_type]["time"]["date"]
-                        if is_in_current_week(date_str):
-                            records_found.append({
-                                "type": "Team Record",
-                                "user": "All users",
-                                "time_type": time_type,
-                                "metric": "Time",
-                                "value": format_time(combined_records[time_type]["time"]["value"]),
-                                "date": date_str
-                            })
-                    # Check activity records (except for Day)
-                    if time_type != "Day" and "activity" in combined_records[time_type] and \
-                            combined_records[time_type]["activity"]["date"]:
-                        date_str = combined_records[time_type]["activity"]["date"]
-                        if is_in_current_week(date_str):
-                            activity_ratio = combined_records[time_type]["activity"]["value"]
-                            active_days = combined_records[time_type]["activity"]["active_days"]
-                            total_days = combined_records[time_type]["activity"]["total_days"]
-                            records_found.append({
-                                "type": "Team Record",
-                                "user": "All users",
-                                "time_type": time_type,
-                                "metric": "Activity",
-                                "value": f"{active_days}/{total_days} days ({activity_ratio:.1%})",
-                                "date": date_str
-                            })
-            if "consecutive" in combined_records:
-                for streak_kind, label in (("days", "Consecutive days"), ("weeks", "Consecutive weeks")):
-                    record = combined_records["consecutive"].get(streak_kind)
-                    if record and record.get("date") and is_in_current_week(record["date"]):
-                        records_found.append({
-                            "type": "Team Record",
-                            "user": "All users",
-                            "time_type": "Lifetime",
-                            "metric": label,
-                            "value": str(record["value"]),
-                            "date": record["date"],
-                        })
-        # Sort records by date (newest first)
-        records_found.sort(
-            key=lambda x: coerce_highscore_datetime(x["date"]) or datetime.datetime.min,
-            reverse=True,
-        )
-        # Display records
-        if records_found:
-            for record in records_found:
-                # Create record frame
-                record_frame = ctk.CTkFrame(self.records_content, fg_color="#23272B", corner_radius=5)
-                record_frame.pack(fill="x", pady=5, padx=5)
-                # Record type and user
-                type_user_label = ctk.CTkLabel(
-                    record_frame,
-                    text=f"{record['type']} by {record['user']}",
-                    font=("Arial", 14, "bold"),
-                    text_color="white"
-                )
-                type_user_label.pack(anchor="w", padx=10, pady=(5, 2))
-                # Time type and metric
-                metric_label = ctk.CTkLabel(
-                    record_frame,
-                    text=f"{record['time_type']} {record['metric']}: {record['value']}",
-                    font=("Arial", 12),
-                    text_color="#E0E0E0"
-                )
-                metric_label.pack(anchor="w", padx=10, pady=(0, 2))
-                # Date
-                date_label = ctk.CTkLabel(
-                    record_frame,
-                    text=f"Set on: {format_highscore_date(record['date'])}",
-                    font=("Arial", 10),
-                    text_color="#B0B0B0"
-                )
-                date_label.pack(anchor="w", padx=10, pady=(0, 5))
-        else:
-            no_records_label = ctk.CTkLabel(
+        if not records:
+            ctk.CTkLabel(
                 self.records_content,
                 text="No records set this week",
                 font=("Arial", 16),
-                text_color="#B0B0B0"
-            )
-            no_records_label.pack(pady=20)
+                text_color="#B0B0B0",
+            ).pack(pady=20)
+            return
+
+        _SCOPE_LABELS = {
+            "personal": "PB",
+            "global": "World Record",
+            "combined": "Team Record",
+        }
+        _METRIC_LABELS = {
+            "total_time": "Time",
+            "days_active": "Activity",
+            "consecutive_days": "Consecutive Days",
+            "consecutive_weeks": "Consecutive Weeks",
+        }
+
+        for slot in records:
+            scope      = slot.get("scope", "")
+            time_type  = slot.get("time_type", "")
+            metric     = slot.get("metric", "")
+            old_value  = slot.get("old_value") or {}
+            new_value  = slot.get("new_value") or {}
+            broken_by  = slot.get("broken_by", "?")
+            old_holder = slot.get("old_holder")
+            ts         = slot.get("last_broken_ts")
+
+            scope_label  = _SCOPE_LABELS.get(scope, scope)
+            metric_label = _METRIC_LABELS.get(metric, metric)
+            attribution  = "Team" if scope == "combined" else broken_by
+
+            old_str = self._format_record_value(metric, old_value)
+            new_str = self._format_record_value(metric, new_value)
+
+            record_frame = ctk.CTkFrame(self.records_content, fg_color="#23272B", corner_radius=5)
+            record_frame.pack(fill="x", pady=5, padx=5)
+
+            header = f"{scope_label} — {attribution}"
+            if scope == "global" and old_holder:
+                header += f" (was {old_holder})"
+
+            ctk.CTkLabel(
+                record_frame,
+                text=header,
+                font=("Arial", 14, "bold"),
+                text_color="white",
+            ).pack(anchor="w", padx=10, pady=(5, 2))
+
+            ctk.CTkLabel(
+                record_frame,
+                text=f"{time_type} {metric_label}: {old_str} → {new_str}",
+                font=("Arial", 12),
+                text_color="#E0E0E0",
+            ).pack(anchor="w", padx=10, pady=(0, 2))
+
+            if ts:
+                ctk.CTkLabel(
+                    record_frame,
+                    text=f"Set on: {format_highscore_date(ts)}",
+                    font=("Arial", 10),
+                    text_color="#B0B0B0",
+                ).pack(anchor="w", padx=10, pady=(0, 5))
 
     @staticmethod
     def s1_format_bar_header(hours, goal_hours, decimals=1):

@@ -42,6 +42,7 @@
    - [ ]  Correct local data storage
    - [ ]  Integrate all parts
    - [ ]  Dry function calls between parts
+   - [ ]  On close logic
 - [ ]  S1 Highscore
 - [ ]  Stats_viewer
 - [ ]  Notification system

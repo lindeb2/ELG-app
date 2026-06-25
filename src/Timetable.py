@@ -1,10 +1,10 @@
 import customtkinter as ctk
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from commit_transaction import CommitTransactionManager, TXN_REFRESH_INTERVAL_MS
-from period_model import add_calendar_days, coerce_highscore_datetime, to_local
-from timetable_db import aggregations, client, collection, db, user
+from period_model import add_calendar_days, to_local
+from timetable_db import aggregations, client, collection, db, status_meeting, user
 from utils import flash_error
 import requests
 
@@ -24,7 +24,6 @@ class TimetableApp(ctk.CTk):
         self._commit_prepare_generation = 0
         self._plan_refresh_job = None
         self._prepare_retry_job = None
-        self._timestamp_capture_thread = None
 
         self._commit_txn = CommitTransactionManager(collection, aggregations, client, user)
 
@@ -231,6 +230,64 @@ class TimetableApp(ctk.CTk):
         flash_error(self.log_button)
         self.validate_inputs()
 
+    def _persist_broken_records(self, broken_records, timestamp):
+        """
+        Write broken records to Status Meeting > Records.
+        Uses $mergeObjects so old_value is preserved on subsequent breaks of the same slot
+        within the same week: the first write sets old_value; later writes only update
+        new_value and last_broken_ts.
+        """
+        if not broken_records:
+            return
+        local = to_local(timestamp)
+        iso_year, iso_week, _ = local.isocalendar()
+
+        set_fields = {}
+        for record in broken_records:
+            old = record["old_record"]
+            new = record["new_record"]
+            scope = old["scope"]
+            time_type = old["time_type"]
+            metric = old["metric"]
+
+            if scope == "personal":
+                slot = f"data.{iso_year}.{iso_week}.personal.{user}.{time_type}.{metric}"
+            elif scope == "global":
+                slot = f"data.{iso_year}.{iso_week}.global.{time_type}.{metric}"
+            else:  # combined
+                slot = f"data.{iso_year}.{iso_week}.combined.{time_type}.{metric}"
+
+            # Fields written on first break only (preserved by $mergeObjects ordering).
+            # $mergeObjects([defaults, existing_or_empty, always_update]):
+            #   - existing_or_empty overwrites defaults.old_value if the slot already exists
+            #   - always_update overwrites new_value and last_broken_ts every time
+            defaults = {
+                "old_value": old["value"],
+                "scope": scope,
+                "time_type": time_type,
+                "metric": metric,
+                "broken_by": user,
+            }
+            if scope == "global":
+                defaults["old_holder"] = old.get("user")
+
+            set_fields[slot] = {
+                "$mergeObjects": [
+                    defaults,
+                    {"$ifNull": [f"${slot}", {}]},
+                    {"new_value": new["value"], "last_broken_ts": timestamp},
+                ]
+            }
+
+        try:
+            status_meeting.update_one(
+                {"_id": "Records"},
+                [{"$set": set_fields}],
+                upsert=True,
+            )
+        except Exception as e:
+            print(f"Failed to persist broken records: {e}")
+
     def _on_commit_success(self, timestamp, broken_records):
         if broken_records:
             global_records = [r for r in broken_records if r["old_record"]["scope"] == "global"]
@@ -240,6 +297,11 @@ class TimetableApp(ctk.CTk):
                 user, global_records, personal_records, combined_records, timestamp
             )
             self.send_notification(message)
+            threading.Thread(
+                target=self._persist_broken_records,
+                args=(broken_records, timestamp),
+                daemon=True,
+            ).start()
 
         self._cancel_commit_jobs()
         self.log_ts = self.local_start = self._commit_plan = None
@@ -276,11 +338,10 @@ class TimetableApp(ctk.CTk):
         Returns:
             int: Whole local days elapsed since count start, or 0 if still before it
         """
-        parsed = coerce_highscore_datetime(old_date)
-        if parsed is None:
+        if not isinstance(old_date, datetime):
             return 0
         count_start = add_calendar_days(
-            to_local(parsed).replace(hour=0, minute=0, second=0, microsecond=0),
+            to_local(old_date).replace(hour=0, minute=0, second=0, microsecond=0),
             1,
         )
         ref_local = to_local(reference)
