@@ -18,6 +18,7 @@
 - [X]  **Hours Graph:** Add Goal Lines?
 - [X]  **Days Chart:** Add Goal Lines?
 - [X]  **Team Hours Bar:** Add Goal Line?
+- [X]  S1 Highscore
 
 ## Moved to Issues
 - [ ]  `self.days_chart_data_row.bind("<Configure>", update_day_bars)`? (Moved to issue)
@@ -43,7 +44,6 @@
    - [ ]  Integrate all parts
    - [ ]  Dry function calls between parts
    - [ ]  On close logic
-- [ ]  S1 Highscore
 - [ ]  Stats_viewer
 - [ ]  Notification system
 - [ ]  Logic if new week
