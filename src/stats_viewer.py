@@ -62,6 +62,12 @@ _PERIOD_MODE_LABELS = {
 
 _BTN = {"fg_color": "#000000", "hover_color": "#121212", "text_color": "white"}
 _BTN_ACTIVE = {"fg_color": "#2C2C2C", "hover_color": "#3C3C3C", "text_color": "white"}
+_MENU = {
+    "fg_color": "#000000",
+    "button_color": "#121212",
+    "button_hover_color": "#2C2C2C",
+    "text_color": "white",
+}
 _MUTED = "#B0B0B0"
 _CARD = "#23272B"
 
@@ -512,6 +518,9 @@ class StatsViewer(ctk.CTk):
         ctk.CTkLabel(parent, text=text, font=("Arial", 16), text_color=color).pack(pady=20)
 
     def _refresh_current_page(self, error: str | None = None):
+        if self._refresh_job:
+            self.after_cancel(self._refresh_job)
+            self._refresh_job = None
         self._header.configure(text=self._page_title())
         self._clear_content()
         if error:
@@ -566,7 +575,12 @@ class StatsViewer(ctk.CTk):
             frame.grid(sticky="nsew")
             self._section_message(frame, f"Error: {err}", "#FF6666")
             return
-        apply_fn(payload)
+        try:
+            apply_fn(payload)
+        except Exception as exc:
+            frame = ctk.CTkFrame(self._content_host, fg_color="transparent")
+            frame.grid(sticky="nsew")
+            self._section_message(frame, f"Display error: {exc}", "#FF6666")
 
     # --- Fetch payloads ---
 
@@ -731,7 +745,7 @@ class StatsViewer(ctk.CTk):
             frame,
             values=list(_PERIOD_MODE_LABELS.values()),
             command=lambda label: self._on_period_mode_changed(label_to_mode[label]),
-            **_BTN,
+            **_MENU,
         )
         menu.set(_PERIOD_MODE_LABELS.get(self._period_mode, "All time"))
         menu.pack(side="left")
@@ -1005,7 +1019,7 @@ class StatsViewer(ctk.CTk):
             filt,
             values=values,
             command=self._on_logs_user_filter,
-            **_BTN,
+            **_MENU,
         )
         menu.set(self._logs_user_filter if self._logs_user_filter in values else "All")
         menu.pack(side="left")
