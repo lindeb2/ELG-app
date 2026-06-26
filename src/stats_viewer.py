@@ -9,10 +9,14 @@ from typing import Any, Callable
 
 import customtkinter as ctk
 
+from zoneinfo import ZoneInfo
+
 from CtkSmartScrollableFrame import CtkSmartScrollableFrame
 from meeting_app import MeetingApp, format_time
 from period_model import (
+    APP_TIMEZONE,
     PeriodKeys,
+    as_utc,
     format_highscore_date,
     monday_midnight_local,
     period_keys,
@@ -20,18 +24,21 @@ from period_model import (
 )
 from timetable_db import aggregations, collection, status_meeting, user as config_user
 
+_TZ = ZoneInfo(APP_TIMEZONE)
+
 # --- Constants ---
 
-SCOPE_WORLD = "world"
-SCOPE_TEAM = "team"
-SCOPE_USER = "user"
+VIEW_WORLD = "world"
+VIEW_TEAM = "team"
+VIEW_USER = "user"
+VIEW_RECORDS = "records"
+VIEW_LOGS = "logs"
 
-PAGE_STATS = "stats"
-PAGE_RECORDS = "records"
-PAGE_LOGS = "logs"
+STATS_VIEWS = frozenset({VIEW_WORLD, VIEW_TEAM, VIEW_USER})
 
 RECORDS_PAGE_SIZE = 25
-LOGS_PAGE_SIZE = 50
+LOGS_PAGE_SIZE = 500
+LOGS_PAGE_SIZE_OPTIONS = ("10", "100", "250", "500", "1000", "all")
 WATCHER_DEBOUNCE_MS = 200
 
 GOAL_COLOR_REACHED = "#00AD00"
@@ -54,10 +61,33 @@ _PERIOD_TYPES = ("Year", "Month", "Week", "Day")
 _PERIOD_MODES = ("all", "year", "month", "week", "day")
 _PERIOD_MODE_LABELS = {
     "all": "All time",
-    "year": "This year",
-    "month": "This month",
-    "week": "This week",
-    "day": "Today",
+    "year": "Year",
+    "month": "Month",
+    "week": "ISO week",
+    "day": "Day",
+}
+
+_DATE_FILTER_MODES = ("none", "after", "before", "between")
+_DATE_FILTER_LABELS = {
+    "none": "Any date",
+    "after": "After",
+    "before": "Before",
+    "between": "Between",
+}
+_ELAPSED_FILTER_MODES = ("none", "gt", "lt", "between")
+_ELAPSED_FILTER_LABELS = {
+    "none": "Any duration",
+    "gt": "Greater than",
+    "lt": "Less than",
+    "between": "Between",
+}
+_SORT_OPTIONS = {
+    "timestamp_desc": "Newest first",
+    "timestamp_asc": "Oldest first",
+    "elapsed_desc": "Longest first",
+    "elapsed_asc": "Shortest first",
+    "user_asc": "User A–Z",
+    "user_desc": "User Z–A",
 }
 
 _BTN = {"fg_color": "#000000", "hover_color": "#121212", "text_color": "white"}
@@ -86,24 +116,44 @@ def fetch_highscores() -> dict | None:
     return aggregations.find_one({"_id": "Highscores"})
 
 
-def fetch_agg_doc(scope: str, selected_user: str | None) -> dict | None:
-    if scope == SCOPE_TEAM:
+def _doc_lookup(doc: dict, key: str | int):
+    """MongoDB subdocuments may use str or int keys."""
+    if not isinstance(doc, dict):
+        return None
+    candidates: list[str | int] = [key]
+    if isinstance(key, str) and key.isdigit():
+        ik = int(key)
+        candidates.extend([ik, key.zfill(2)])
+    elif isinstance(key, int):
+        candidates.extend([str(key), str(key).zfill(2)])
+    seen: set[str | int] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if candidate in doc:
+            return doc[candidate]
+    return None
+
+
+def fetch_agg_doc(view: str, selected_user: str | None) -> dict | None:
+    if view == VIEW_TEAM:
         doc_id = "Combined"
-    elif scope == SCOPE_USER and selected_user:
+    elif view == VIEW_USER and selected_user:
         doc_id = selected_user
     else:
         return None
     return aggregations.find_one({"_id": doc_id}) or {}
 
 
-def highscore_slice(highscores: dict | None, scope: str, selected_user: str | None) -> dict | None:
+def highscore_slice(highscores: dict | None, view: str, selected_user: str | None) -> dict | None:
     if not highscores:
         return None
-    if scope == SCOPE_WORLD:
+    if view == VIEW_WORLD:
         return highscores.get("Global")
-    if scope == SCOPE_TEAM:
+    if view == VIEW_TEAM:
         return highscores.get("Combined")
-    if scope == SCOPE_USER and selected_user:
+    if view == VIEW_USER and selected_user:
         return highscores.get(selected_user)
     return None
 
@@ -111,14 +161,24 @@ def highscore_slice(highscores: dict | None, scope: str, selected_user: str | No
 def bucket_from_agg(agg: dict, mode: str, keys: PeriodKeys) -> dict:
     years = agg.get("years") or {}
     if mode == "year":
-        return years.get(keys.year) or {}
+        result = _doc_lookup(years, keys.year)
+        return result if isinstance(result, dict) else {}
     if mode == "month":
-        return ((years.get(keys.year) or {}).get("months") or {}).get(keys.month) or {}
+        year_bucket = _doc_lookup(years, keys.year) or {}
+        months = year_bucket.get("months") if isinstance(year_bucket, dict) else {}
+        result = _doc_lookup(months or {}, keys.month)
+        return result if isinstance(result, dict) else {}
     if mode == "week":
-        return ((years.get(keys.iso_week_year) or {}).get("weeks") or {}).get(keys.iso_week) or {}
+        year_bucket = _doc_lookup(years, keys.iso_week_year) or {}
+        weeks = year_bucket.get("weeks") if isinstance(year_bucket, dict) else {}
+        result = _doc_lookup(weeks or {}, keys.iso_week)
+        return result if isinstance(result, dict) else {}
     if mode == "day":
-        month_bucket = (years.get(keys.year) or {}).get("months") or {}
-        return ((month_bucket.get(keys.month) or {}).get("days") or {}).get(keys.day) or {}
+        year_bucket = _doc_lookup(years, keys.year) or {}
+        month_bucket = _doc_lookup((year_bucket.get("months") if isinstance(year_bucket, dict) else {}) or {}, keys.month)
+        days = month_bucket.get("days") if isinstance(month_bucket, dict) else {}
+        result = _doc_lookup(days or {}, keys.day)
+        return result if isinstance(result, dict) else {}
     return {}
 
 
@@ -129,17 +189,110 @@ def lifetime_totals(agg: dict) -> dict:
     return {"time": total_time, "active_years": active_years, "year_count": len(years)}
 
 
-def fetch_goals_doc() -> dict:
-    doc = status_meeting.find_one({"_id": "Goals"}) or {}
-    return {k: v for k, v in doc.items() if k != "_id"}
-
-
 def week_goals(goals_doc: dict, iso_year: str, iso_week: str) -> dict:
-    return (goals_doc.get(iso_year) or {}).get(iso_week) or {}
+    year_bucket = _doc_lookup(goals_doc, iso_year) or {}
+    result = _doc_lookup(year_bucket, iso_week)
+    return result if isinstance(result, dict) else {}
 
 
 def week_bucket_from_agg(agg: dict, iso_year: str, iso_week: str) -> dict:
-    return ((agg.get("years") or {}).get(iso_year) or {}).get("weeks", {}).get(iso_week) or {}
+    year_bucket = _doc_lookup(agg.get("years") or {}, iso_year) or {}
+    weeks = year_bucket.get("weeks") if isinstance(year_bucket, dict) else {}
+    result = _doc_lookup(weeks or {}, iso_week)
+    return result if isinstance(result, dict) else {}
+
+
+def last_log_timestamp(for_user: str | None = None) -> datetime | None:
+    query: dict = {"user": {"$nin": [None, ""]}}
+    if for_user:
+        query["user"] = for_user
+    doc = collection.find_one(query, sort=[("timestamp", -1)], projection={"timestamp": 1})
+    return doc["timestamp"] if doc else None
+
+
+def display_streak_current(agg: dict, view: str, selected_user: str | None) -> tuple[int, int]:
+    """Show 0 when the stored streak is not active in the current day/week."""
+    streaks = agg.get("streaks") or {}
+    day_stored = int((streaks.get("days") or {}).get("current") or 0)
+    week_stored = int((streaks.get("weeks") or {}).get("current") or 0)
+    if day_stored == 0 and week_stored == 0:
+        return 0, 0
+
+    if view == VIEW_USER and selected_user:
+        last_ts = last_log_timestamp(selected_user)
+    elif view == VIEW_TEAM:
+        last_ts = last_log_timestamp()
+    else:
+        return day_stored, week_stored
+
+    if not last_ts:
+        return 0, 0
+
+    now_keys = period_keys(datetime.now(timezone.utc).replace(tzinfo=None))
+    last_keys = period_keys(last_ts)
+    day_active = (
+        last_keys.year == now_keys.year
+        and last_keys.month == now_keys.month
+        and last_keys.day == now_keys.day
+    )
+    week_active = (
+        last_keys.iso_week_year == now_keys.iso_week_year
+        and last_keys.iso_week == now_keys.iso_week
+    )
+    return (day_stored if day_active else 0, week_stored if week_active else 0)
+
+
+def parse_local_datetime(text: str) -> datetime | None:
+    text = (text or "").strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            local = datetime.strptime(text, fmt).replace(tzinfo=_TZ)
+            return as_utc(local).replace(tzinfo=None)
+        except ValueError:
+            continue
+    return None
+
+
+def parse_elapsed_seconds(text: str) -> int | None:
+    text = (text or "").strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return int(text)
+    if ":" in text:
+        parts = text.split(":")
+        try:
+            parts = [int(p) for p in parts]
+        except ValueError:
+            return None
+        if len(parts) == 2:
+            return parts[0] * 60 + parts[1]
+        if len(parts) == 3:
+            return parts[0] * 3600 + parts[1] * 60 + parts[2]
+    return None
+
+
+def period_keys_from_selection(
+    mode: str,
+    year: str,
+    month: str,
+    week: str,
+    day: str,
+) -> PeriodKeys:
+    if mode == "all":
+        return period_keys(datetime.now(timezone.utc).replace(tzinfo=None))
+    y, m, d = int(year), int(month), int(day)
+    if mode == "year":
+        local = datetime(y, 1, 1, tzinfo=_TZ)
+    elif mode == "month":
+        local = datetime(y, m, 1, tzinfo=_TZ)
+    elif mode == "week":
+        local = datetime.fromisocalendar(y, int(week), 1).replace(tzinfo=_TZ)
+    else:
+        local = datetime(y, m, d, tzinfo=_TZ)
+    return period_keys(as_utc(local).replace(tzinfo=None))
 
 
 def first_log_timestamp(for_user: str | None = None) -> datetime | None:
@@ -174,7 +327,7 @@ def classify_user_goal_week(
     agg: dict,
 ) -> str:
     """Return 'none', 'reached', or 'missed'."""
-    goals = (week_goals(goals_doc, iso_year, iso_week).get(username) or {})
+    goals = week_goals(goals_doc, iso_year, iso_week).get(username) or {}
     goal_hours = goals.get("hours")
     goal_days = goals.get("days")
     if not goal_hours and not goal_days:
@@ -196,7 +349,7 @@ def classify_user_goal_week(
 
 
 def compute_goal_summary(
-    scope: str,
+    view: str,
     selected_user: str | None,
     users: list[str],
     goals_doc: dict,
@@ -210,14 +363,16 @@ def compute_goal_summary(
     counts = {"set": 0, "reached": 0, "missed": 0, "none": 0}
     week_rows: list[tuple[str, str, str]] = []
 
-    if scope == SCOPE_USER and selected_user:
-        agg = fetch_agg_doc(SCOPE_USER, selected_user) or {}
+    if view == VIEW_USER and selected_user:
+        agg = fetch_agg_doc(VIEW_USER, selected_user) or {}
         for iso_year, iso_week in weeks:
-            status = classify_user_goal_week(selected_user, iso_year, iso_week, goals_doc, agg)
+            status = classify_user_goal_week(
+                selected_user, iso_year, iso_week, goals_doc, agg
+            )
             counts[status] += 1
             week_rows.append((iso_year, iso_week, status))
     else:
-        user_aggs = {u: fetch_agg_doc(SCOPE_USER, u) or {} for u in users}
+        user_aggs = {u: fetch_agg_doc(VIEW_USER, u) or {} for u in users}
         for iso_year, iso_week in weeks:
             statuses = [
                 classify_user_goal_week(u, iso_year, iso_week, goals_doc, user_aggs[u])
@@ -262,22 +417,107 @@ def flatten_all_records() -> list[dict]:
     return records
 
 
+def period_label(mode: str, keys: PeriodKeys) -> str:
+    if mode == "all":
+        return "All time"
+    if mode == "year":
+        return f"Year {keys.year}"
+    if mode == "month":
+        return f"{keys.year}-{keys.month}"
+    if mode == "week":
+        return f"Week {keys.iso_week}, {keys.iso_week_year}"
+    return f"{keys.year}-{keys.month}-{keys.day}"
+
+
+def build_logs_query(
+    *,
+    users: set[str] | None,
+    date_mode: str,
+    date_after: str,
+    date_before: str,
+    elapsed_mode: str,
+    elapsed_min: str,
+    elapsed_max: str,
+    search: str,
+) -> dict:
+    query: dict = {"user": {"$nin": [None, ""]}}
+    if users:
+        query["user"] = {"$in": sorted(users)}
+
+    if search.strip():
+        pattern = {"$regex": search.strip(), "$options": "i"}
+        query["$or"] = [{"name": pattern}, {"description": pattern}]
+
+    ts_filter: dict = {}
+    after_dt = parse_local_datetime(date_after)
+    before_dt = parse_local_datetime(date_before)
+    if date_mode == "after" and after_dt:
+        ts_filter["$gte"] = after_dt
+    elif date_mode == "before" and before_dt:
+        ts_filter["$lt"] = before_dt
+    elif date_mode == "between":
+        if after_dt:
+            ts_filter["$gte"] = after_dt
+        if before_dt:
+            ts_filter["$lt"] = before_dt
+    if ts_filter:
+        query["timestamp"] = ts_filter
+
+    elapsed_filter: dict = {}
+    e_min = parse_elapsed_seconds(elapsed_min)
+    e_max = parse_elapsed_seconds(elapsed_max)
+    if elapsed_mode == "gt" and e_min is not None:
+        elapsed_filter["$gt"] = e_min
+    elif elapsed_mode == "lt" and e_max is not None:
+        elapsed_filter["$lt"] = e_max
+    elif elapsed_mode == "between":
+        if e_min is not None:
+            elapsed_filter["$gte"] = e_min
+        if e_max is not None:
+            elapsed_filter["$lte"] = e_max
+    if elapsed_filter:
+        query["elapsed_time"] = elapsed_filter
+
+    return query
+
+
+def logs_sort_spec(sort_key: str) -> list[tuple[str, int]]:
+    mapping = {
+        "timestamp_desc": [("timestamp", -1)],
+        "timestamp_asc": [("timestamp", 1)],
+        "elapsed_desc": [("elapsed_time", -1), ("timestamp", -1)],
+        "elapsed_asc": [("elapsed_time", 1), ("timestamp", -1)],
+        "user_asc": [("user", 1), ("timestamp", -1)],
+        "user_desc": [("user", -1), ("timestamp", -1)],
+    }
+    return mapping.get(sort_key, [("timestamp", -1)])
+
+
 def fetch_logs_page(
     *,
-    log_user: str | None,
+    filters: dict,
     page: int,
-    page_size: int = LOGS_PAGE_SIZE,
+    page_size: int | None = LOGS_PAGE_SIZE,
 ) -> tuple[list[dict], int]:
-    query: dict = {"user": {"$nin": [None, ""]}}
-    if log_user and log_user != "All":
-        query["user"] = log_user
+    filter_args = dict(filters)
+    sort_key = filter_args.pop("sort", "timestamp_desc")
+    query = build_logs_query(**filter_args)
     total = collection.count_documents(query)
     cursor = (
-        collection.find(query, projection={"timestamp": 1, "user": 1, "elapsed_time": 1})
-        .sort("timestamp", -1)
-        .skip(page * page_size)
-        .limit(page_size)
+        collection.find(
+            query,
+            projection={
+                "timestamp": 1,
+                "user": 1,
+                "elapsed_time": 1,
+                "name": 1,
+                "description": 1,
+            },
+        )
+        .sort(logs_sort_spec(sort_key))
     )
+    if page_size is not None:
+        cursor = cursor.skip(page * page_size).limit(page_size)
     return list(cursor), total
 
 
@@ -323,18 +563,6 @@ def build_week_chart_data(logs: list[dict], users: list[str] | None = None) -> l
     return rows
 
 
-def period_label(mode: str, keys: PeriodKeys) -> str:
-    if mode == "all":
-        return "All time"
-    if mode == "year":
-        return f"Year {keys.year}"
-    if mode == "month":
-        return f"{keys.year}-{keys.month}"
-    if mode == "week":
-        return f"Week {keys.iso_week}, {keys.iso_week_year}"
-    return f"{keys.year}-{keys.month}-{keys.day}"
-
-
 # --- Application ---
 
 
@@ -346,20 +574,32 @@ class StatsViewer(ctk.CTk):
         self.geometry("1280x800")
         self.minsize(960, 600)
 
-        self._scope = SCOPE_WORLD
-        self._page = PAGE_STATS
+        self._view = VIEW_WORLD
         self._selected_user = config_user if config_user and config_user != "Unknown" else None
+        now_keys = period_keys(datetime.now(timezone.utc).replace(tzinfo=None))
         self._period_mode = "all"
+        self._period_year = now_keys.year
+        self._period_month = now_keys.month
+        self._period_week = now_keys.iso_week
+        self._period_day = now_keys.day
         self._users: list[str] = []
         self._fetch_gen = 0
         self._refresh_job: str | None = None
         self._records_page = 0
         self._logs_page = 0
-        self._logs_user_filter = "All"
+        self._logs_page_size = LOGS_PAGE_SIZE
         self._goals_grid_open = False
+        self._log_user_checks: dict[str, ctk.BooleanVar] = {}
+        self._log_date_mode = "none"
+        self._log_date_after = ""
+        self._log_date_before = ""
+        self._log_elapsed_mode = "none"
+        self._log_elapsed_min = ""
+        self._log_elapsed_max = ""
+        self._log_search = ""
+        self._log_sort = "timestamp_desc"
 
-        self._scope_buttons: dict[str, ctk.CTkButton] = {}
-        self._page_buttons: dict[str, ctk.CTkButton] = {}
+        self._nav_buttons: dict[str, ctk.CTkButton] = {}
         self._user_buttons: dict[str, ctk.CTkButton] = {}
 
         self.grid_rowconfigure(0, weight=1)
@@ -387,39 +627,31 @@ class StatsViewer(ctk.CTk):
     def _build_sidebar(self):
         sidebar = ctk.CTkFrame(self, width=220, corner_radius=0)
         sidebar.grid(row=0, column=0, sticky="nsew")
-        sidebar.grid_rowconfigure(4, weight=1)
+        sidebar.grid_rowconfigure(2, weight=1)
         sidebar.grid_propagate(False)
 
-        ctk.CTkLabel(sidebar, text="Scope", font=("Arial", 14, "bold")).grid(
+        ctk.CTkLabel(sidebar, text="Views", font=("Arial", 14, "bold")).grid(
             row=0, column=0, padx=12, pady=(12, 4), sticky="w"
         )
-        scope_frame = ctk.CTkFrame(sidebar, fg_color="transparent")
-        scope_frame.grid(row=1, column=0, sticky="ew", padx=8)
+        nav_frame = ctk.CTkFrame(sidebar, fg_color="transparent")
+        nav_frame.grid(row=1, column=0, sticky="ew", padx=8)
         for i, (key, label) in enumerate(
-            ((SCOPE_WORLD, "World Records"), (SCOPE_TEAM, "Team Stats"), (SCOPE_USER, "Users"))
+            (
+                (VIEW_WORLD, "World Records"),
+                (VIEW_TEAM, "Team Stats"),
+                (VIEW_USER, "Users"),
+                (VIEW_RECORDS, "Record feed"),
+                (VIEW_LOGS, "Logs"),
+            )
         ):
             btn = ctk.CTkButton(
-                scope_frame, text=label, command=lambda k=key: self._set_scope(k), **_BTN
+                nav_frame, text=label, command=lambda k=key: self._set_view(k), **_BTN
             )
             btn.grid(row=i, column=0, sticky="ew", pady=3)
-            self._scope_buttons[key] = btn
+            self._nav_buttons[key] = btn
 
-        self._user_list_frame = CtkSmartScrollableFrame(sidebar, height=160, fg_color="#1A1A1A")
-        self._user_list_frame.grid(row=2, column=0, sticky="ew", padx=8, pady=(8, 4))
-
-        ctk.CTkLabel(sidebar, text="Pages", font=("Arial", 14, "bold")).grid(
-            row=3, column=0, padx=12, pady=(8, 4), sticky="w"
-        )
-        page_frame = ctk.CTkFrame(sidebar, fg_color="transparent")
-        page_frame.grid(row=4, column=0, sticky="new", padx=8)
-        for i, (key, label) in enumerate(
-            ((PAGE_STATS, "Stats"), (PAGE_RECORDS, "Record feed"), (PAGE_LOGS, "Logs"))
-        ):
-            btn = ctk.CTkButton(
-                page_frame, text=label, command=lambda k=key: self._set_page(k), **_BTN
-            )
-            btn.grid(row=i, column=0, sticky="ew", pady=3)
-            self._page_buttons[key] = btn
+        self._user_list_frame = CtkSmartScrollableFrame(sidebar, height=200, fg_color="#1A1A1A")
+        self._user_list_frame.grid(row=2, column=0, sticky="nsew", padx=8, pady=(8, 12))
 
     def _load_users_then_show(self):
         def worker():
@@ -437,6 +669,9 @@ class StatsViewer(ctk.CTk):
             self._selected_user = users[0]
         elif self._selected_user and self._selected_user not in users and users:
             self._selected_user = users[0]
+        for u in users:
+            if u not in self._log_user_checks:
+                self._log_user_checks[u] = ctk.BooleanVar(value=False)
         self._rebuild_user_list()
         self._update_nav_styles()
         self._refresh_current_page(error=error)
@@ -445,16 +680,19 @@ class StatsViewer(ctk.CTk):
         for w in self._user_list_frame.winfo_children():
             w.destroy()
         self._user_buttons.clear()
-        if self._scope != SCOPE_USER:
+        if self._view != VIEW_USER:
             return
         for i, username in enumerate(self._users):
             is_config = username == config_user
+            is_sel = username == self._selected_user
             btn = ctk.CTkButton(
                 self._user_list_frame,
                 text=username,
                 anchor="w",
                 command=lambda u=username: self._set_user(u),
-                fg_color="#1E3A1E" if is_config and username == self._selected_user else _BTN["fg_color"],
+                fg_color="#1E3A1E" if is_config and is_sel else (
+                    "#2C2C2C" if is_sel else _BTN["fg_color"]
+                ),
                 hover_color=_BTN["hover_color"],
                 text_color="white",
                 font=("Arial", 13, "bold" if is_config else "normal"),
@@ -462,49 +700,44 @@ class StatsViewer(ctk.CTk):
             btn.grid(row=i, column=0, sticky="ew", pady=1, padx=2)
             self._user_buttons[username] = btn
 
-    def _set_scope(self, scope: str):
-        if self._scope == scope:
+    def _set_view(self, view: str):
+        if self._view == view and view != VIEW_USER:
             return
-        self._scope = scope
+        self._view = view
         self._goals_grid_open = False
-        if scope == SCOPE_USER and config_user in self._users:
+        if view == VIEW_USER and config_user in self._users:
             self._selected_user = config_user
         self._update_nav_styles()
         self._rebuild_user_list()
         self._refresh_current_page()
 
     def _set_user(self, username: str):
-        if self._selected_user == username:
+        if self._selected_user == username and self._view == VIEW_USER:
             return
         self._selected_user = username
-        self._scope = SCOPE_USER
+        self._view = VIEW_USER
         self._goals_grid_open = False
         self._update_nav_styles()
         self._rebuild_user_list()
         self._refresh_current_page()
 
-    def _set_page(self, page: str):
-        if self._page == page:
-            return
-        self._page = page
-        self._update_nav_styles()
-        self._refresh_current_page()
-
     def _update_nav_styles(self):
-        for key, btn in self._scope_buttons.items():
-            btn.configure(**(_BTN_ACTIVE if key == self._scope else _BTN))
-        for key, btn in self._page_buttons.items():
-            btn.configure(**(_BTN_ACTIVE if key == self._page else _BTN))
-        self._user_list_frame.grid() if self._scope == SCOPE_USER else self._user_list_frame.grid_remove()
+        for key, btn in self._nav_buttons.items():
+            active = key == self._view
+            btn.configure(**(_BTN_ACTIVE if active else _BTN))
+        if self._view == VIEW_USER:
+            self._user_list_frame.grid()
+        else:
+            self._user_list_frame.grid_remove()
 
     def _page_title(self) -> str:
-        if self._page == PAGE_RECORDS:
+        if self._view == VIEW_RECORDS:
             return "Record feed"
-        if self._page == PAGE_LOGS:
+        if self._view == VIEW_LOGS:
             return "Log browser"
-        if self._scope == SCOPE_WORLD:
+        if self._view == VIEW_WORLD:
             return "World Records"
-        if self._scope == SCOPE_TEAM:
+        if self._view == VIEW_TEAM:
             return "Team Stats"
         return f"User Stats — {self._selected_user or '—'}"
 
@@ -529,15 +762,18 @@ class StatsViewer(ctk.CTk):
             self._section_message(frame, f"Connection error: {error}", "#FF6666")
             return
 
-        if self._page == PAGE_STATS:
+        if self._view == VIEW_WORLD:
             self._show_stats_loading()
             self._async_fetch(self._fetch_stats_payload, self._render_stats_page)
-        elif self._page == PAGE_RECORDS:
+        elif self._view == VIEW_RECORDS:
             self._show_records_loading()
             self._async_fetch(self._fetch_records_payload, self._render_records_page)
-        else:
+        elif self._view == VIEW_LOGS:
             self._show_logs_loading()
             self._async_fetch(self._fetch_logs_payload, self._render_logs_page)
+        else:
+            self._show_stats_loading()
+            self._async_fetch(self._fetch_stats_payload, self._render_stats_page)
 
     def _show_stats_loading(self):
         self._clear_content()
@@ -586,36 +822,75 @@ class StatsViewer(ctk.CTk):
 
     def _fetch_stats_payload(self) -> dict:
         highscores = fetch_highscores()
-        keys = period_keys(datetime.now(timezone.utc).replace(tzinfo=None))
+        keys = period_keys_from_selection(
+            self._period_mode,
+            self._period_year,
+            self._period_month,
+            self._period_week,
+            self._period_day,
+        )
         payload = {
             "highscores": highscores,
             "keys": keys,
-            "scope": self._scope,
+            "view": self._view,
             "selected_user": self._selected_user,
             "period_mode": self._period_mode,
             "users": self._users,
         }
-        if self._scope in (SCOPE_TEAM, SCOPE_USER):
-            payload["agg"] = fetch_agg_doc(self._scope, self._selected_user)
-            payload["goals_doc"] = fetch_goals_doc()
+        if self._view in (VIEW_TEAM, VIEW_USER):
+            payload["agg"] = fetch_agg_doc(self._view, self._selected_user)
+            doc = status_meeting.find_one({"_id": "Author Goals"}) or {}
+            payload["goals_doc"] = {k: v for k, v in doc.items() if k != "_id"}
             first_ts = first_log_timestamp(
-                self._selected_user if self._scope == SCOPE_USER else None
+                self._selected_user if self._view == VIEW_USER else None
             )
             payload["goal_summary"] = compute_goal_summary(
-                self._scope,
+                self._view,
                 self._selected_user,
                 self._users,
                 payload["goals_doc"],
                 first_ts,
             )
-            if self._scope in (SCOPE_TEAM, SCOPE_USER):
-                iso_y, iso_w = keys.iso_week_year, keys.iso_week
-                payload["week_logs"] = logs_for_week(
-                    iso_y,
-                    iso_w,
-                    self._selected_user if self._scope == SCOPE_USER else None,
-                )
+            chart_keys = period_keys(datetime.now(timezone.utc).replace(tzinfo=None))
+            if self._period_mode == "week":
+                chart_keys = keys
+            iso_y, iso_w = chart_keys.iso_week_year, chart_keys.iso_week
+            payload["week_logs"] = logs_for_week(
+                iso_y,
+                iso_w,
+                self._selected_user if self._view == VIEW_USER else None,
+            )
+            payload["chart_week_label"] = f"{iso_y}-W{iso_w}"
         return payload
+
+    def _log_filters_dict(self) -> dict:
+        selected_users = {
+            u for u, var in self._log_user_checks.items() if var.get()
+        }
+        return {
+            "users": selected_users if selected_users else None,
+            "date_mode": self._log_date_mode,
+            "date_after": self._log_date_after,
+            "date_before": self._log_date_before,
+            "elapsed_mode": self._log_elapsed_mode,
+            "elapsed_min": self._log_elapsed_min,
+            "elapsed_max": self._log_elapsed_max,
+            "search": self._log_search,
+            "sort": self._log_sort,
+        }
+
+    def _fetch_logs_payload(self) -> dict:
+        logs, total = fetch_logs_page(
+            filters=self._log_filters_dict(),
+            page=self._logs_page,
+            page_size=self._logs_page_size,
+        )
+        return {
+            "logs": logs,
+            "total": total,
+            "page": self._logs_page,
+            "page_size": self._logs_page_size,
+        }
 
     def _fetch_records_payload(self) -> dict:
         all_records = flatten_all_records()
@@ -627,13 +902,6 @@ class StatsViewer(ctk.CTk):
             "page": self._records_page,
         }
 
-    def _fetch_logs_payload(self) -> dict:
-        logs, total = fetch_logs_page(
-            log_user=self._logs_user_filter,
-            page=self._logs_page,
-        )
-        return {"logs": logs, "total": total, "page": self._logs_page}
-
     # --- Stats page render ---
 
     def _render_stats_page(self, payload: dict):
@@ -641,13 +909,13 @@ class StatsViewer(ctk.CTk):
         scroll.grid(sticky="nsew")
         scroll.grid_columnconfigure(0, weight=1)
 
-        if payload["scope"] == SCOPE_USER and not payload.get("selected_user"):
+        if payload["view"] == VIEW_USER and not payload.get("selected_user"):
             self._section_message(scroll, "Select a user from the sidebar.")
             return
 
         slice_data = highscore_slice(
             payload.get("highscores"),
-            payload["scope"],
+            payload["view"],
             payload.get("selected_user"),
         )
         if not slice_data:
@@ -655,22 +923,13 @@ class StatsViewer(ctk.CTk):
             return
 
         row = 0
-        if payload["scope"] == SCOPE_WORLD:
-            ctk.CTkLabel(
-                scroll, text="All-time world records", font=("Arial", 18, "bold"), anchor="w"
-            ).grid(row=row, column=0, sticky="ew", padx=8, pady=(4, 8))
-            row += 1
-            row = self._render_peaks_block(scroll, row, slice_data, is_global=True)
-        else:
-            ctk.CTkLabel(
-                scroll, text="All-time peaks", font=("Arial", 18, "bold"), anchor="w"
-            ).grid(row=row, column=0, sticky="ew", padx=8, pady=(4, 4))
-            row += 1
-            row = self._render_peaks_block(scroll, row, slice_data, is_global=False)
+        is_global = payload["view"] == VIEW_WORLD
+        row = self._render_peaks_block(scroll, row, slice_data, is_global=is_global)
 
-            row = self._render_period_controls(scroll, row, payload)
+        if payload["view"] in (VIEW_TEAM, VIEW_USER):
+            row = self._render_period_controls(scroll, row)
             row = self._render_period_stats(scroll, row, payload)
-            row = self._render_streaks_live(scroll, row, payload.get("agg") or {})
+            row = self._render_streaks_live(scroll, row, payload)
             row = self._render_charts(scroll, row, payload)
             row = self._render_goals_block(scroll, row, payload)
 
@@ -680,9 +939,9 @@ class StatsViewer(ctk.CTk):
                 continue
             frame = ctk.CTkFrame(parent, fg_color=_CARD, corner_radius=6)
             frame.grid(row=row, column=0, sticky="ew", padx=8, pady=4)
-            frame.grid_columnconfigure(0, weight=1)
+            frame.grid_columnconfigure(1, weight=1)
             ctk.CTkLabel(frame, text=time_type, font=("Arial", 16, "bold"), anchor="w").grid(
-                row=0, column=0, sticky="w", padx=10, pady=4
+                row=0, column=0, columnspan=2, sticky="w", padx=10, pady=4
             )
             inner_row = 1
             slot = records[time_type]
@@ -700,19 +959,16 @@ class StatsViewer(ctk.CTk):
                 )
             row += 1
 
-        if "consecutive" in records:
+        consecutive = records.get("consecutive") or {}
+        for kind, label in (("days", "Consecutive Days"), ("weeks", "Consecutive Weeks")):
+            streak = consecutive.get(kind) or {}
             frame = ctk.CTkFrame(parent, fg_color=_CARD, corner_radius=6)
             frame.grid(row=row, column=0, sticky="ew", padx=8, pady=4)
-            ctk.CTkLabel(
-                frame, text="Lifetime Consecutive", font=("Arial", 16, "bold"), anchor="w"
-            ).grid(row=0, column=0, sticky="w", padx=10, pady=4)
-            inner = 1
-            for kind, label in (("days", "Days"), ("weeks", "Weeks")):
-                streak = records["consecutive"].get(kind) or {}
-                inner = self._peak_metric_row(
-                    frame, inner, f"Consecutive {label}", str(streak.get("value", 0)),
-                    streak.get("date"), streak.get("user") if is_global else None,
-                )
+            frame.grid_columnconfigure(1, weight=1)
+            self._peak_metric_row(
+                frame, 0, label, str(streak.get("value", 0)),
+                streak.get("date"), streak.get("user") if is_global else None,
+            )
             row += 1
         return row
 
@@ -736,23 +992,78 @@ class StatsViewer(ctk.CTk):
             return row + 2
         return row + 1
 
-    def _render_period_controls(self, parent, row: int, _payload: dict) -> int:
+    def _render_period_controls(self, parent, row: int) -> int:
         frame = ctk.CTkFrame(parent, fg_color="transparent")
         frame.grid(row=row, column=0, sticky="ew", padx=8, pady=(12, 4))
-        ctk.CTkLabel(frame, text="Period view", font=("Arial", 18, "bold")).pack(side="left", padx=(0, 12))
+        frame.grid_columnconfigure(8, weight=1)
+
+        ctk.CTkLabel(frame, text="Period", font=("Arial", 16, "bold")).grid(
+            row=0, column=0, padx=(0, 8), pady=4, sticky="w"
+        )
         label_to_mode = {v: k for k, v in _PERIOD_MODE_LABELS.items()}
-        menu = ctk.CTkOptionMenu(
+        mode_menu = ctk.CTkOptionMenu(
             frame,
             values=list(_PERIOD_MODE_LABELS.values()),
             command=lambda label: self._on_period_mode_changed(label_to_mode[label]),
+            width=110,
             **_MENU,
         )
-        menu.set(_PERIOD_MODE_LABELS.get(self._period_mode, "All time"))
-        menu.pack(side="left")
+        mode_menu.set(_PERIOD_MODE_LABELS.get(self._period_mode, "All time"))
+        mode_menu.grid(row=0, column=1, padx=4, pady=4)
+
+        if self._period_mode != "all":
+            ctk.CTkLabel(frame, text="Year", font=("Arial", 12)).grid(row=0, column=2, padx=(12, 4))
+            self._period_year_entry = ctk.CTkEntry(frame, width=60)
+            self._period_year_entry.insert(0, self._period_year)
+            self._period_year_entry.grid(row=0, column=3, padx=2)
+
+        col = 4
+        if self._period_mode in ("month", "day"):
+            ctk.CTkLabel(frame, text="Month", font=("Arial", 12)).grid(row=0, column=col, padx=(8, 4))
+            col += 1
+            self._period_month_entry = ctk.CTkEntry(frame, width=40)
+            self._period_month_entry.insert(0, self._period_month)
+            self._period_month_entry.grid(row=0, column=col, padx=2)
+            col += 1
+
+        if self._period_mode == "week":
+            ctk.CTkLabel(frame, text="Week", font=("Arial", 12)).grid(row=0, column=col, padx=(8, 4))
+            col += 1
+            self._period_week_entry = ctk.CTkEntry(frame, width=40)
+            self._period_week_entry.insert(0, self._period_week)
+            self._period_week_entry.grid(row=0, column=col, padx=2)
+            col += 1
+
+        if self._period_mode == "day":
+            ctk.CTkLabel(frame, text="Day", font=("Arial", 12)).grid(row=0, column=col, padx=(8, 4))
+            col += 1
+            self._period_day_entry = ctk.CTkEntry(frame, width=40)
+            self._period_day_entry.insert(0, self._period_day)
+            self._period_day_entry.grid(row=0, column=col, padx=2)
+            col += 1
+
+        if self._period_mode != "all":
+            ctk.CTkButton(
+                frame, text="Apply", width=70, command=self._apply_period_selection, **_BTN
+            ).grid(row=0, column=col, padx=(12, 4), pady=4)
+
         return row + 1
 
     def _on_period_mode_changed(self, mode: str):
         self._period_mode = mode
+        self._refresh_current_page()
+
+    def _apply_period_selection(self):
+        try:
+            self._period_year = self._period_year_entry.get().strip()
+            if self._period_mode in ("month", "day"):
+                self._period_month = f"{int(self._period_month_entry.get().strip()):02d}"
+            if self._period_mode == "week":
+                self._period_week = str(int(self._period_week_entry.get().strip()))
+            if self._period_mode == "day":
+                self._period_day = f"{int(self._period_day_entry.get().strip()):02d}"
+        except (ValueError, AttributeError):
+            return
         self._refresh_current_page()
 
     def _render_period_stats(self, parent, row: int, payload: dict) -> int:
@@ -793,10 +1104,11 @@ class StatsViewer(ctk.CTk):
             )
         return row + 1
 
-    def _render_streaks_live(self, parent, row: int, agg: dict) -> int:
-        streaks = agg.get("streaks") or {}
-        day_c = int((streaks.get("days") or {}).get("current") or 0)
-        week_c = int((streaks.get("weeks") or {}).get("current") or 0)
+    def _render_streaks_live(self, parent, row: int, payload: dict) -> int:
+        agg = payload.get("agg") or {}
+        day_c, week_c = display_streak_current(
+            agg, payload["view"], payload.get("selected_user")
+        )
         ctk.CTkLabel(
             parent, text="Current streaks", font=("Arial", 16, "bold"), anchor="w",
         ).grid(row=row, column=0, sticky="ew", padx=8, pady=(12, 4))
@@ -814,9 +1126,10 @@ class StatsViewer(ctk.CTk):
             return row
 
         keys: PeriodKeys = payload["keys"]
+        week_label = payload.get("chart_week_label", f"{keys.iso_week_year}-W{keys.iso_week}")
         ctk.CTkLabel(
             parent,
-            text=f"Week activity — {keys.iso_week_year}-W{keys.iso_week}",
+            text=f"Week activity — {week_label}",
             font=("Arial", 16, "bold"),
             anchor="w",
         ).grid(row=row, column=0, sticky="ew", padx=8, pady=(12, 4))
@@ -927,7 +1240,7 @@ class StatsViewer(ctk.CTk):
 
     def _toggle_goals_grid(self):
         self._goals_grid_open = not self._goals_grid_open
-        if self._page == PAGE_STATS and self._scope in (SCOPE_TEAM, SCOPE_USER):
+        if self._view in (VIEW_TEAM, VIEW_USER):
             self._refresh_current_page()
 
     # --- Record feed ---
@@ -1008,53 +1321,150 @@ class StatsViewer(ctk.CTk):
     def _render_logs_page(self, payload: dict):
         outer = ctk.CTkFrame(self._content_host, fg_color="transparent")
         outer.grid(sticky="nsew")
-        outer.grid_rowconfigure(1, weight=1)
+        outer.grid_rowconfigure(2, weight=1)
         outer.grid_columnconfigure(0, weight=1)
 
-        filt = ctk.CTkFrame(outer, fg_color="transparent")
-        filt.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        ctk.CTkLabel(filt, text="User:", font=("Arial", 14)).pack(side="left", padx=(0, 8))
-        values = ["All"] + self._users
-        menu = ctk.CTkOptionMenu(
-            filt,
-            values=values,
-            command=self._on_logs_user_filter,
+        filt_outer = CtkSmartScrollableFrame(outer, height=220, fg_color="#1A1A1A")
+        filt_outer.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+
+        row_f = 0
+        ctk.CTkLabel(filt_outer, text="Users (none selected = all)", font=("Arial", 12, "bold")).grid(
+            row=row_f, column=0, columnspan=4, sticky="w", padx=8, pady=(6, 2)
+        )
+        row_f += 1
+        user_row = ctk.CTkFrame(filt_outer, fg_color="transparent")
+        user_row.grid(row=row_f, column=0, columnspan=4, sticky="ew", padx=8)
+        for i, username in enumerate(self._users):
+            var = self._log_user_checks.setdefault(username, ctk.BooleanVar(value=False))
+            ctk.CTkCheckBox(
+                user_row, text=username, variable=var, font=("Arial", 12),
+            ).grid(row=i // 3, column=i % 3, sticky="w", padx=4, pady=2)
+        row_f += 1
+
+        ctk.CTkLabel(filt_outer, text="Search (name or description)", font=("Arial", 12, "bold")).grid(
+            row=row_f, column=0, sticky="w", padx=8, pady=(8, 2)
+        )
+        row_f += 1
+        search_entry = ctk.CTkEntry(filt_outer, placeholder_text="Search text…")
+        search_entry.insert(0, self._log_search)
+        search_entry.grid(row=row_f, column=0, columnspan=3, sticky="ew", padx=8, pady=2)
+        row_f += 1
+
+        ctk.CTkLabel(filt_outer, text="Date (Stockholm, YYYY-MM-DD or YYYY-MM-DD HH:MM)", font=("Arial", 12, "bold")).grid(
+            row=row_f, column=0, columnspan=4, sticky="w", padx=8, pady=(8, 2)
+        )
+        row_f += 1
+        date_mode_menu = ctk.CTkOptionMenu(
+            filt_outer,
+            values=list(_DATE_FILTER_LABELS.values()),
+            command=lambda l: setattr(self, "_log_date_mode", {v: k for k, v in _DATE_FILTER_LABELS.items()}[l]),
+            width=120,
             **_MENU,
         )
-        menu.set(self._logs_user_filter if self._logs_user_filter in values else "All")
-        menu.pack(side="left")
+        date_mode_menu.set(_DATE_FILTER_LABELS.get(self._log_date_mode, "Any date"))
+        date_mode_menu.grid(row=row_f, column=0, padx=8, pady=2, sticky="w")
+        date_after_entry = ctk.CTkEntry(filt_outer, placeholder_text="From / after", width=160)
+        date_after_entry.insert(0, self._log_date_after)
+        date_after_entry.grid(row=row_f, column=1, padx=4, pady=2)
+        date_before_entry = ctk.CTkEntry(filt_outer, placeholder_text="To / before", width=160)
+        date_before_entry.insert(0, self._log_date_before)
+        date_before_entry.grid(row=row_f, column=2, padx=4, pady=2)
+        row_f += 1
+
+        ctk.CTkLabel(filt_outer, text="Duration (seconds or MM:SS or HH:MM:SS)", font=("Arial", 12, "bold")).grid(
+            row=row_f, column=0, columnspan=4, sticky="w", padx=8, pady=(8, 2)
+        )
+        row_f += 1
+        elapsed_mode_menu = ctk.CTkOptionMenu(
+            filt_outer,
+            values=list(_ELAPSED_FILTER_LABELS.values()),
+            command=lambda l: setattr(self, "_log_elapsed_mode", {v: k for k, v in _ELAPSED_FILTER_LABELS.items()}[l]),
+            width=120,
+            **_MENU,
+        )
+        elapsed_mode_menu.set(_ELAPSED_FILTER_LABELS.get(self._log_elapsed_mode, "Any duration"))
+        elapsed_mode_menu.grid(row=row_f, column=0, padx=8, pady=2, sticky="w")
+        elapsed_min_entry = ctk.CTkEntry(filt_outer, placeholder_text="Min", width=100)
+        elapsed_min_entry.insert(0, self._log_elapsed_min)
+        elapsed_min_entry.grid(row=row_f, column=1, padx=4, pady=2)
+        elapsed_max_entry = ctk.CTkEntry(filt_outer, placeholder_text="Max", width=100)
+        elapsed_max_entry.insert(0, self._log_elapsed_max)
+        elapsed_max_entry.grid(row=row_f, column=2, padx=4, pady=2)
+        row_f += 1
+
+        ctk.CTkLabel(filt_outer, text="Sort", font=("Arial", 12, "bold")).grid(
+            row=row_f, column=0, sticky="w", padx=8, pady=(8, 2)
+        )
+        row_f += 1
+        sort_menu = ctk.CTkOptionMenu(
+            filt_outer,
+            values=list(_SORT_OPTIONS.values()),
+            command=lambda l: setattr(self, "_log_sort", {v: k for k, v in _SORT_OPTIONS.items()}[l]),
+            width=160,
+            **_MENU,
+        )
+        sort_menu.set(_SORT_OPTIONS.get(self._log_sort, "Newest first"))
+        sort_menu.grid(row=row_f, column=0, padx=8, pady=2, sticky="w")
+
+        def apply_filters():
+            self._log_search = search_entry.get().strip()
+            self._log_date_after = date_after_entry.get().strip()
+            self._log_date_before = date_before_entry.get().strip()
+            self._log_elapsed_min = elapsed_min_entry.get().strip()
+            self._log_elapsed_max = elapsed_max_entry.get().strip()
+            self._logs_page = 0
+            self._refresh_current_page()
+
+        ctk.CTkButton(
+            filt_outer, text="Apply filters", command=apply_filters, width=120, **_BTN
+        ).grid(row=row_f, column=1, padx=8, pady=8, sticky="w")
 
         scroll = CtkSmartScrollableFrame(outer)
-        scroll.grid(row=1, column=0, sticky="nsew")
+        scroll.grid(row=2, column=0, sticky="nsew")
 
         logs = payload.get("logs") or []
         if not logs:
-            self._section_message(scroll, "No logs found.")
+            self._section_message(scroll, "No logs match the current filters.")
         else:
             for log in logs:
                 ts = format_highscore_date(log["timestamp"])
-                line = f"{ts}  |  {log['user']}  |  {format_time(log['elapsed_time'])}"
-                ctk.CTkLabel(scroll, text=line, font=("Arial", 13), anchor="w").pack(
+                name = log.get("name") or "—"
+                desc = log.get("description") or ""
+                desc_part = f"  |  {desc}" if desc else ""
+                line = (
+                    f"{ts}  |  {log['user']}  |  {format_time(log['elapsed_time'])}"
+                    f"  |  {name}{desc_part}"
+                )
+                ctk.CTkLabel(scroll, text=line, font=("Arial", 12), anchor="w", wraplength=900).pack(
                     anchor="w", fill="x", padx=8, pady=2
                 )
 
         nav = ctk.CTkFrame(outer, fg_color="transparent")
-        nav.grid(row=2, column=0, sticky="ew", pady=8)
+        nav.grid(row=3, column=0, sticky="ew", pady=8)
         total = payload.get("total", 0)
         page = payload.get("page", 0)
-        max_page = max(0, (total - 1) // LOGS_PAGE_SIZE)
-        ctk.CTkLabel(
-            nav, text=f"Page {page + 1} / {max_page + 1} ({total} logs)", font=("Arial", 12)
-        ).pack(side="left", padx=8)
-        if page > 0:
-            ctk.CTkButton(nav, text="← Prev", command=self._logs_prev, width=80, **_BTN).pack(side="left", padx=4)
-        if (page + 1) * LOGS_PAGE_SIZE < total:
-            ctk.CTkButton(nav, text="Next →", command=self._logs_next, width=80, **_BTN).pack(side="left", padx=4)
-
-    def _on_logs_user_filter(self, value: str):
-        self._logs_user_filter = value
-        self._logs_page = 0
-        self._refresh_current_page()
+        page_size = payload.get("page_size", self._logs_page_size)
+        if page_size is None:
+            nav_text = f"Showing all {total} logs"
+        else:
+            max_page = max(0, (total - 1) // page_size) if total else 0
+            nav_text = f"Page {page + 1} / {max_page + 1} ({total} logs)"
+        ctk.CTkLabel(nav, text=nav_text, font=("Arial", 12)).pack(side="left", padx=8)
+        if page_size is not None:
+            if page > 0:
+                ctk.CTkButton(nav, text="← Prev", command=self._logs_prev, width=80, **_BTN).pack(side="left", padx=4)
+            if (page + 1) * page_size < total:
+                ctk.CTkButton(nav, text="Next →", command=self._logs_next, width=80, **_BTN).pack(side="left", padx=4)
+        ctk.CTkLabel(nav, text="Per page:", font=("Arial", 12), text_color=_MUTED).pack(side="right", padx=(8, 4))
+        page_size_menu = ctk.CTkOptionMenu(
+            nav,
+            values=list(LOGS_PAGE_SIZE_OPTIONS),
+            command=self._set_logs_page_size,
+            width=72,
+            **_MENU,
+        )
+        page_size_menu.set("all" if page_size is None else str(page_size))
+        page_size_menu.pack(side="right", padx=8)
 
     def _logs_prev(self):
         self._logs_page = max(0, self._logs_page - 1)
@@ -1062,6 +1472,14 @@ class StatsViewer(ctk.CTk):
 
     def _logs_next(self):
         self._logs_page += 1
+        self._refresh_current_page()
+
+    def _set_logs_page_size(self, value: str):
+        page_size = None if value == "all" else int(value)
+        if page_size == self._logs_page_size:
+            return
+        self._logs_page_size = page_size
+        self._logs_page = 0
         self._refresh_current_page()
 
     # --- Watchers ---
@@ -1104,7 +1522,7 @@ class StatsViewer(ctk.CTk):
             {
                 "$match": {
                     "operationType": {"$in": ["insert", "update", "replace"]},
-                    "documentKey._id": {"$in": ["Goals", "Records"]},
+                    "documentKey._id": {"$in": ["Author Goals", "Records"]},
                 }
             }
         ]
