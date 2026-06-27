@@ -1,4 +1,5 @@
 import customtkinter as ctk
+import os
 import threading
 import time
 from datetime import datetime, timedelta
@@ -17,12 +18,20 @@ from stats_viewer import week_goals
 from timetable_db import aggregations, client, collection, db, status_meeting, user
 from utils import flash_error
 
+COLOR_BACKGROUND=   "#000000"
+COLOR_SELECTED=     "#191919"
+COLOR_PRIMARY=      "#232323"
+COLOR_HOVER=        "#333333"
+COLOR_DISABLED_TEXT="#666666"
+COLOR_TEXT=         "#FFFFFF"
+
 class TimetableApp(ctk.CTk):
     def __init__(self):
-        super().__init__()
-        ctk.set_appearance_mode("Dark")
-        self.title("Timetable")
+        super().__init__(COLOR_BACKGROUND)
+        self.title("")
         self.geometry("200x170")
+        icon_path = os.path.join(os.path.dirname(__file__), "ELG Studio 0.1_16_clean_big.ico")
+        self.iconbitmap(icon_path)
         self.local_start = self.log_ts = None
         self.elapsed_time = self._monotonic_anchor = 0.0
         self.running = False
@@ -43,31 +52,33 @@ class TimetableApp(ctk.CTk):
         self.grid_rowconfigure([0, 1], weight=1, uniform='a')
         self.grid_columnconfigure([0, 1], weight=1, uniform='a')
 
-        self.time_label = ctk.CTkLabel(self, text="00:00", font=("Arial", 32), text_color="white")
+        self.time_label = ctk.CTkLabel(self, text="00:00", font=("Arial", 32), text_color=COLOR_TEXT, fg_color=COLOR_BACKGROUND)
         self.time_label.grid(row=1, column=0, sticky='nsew', columnspan=2)
 
-        self.toggle_run_button = ctk.CTkButton(self, text="Start", fg_color="#000000", hover_color="#121212", text_color="white", font=("Arial", 24), command=self.toggle_button)
+        self.toggle_run_button = ctk.CTkButton(self, text="Start", fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER, text_color=COLOR_TEXT, font=("Arial", 24), corner_radius=8, command=self.toggle_button)
         self.toggle_run_button.grid(row=0, column=0, sticky='nsew', padx=4, pady=4, columnspan=2)
 
-        self.done_button = ctk.CTkButton(self, text="Done", fg_color="#000000", hover_color="#121212", text_color="white", font=("Arial", 14), command=self.show_entry_overlay, state="disabled")
+        self.done_button = ctk.CTkButton(self, text="Done", fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER, text_color=COLOR_TEXT, text_color_disabled=COLOR_DISABLED_TEXT, font=("Arial", 14), corner_radius=8, command=self.show_entry_overlay, state="disabled")
 
-        self.overlay_canvas = ctk.CTkFrame(self, corner_radius=0, fg_color="#2C2C2C")
+        self.overlay_canvas = ctk.CTkFrame(self, corner_radius=0, fg_color=COLOR_BACKGROUND)
         self.overlay_canvas.grid_rowconfigure([0, 1, 2], weight=1, uniform='a')
         self.overlay_canvas.grid_rowconfigure(2, weight=2)
         self.overlay_canvas.grid_columnconfigure([0, 1], weight=1, uniform='a')
 
-        ctk.CTkEntry(self.overlay_canvas, placeholder_text="Name", textvariable=self.name_var # Name entry
+        ctk.CTkEntry(self.overlay_canvas, placeholder_text="Name", textvariable=self.name_var,
+                     fg_color=COLOR_PRIMARY, border_color=COLOR_HOVER, placeholder_text_color=COLOR_DISABLED_TEXT, text_color=COLOR_TEXT
         ).grid(row=0, column=0, padx=4, pady=4, sticky='nsew', columnspan=2)
 
-        ctk.CTkEntry(self.overlay_canvas, placeholder_text="Description", textvariable=self.desc_var # Description entry
+        ctk.CTkEntry(self.overlay_canvas, placeholder_text="Description", textvariable=self.desc_var,
+                     fg_color=COLOR_PRIMARY, border_color=COLOR_HOVER, placeholder_text_color=COLOR_DISABLED_TEXT, text_color=COLOR_TEXT
         ).grid(row=1, column=0, padx=4, pady=4, sticky='nsew', columnspan=2)
 
-        ctk.CTkButton(self.overlay_canvas, text="Continue", fg_color="#000000", hover_color="#121212",
-                      command=self.continue_timer, text_color="white", font=("Arial", 14)
+        ctk.CTkButton(self.overlay_canvas, text="Continue", fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER,
+                      command=self.continue_timer, text_color=COLOR_TEXT, font=("Arial", 14), corner_radius=8
         ).grid(row=2, column=0, padx=4, pady=4, sticky='nsew')
 
-        self.log_button = ctk.CTkButton(self.overlay_canvas, text="Log Entry", fg_color="#000000", hover_color="#121212",
-                                   command=self.submit_entry, text_color="white", font=("Arial", 14), state="disabled")
+        self.log_button = ctk.CTkButton(self.overlay_canvas, text="Log Entry", fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER,
+                                   command=self.submit_entry, text_color=COLOR_TEXT, text_color_disabled=COLOR_DISABLED_TEXT, font=("Arial", 14), corner_radius=8, state="disabled")
         self.log_button.grid(row=2, column=1, padx=4, pady=4, sticky='nsew')
 
     def toggle_button(self):
@@ -368,4 +379,11 @@ class TimetableApp(ctk.CTk):
 
 if __name__ == "__main__":
     app = TimetableApp()
+    try:
+        from ctypes import windll, byref, sizeof, c_int
+        HWND = windll.user32.GetParent(app.winfo_id()) # type: ignore
+        windll.dwmapi.DwmSetWindowAttribute(HWND, 34, byref(c_int(0x00000000)), sizeof(c_int)) # type: ignore
+        windll.dwmapi.DwmSetWindowAttribute(HWND, 35, byref(c_int(0x00000000)), sizeof(c_int)) # type: ignore
+    except (ImportError, AttributeError, OSError):
+        print("DWM API not available, skipping window attribute settings.")
     app.mainloop()
