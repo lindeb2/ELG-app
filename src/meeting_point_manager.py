@@ -84,7 +84,7 @@ class MeetingPointManagerApp:
         self.edit_button = ctk.CTkButton(self.menu_bar, text="⚙", width=28, fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER, text_color=COLOR_TEXT, font=("Arial", 16), corner_radius=0, command=self.toggle_edit_screen)
         self.edit_button.pack(side="left", padx=2)
 
-        self.add_button = ctk.CTkButton(self.menu_bar, text="➕", width=28, fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER, text_color=COLOR_TEXT, text_color_disabled=COLOR_DISABLED_TEXT, font=("Arial", 17), corner_radius=0, command=self.add_button, takefocus=False, state="disabled")
+        self.add_button = ctk.CTkButton(self.menu_bar, text="➕", width=28, fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER, text_color=COLOR_TEXT, text_color_disabled=COLOR_DISABLED_TEXT, font=("Arial", 17), corner_radius=0, command=self.add_button, state="disabled")
         self.add_button.pack(side="left", padx=2)
 
         self.week_offset = ctk.CTkSegmentedButton(self.menu_bar, values=["-1", "0", "+1"], fg_color=COLOR_PRIMARY, font=("Arial", 14, "bold"), corner_radius=0, command=self.update_selected_week
@@ -182,7 +182,7 @@ class MeetingPointManagerApp:
 
     def show_edit_screen(self):
         self.edit_screen.lift()
-        self.add_button.configure(state="normal", takefocus=True)
+        self.add_button.configure(state="normal")
         self.edit_button.configure(fg_color=COLOR_SELECTED, hover_color=COLOR_SELECTED)
         self.point_entry.configure(state="disabled")
         self.description_entry.configure(state="disabled")
@@ -214,7 +214,7 @@ class MeetingPointManagerApp:
     def hide_edit_point_screen(self):
         self.edit_point = None # not really needed
         self.edit_point_screen.lower()
-        self.add_button.configure(text="➕", state="normal", takefocus=True)
+        self.add_button.configure(text="➕", state="normal")
         self.in_edit_point_screen = False
         self.edit_point_entry.configure(state="disabled")
         self.edit_description_entry.configure(state="disabled")
@@ -351,7 +351,7 @@ class MeetingPointManagerApp:
         self.point_entry.focus_set()
         # noinspection PyProtectedMember
         self.description_entry._activate_placeholder()
-        self.add_button.configure(state="disabled", takefocus=False)
+        self.add_button.configure(state="disabled")
 
     def add_button(self):
         if self.in_edit_screen:
@@ -374,9 +374,9 @@ class MeetingPointManagerApp:
     def update_add_button_state(self):
         title = self.edit_point_entry.get() if self.in_edit_point_screen else self.point_entry.get()
         if title.strip() == "":
-            self.add_button.configure(state="disabled", takefocus=False)
+            self.add_button.configure(state="disabled")
         else:
-            self.add_button.configure(state="normal", takefocus=True)
+            self.add_button.configure(state="normal")
 
     def _reset_focus_if_needed(self, event):
         widget = event.widget
