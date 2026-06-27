@@ -1,5 +1,5 @@
 import customtkinter as ctk
-from pymongo import MongoClient, UpdateOne
+from pymongo import UpdateOne
 import datetime
 import os
 import json
@@ -21,16 +21,17 @@ from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError, Netwo
 from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
 from period_model import APP_TIMEZONE, format_highscore_date, to_local, utc_naive_after_calendar_days
+from timetable_db import (
+    client,
+    db,
+    collection as main_collection,
+    status_meeting as status_meeting_collection,
+    aggregations as aggregations_collection,
+    user,
+)
 
 # TODO: Set up color scheme or theme
 # Improvements: Sync, No-activity weeks, Dry Dropdown, server-side slide_5
-
-# MongoDB connection
-client = MongoClient("mongodb+srv://johan:baLlbeTtertRacer@elg-timetable.txhpj.mongodb.net/?retryWrites=true&w=majority&appName=ELG-timetable")
-db = client['ELG-Database']
-main_collection = db['Timetable']  # Only used once
-status_meeting_collection = db['Status Meeting']  # Collection for meeting status
-aggregations_collection = db['Timetable Aggregations']
 WEEK_PIPELINE = [{
     "$set": {"new_week": {"$dateTrunc": {
         "date": {"$dateSubtract": {"startDate": "$$NOW", "unit": "day", "amount": 3, "timezone": APP_TIMEZONE}},
@@ -62,17 +63,6 @@ STATUS_MEETING_WATCH_PIPELINE = [
 
 # Initialize the customtkinter theme with dark mode
 ctk.set_appearance_mode("Dark")
-
-def _get_user_name():
-    """Get user name from configfile"""
-    try:
-        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.json")
-        with open(config_path, "r") as f:
-            config = json.load(f)
-            return config.get("user", "Unknown")
-    except FileNotFoundError:
-        print("Could not fetch username from config.")
-        return "Unknown"
 
 def format_time(seconds):
     """Converts seconds to MM:SS or HH:MM:SS."""
@@ -111,7 +101,7 @@ class MeetingApp(ctk.CTk):
         self.current_slide, self.current_week_start, self.next_week_start, self.local_target_timestamp = self.fetch_state()
         self.current_year, self.current_week, self.next_year, self.next_week = self._calculate_week_info()
         threading.Thread(target=self.week_check, name="WeekSync", daemon=True).start()
-        self.user_name = _get_user_name()
+        self.user_name = user
 
         with ThreadPoolExecutor() as executor:
             future_logs = executor.submit(self._fetch_logs)
@@ -2637,10 +2627,10 @@ Strict rules:
 - Be punchy. No filler. No greetings. No sign-offs.
 - Return ONLY the phrase. No explanations, extra text or having quotation marks around the phrase."""
 
-        ai_client = OpenAI(
-            base_url="https://models.github.ai/inference",
-            api_key="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",
-        )
+        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.json")
+        with open(config_path) as f:
+            github_token = json.load(f)["github_token"]
+        ai_client = OpenAI(base_url="https://models.github.ai/inference", api_key=github_token)
         response = ai_client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],  # type: ignore[arg-type]
             model="openai/gpt-4o", temperature=0.9, max_tokens=60, top_p=1, timeout=15.0
