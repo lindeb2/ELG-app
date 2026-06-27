@@ -46,5 +46,8 @@
    - [ ]  Integrate all parts
    - [ ]  Dry function calls between parts
    - [ ]  On close logic
+   - [ ]  Windows topbar after maximized
+   - [ ]  Sidebar gone at maximized]
+   - [ ]  [Timetable widget](https://gemini.google.com/app/849f65b0762fd705)
 - [ ]  Logic if new week
 - [ ]  Auto log and record during meetings

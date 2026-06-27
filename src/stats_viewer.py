@@ -12,7 +12,7 @@ import customtkinter as ctk
 from zoneinfo import ZoneInfo
 
 from CtkSmartScrollableFrame import CtkSmartScrollableFrame
-from meeting_app import MeetingApp, format_time
+from meeting_app import MeetingFrame, format_time
 from period_model import (
     APP_TIMEZONE,
     PeriodKeys,
@@ -100,9 +100,6 @@ _MENU = {
 }
 _MUTED = "#B0B0B0"
 _CARD = "#23272B"
-
-ctk.set_appearance_mode("Dark")
-
 
 # --- Data layer ---
 
@@ -566,13 +563,9 @@ def build_week_chart_data(logs: list[dict], users: list[str] | None = None) -> l
 # --- Application ---
 
 
-class StatsViewer(ctk.CTk):
-    def __init__(self):
-        super().__init__()
-
-        self.title("ELG Stats Dashboard")
-        self.geometry("1280x800")
-        self.minsize(960, 600)
+class StatsFrame(ctk.CTkFrame):
+    def __init__(self, parent):
+        super().__init__(parent)
 
         self._view = VIEW_WORLD
         self._selected_user = config_user if config_user and config_user != "Unknown" else None
@@ -1161,7 +1154,7 @@ class StatsViewer(ctk.CTk):
                 col.pack(side="left", expand=True, fill="both", padx=1)
                 rel_h = hours / max_hours if max_hours else 0
                 bar_h = max(int(rel_h * 60), 2 if hours > 0 else 0)
-                color = MeetingApp._goal_color(hours, 1) if hours >= 1 else "#3A3A3A"
+                color = MeetingFrame._goal_color(hours, 1) if hours >= 1 else "#3A3A3A"
                 ctk.CTkFrame(col, height=bar_h, fg_color=color, width=24).pack(side="bottom")
                 ctk.CTkLabel(col, text=day_names[di], font=("Arial", 9), text_color=_MUTED).pack(side="bottom")
 
@@ -1287,8 +1280,8 @@ class StatsViewer(ctk.CTk):
         scope_label = _SCOPE_LABELS.get(scope, scope)
         metric_label = _METRIC_LABELS.get(metric, metric)
         attribution = "Team" if scope == "combined" else broken_by
-        old_str = MeetingApp._format_record_value(metric, old_value)
-        new_str = MeetingApp._format_record_value(metric, new_value)
+        old_str = MeetingFrame._format_record_value(metric, old_value)
+        new_str = MeetingFrame._format_record_value(metric, new_value)
 
         card = ctk.CTkFrame(parent, fg_color=_CARD, corner_radius=5)
         card.pack(fill="x", pady=5, padx=5)
@@ -1541,6 +1534,3 @@ class StatsViewer(ctk.CTk):
         self._run_watcher(collection, pipeline, on_change)
 
 
-if __name__ == "__main__":
-    app = StatsViewer()
-    app.mainloop()

@@ -1,5 +1,4 @@
 import customtkinter as ctk
-import os
 import threading
 import time
 from datetime import datetime, timedelta
@@ -26,13 +25,9 @@ COLOR_HOVER=        "#333333"
 COLOR_DISABLED_TEXT="#666666"
 COLOR_TEXT=         "#FFFFFF"
 
-class TimetableApp(ctk.CTk):
-    def __init__(self):
-        super().__init__(COLOR_BACKGROUND)
-        self.title("")
-        self.geometry("200x170")
-        icon_path = os.path.join(os.path.dirname(__file__), "ELG Studio 0.1_16_clean_big.ico")
-        self.iconbitmap(icon_path)
+class TimetableFrame(ctk.CTkFrame):
+    def __init__(self, parent):
+        super().__init__(parent, fg_color=COLOR_BACKGROUND)
         self.local_start = self.log_ts = None
         self.elapsed_time = self._monotonic_anchor = 0.0
         self.running = False
@@ -378,15 +373,3 @@ class TimetableApp(ctk.CTk):
         if self.desc_entry.get() == "":
             self.desc_entry._activate_placeholder()
         self._start_prepare_commit()
-
-
-if __name__ == "__main__":
-    app = TimetableApp()
-    try:
-        from ctypes import windll, byref, sizeof, c_int
-        HWND = windll.user32.GetParent(app.winfo_id()) # type: ignore
-        windll.dwmapi.DwmSetWindowAttribute(HWND, 34, byref(c_int(0x00000000)), sizeof(c_int)) # type: ignore
-        windll.dwmapi.DwmSetWindowAttribute(HWND, 35, byref(c_int(0x00000000)), sizeof(c_int)) # type: ignore
-    except (ImportError, AttributeError, OSError):
-        print("DWM API not available, skipping window attribute settings.")
-    app.mainloop()

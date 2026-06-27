@@ -61,9 +61,6 @@ STATUS_MEETING_WATCH_PIPELINE = [
                 "regex": "^data\\.[^.]+\\.last_seen$",}}},}}},
             0,]},]}}},]
 
-# Initialize the customtkinter theme with dark mode
-ctk.set_appearance_mode("Dark")
-
 def format_time(seconds):
     """Converts seconds to MM:SS or HH:MM:SS."""
     if not seconds:
@@ -79,10 +76,11 @@ def format_time(seconds):
     else:
         return f"{minutes:02d}:{seconds:02d}"
 
-class MeetingApp(ctk.CTk):
+class MeetingFrame(ctk.CTkFrame):
     ### INIT ###
-    def __init__(self):
-        super().__init__()
+    def __init__(self, parent):
+        super().__init__(parent)
+        self._window = self.winfo_toplevel()
 
         self.fullscreen = False
         self._init_complete = False
@@ -177,18 +175,45 @@ class MeetingApp(ctk.CTk):
                 "$gte": self.current_week_start,
                 "$lt": self.next_week_start}}))
 
+    def _is_active(self) -> bool:
+        return self.winfo_ismapped()
+
+    def _bind_navigation_keys(self) -> None:
+        bindings = (
+            ("<F11>", self.toggle_fullscreen),
+            ("<Escape>", self.exit_fullscreen),
+            ("<Left>", self.handle_arrow),
+            ("<Right>", self.handle_arrow),
+            ("<Return>", self.handle_return),
+            ("<Up>", self._handle_up),
+            ("<Down>", self._handle_down),
+        )
+        for sequence, handler in bindings:
+            self._window.bind(sequence, self._wrap_keybind(handler), add="+")
+
+    def _wrap_keybind(self, handler):
+        def wrapped(event):
+            if not self._is_active():
+                return
+            return handler(event)
+
+        return wrapped
+
+    def _handle_up(self, event):
+        if isinstance(self.focus_get(), ctk.CTkEntry):
+            return
+        if 2 in self.slide_map and self.current_slide == self.slide_map.index(2):
+            self.s2_arrow_up(event)
+
+    def _handle_down(self, event):
+        if isinstance(self.focus_get(), ctk.CTkEntry):
+            return
+        if 2 in self.slide_map and self.current_slide == self.slide_map.index(2):
+            self.s2_arrow_down(event)
+
     def _setup_slides_scaffold(self):
         """Sets up the foundational scaffold and overlay for all slides, including navigation and overlays."""
-        # Configure window
-        self.title("Weekly Status Meeting")
-        self.geometry("1200x800")
-
-        # Bind keys and mouse
-        self.bind("<F11>", self.toggle_fullscreen)
-        self.bind("<Escape>", self.exit_fullscreen)
-        self.bind("<Right>", self.handle_arrow)
-        self.bind("<Left>", self.handle_arrow)
-        self.bind("<Return>", self.handle_return)
+        self._bind_navigation_keys()
 
         # main container for all slides
         self.main_container = ctk.CTkFrame(self)
@@ -364,31 +389,29 @@ class MeetingApp(ctk.CTk):
         self.users_list_frame.place_forget()
 
     def toggle_fullscreen(self, _event):
+        window = self._window
         self.fullscreen = not self.fullscreen
         if self.fullscreen:
-            self._pre_fullscreen_geometry = self.geometry()  # Store current window position before going fullscreen
+            self._pre_fullscreen_geometry = window.geometry()
 
-            # Get the current window position to determine which display it's on
-            window_x = self.winfo_x()
-            window_y = self.winfo_y()
+            window_x = window.winfo_x()
+            window_y = window.winfo_y()
 
-            # Set fullscreen - this should automatically use the display where the window is located
-            self.attributes("-fullscreen", True)
+            window.attributes("-fullscreen", True)
 
-            # This ensures it doesn't jump to the primary display
-            self.update_idletasks()  # Ensure the fullscreen change is processed
-            self.geometry(f"+{window_x}+{window_y}")
+            window.update_idletasks()
+            window.geometry(f"+{window_x}+{window_y}")
         else:
-            self.attributes("-fullscreen", False)
+            window.attributes("-fullscreen", False)
             if hasattr(self, '_pre_fullscreen_geometry'):
-                self.geometry(self._pre_fullscreen_geometry)
+                window.geometry(self._pre_fullscreen_geometry)
 
     def exit_fullscreen(self, _event):
         if self.fullscreen:
             self.fullscreen = False
-            self.attributes("-fullscreen", False)
+            self._window.attributes("-fullscreen", False)
             if hasattr(self, '_pre_fullscreen_geometry'):
-                self.geometry(self._pre_fullscreen_geometry)
+                self._window.geometry(self._pre_fullscreen_geometry)
 
     def update_db(self):
         while True:
@@ -1717,10 +1740,6 @@ class MeetingApp(ctk.CTk):
         self.s2_set_logs_by_user()
         self.s2_create_user_log_widgets()
 
-        # Bind arrow keys for navigation
-        self.bind("<Up>", self.s2_arrow_up)
-        self.bind("<Down>", self.s2_arrow_down)
-
     def s2_create_selectable_users(self):
         """Create the dropdown list of users for logs (slide 2)."""
         # Create list
@@ -2652,6 +2671,3 @@ Strict rules:
                        static_anchor="s", padding=(5, 4), alpha=1, x_offset=0, y_offset=5, border_width=1,
                        border_color="black", text_color="black")
 
-if __name__ == "__main__":
-    app = MeetingApp()
-    app.mainloop()

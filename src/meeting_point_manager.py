@@ -1,13 +1,11 @@
 import customtkinter as ctk
 import threading
 import time
-import os
-from pymongo.mongo_client import MongoClient
-from pymongo.server_api import ServerApi
 from CtkSmartScrollableFrame import CtkSmartScrollableFrame
 from CTkFlexToolTip import CTkFlexToolTip
 from CTkStickyPlaceholderEntry import CTkStickyPlaceholderEntry
 from period_model import as_utc, monday_midnight_local, to_local, utc_naive_after_calendar_days
+from timetable_db import status_meeting
 
 COLOR_BACKGROUND=   "#000000" # Background [Root, MenuBar, ScreenFrame, Add- Edit- & Editpoint-Screens, EditScreen.F, EditScreen.F.F] 0      0       0
 COLOR_SELECTED=     "#191919" # Selected buttons                                                                                      25     9.8     10
@@ -16,15 +14,10 @@ COLOR_HOVER=        "#333333" # Hover [Buttons, Scrollbars] & EntryBorders & Too
 COLOR_DISABLED_TEXT="#666666" # Disabled text                                                                                         102    40      40
 COLOR_TEXT=         "#FFFFFF" # Text                                                                                                  255    100     10
 
-class MeetingPointManagerApp:
-    # Connect to MongoDB
-    client = MongoClient("mongodb+srv://johan:baLlbeTtertRacer@elg-timetable.txhpj.mongodb.net/?retryWrites=true&w=majority&appName=ELG-timetable", server_api=ServerApi('1'))
-    db = client['ELG-Database']
-    status_meeting_collection = db['Status Meeting']
-
+class MeetingPointManagerFrame(ctk.CTkFrame):
     @staticmethod
     def _fetch_server_time():
-        rows = list(MeetingPointManagerApp.status_meeting_collection.aggregate(
+        rows = list(status_meeting.aggregate(
             [{"$project": {"server_time": "$$NOW", "_id": 0}}]
         ))
         return rows[0]["server_time"]
@@ -40,9 +33,9 @@ class MeetingPointManagerApp:
     @staticmethod
     def fetch_week_state():
         """Fetch server time and derive current week + deadline for Monday rollover."""
-        server_time = MeetingPointManagerApp._fetch_server_time()
+        server_time = MeetingPointManagerFrame._fetch_server_time()
         local_now = time.time()
-        current_week_start, next_week_start = MeetingPointManagerApp._week_bounds_from_server_time(server_time)
+        current_week_start, next_week_start = MeetingPointManagerFrame._week_bounds_from_server_time(server_time)
         local_target_timestamp = local_now + (next_week_start - server_time).total_seconds()
         return current_week_start, next_week_start, local_target_timestamp
 
@@ -55,12 +48,9 @@ class MeetingPointManagerApp:
             options.append((str(year), str(week)))
         return options
 
-    def __init__(self, root):
-        self.root = root
-        self.root.title("")
-        self.root.geometry("200x170")
-        icon_path = os.path.join(os.path.dirname(__file__), "ELG Studio 0.1_16_clean_big.ico")
-        self.root.iconbitmap(icon_path)
+    def __init__(self, parent, navigate_back):
+        super().__init__(parent, fg_color=COLOR_BACKGROUND)
+        self.navigate_back = navigate_back
 
         # State variables
         self.in_edit_screen = False
@@ -76,7 +66,7 @@ class MeetingPointManagerApp:
         self.selected_year_week = self.week_options[1]
 
         # --- Menu Bar ---
-        self.menu_bar = ctk.CTkFrame(self.root, height=26, fg_color=COLOR_BACKGROUND, corner_radius=0)
+        self.menu_bar = ctk.CTkFrame(self, height=26, fg_color=COLOR_BACKGROUND, corner_radius=0)
         self.menu_bar.pack(fill="x")
 
         self.back_button = ctk.CTkButton(self.menu_bar, text="◀", width=28, fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER, text_color=COLOR_TEXT, font=("Arial", 19), corner_radius=0, command=self.back)
@@ -93,11 +83,11 @@ class MeetingPointManagerApp:
         self.week_offset.set("0")
         self.week_offset.pack(side="right", padx=(2,4))
 
-        # Bind global mouse click to reset focus if needed
-        self.root.bind_all("<Button-1>", self._reset_focus_if_needed, add="+")
+        self._app_root = self.winfo_toplevel()
+        self._app_root.bind_all("<Button-1>", self._reset_focus_if_needed, add="+")
 
         # --- Screen Frame ---
-        self.screen_frame = ctk.CTkFrame(self.root, fg_color=COLOR_BACKGROUND)
+        self.screen_frame = ctk.CTkFrame(self, fg_color=COLOR_BACKGROUND)
         self.screen_frame.pack(expand=True, fill="both")
 
         # --- EditScreen ---
@@ -111,7 +101,7 @@ class MeetingPointManagerApp:
         def create_week_list_frame(year, week):
             frame = CtkSmartScrollableFrame(self.edit_screen, corner_radius=0, fg_color=COLOR_BACKGROUND, scrollbar_button_color=COLOR_PRIMARY, scrollbar_button_hover_color=COLOR_HOVER)
             frame.grid(row=0, column=0, sticky="nsew", padx=3, pady=2)
-            doc = self.status_meeting_collection.find_one({"_id": "Discussion Points"})
+            doc = status_meeting.find_one({"_id": "Discussion Points"})
             points = doc.get(year, {}).get(week, []) if doc else []
             # Only using place in a smartframe does not seem to work. Why? Who knows??? Anyway, this is a workaround.
             frame.bug_fix_frame = ctk.CTkFrame(frame, height=len(points)*40, corner_radius=0, fg_color=COLOR_BACKGROUND, bg_color=COLOR_BACKGROUND)
@@ -135,7 +125,7 @@ class MeetingPointManagerApp:
         self.edit_point_entry = CTkStickyPlaceholderEntry(self.edit_point_screen, placeholder_text="Point", font=("Arial", 18), state="disabled", fg_color=COLOR_PRIMARY, border_color=COLOR_HOVER, placeholder_text_color=COLOR_DISABLED_TEXT, text_color=COLOR_TEXT)
         self.edit_point_entry.grid(row=0, column=0, padx=6, pady=(6,3), sticky='nsew', columnspan=2)
         self.edit_point_entry.bind("<Return>", lambda event: self.update_point())
-        self.edit_point_entry.bind("<KeyPress>", lambda event: self.root.after_idle(self.update_add_button_state))
+        self.edit_point_entry.bind("<KeyPress>", lambda event: self.after_idle(self.update_add_button_state))
 
         self.edit_description_entry = CTkStickyPlaceholderEntry(self.edit_point_screen, placeholder_text="Description (optional)", font=("Arial", 18), state="disabled", fg_color=COLOR_PRIMARY, border_color=COLOR_HOVER, placeholder_text_color=COLOR_DISABLED_TEXT, text_color=COLOR_TEXT)
         self.edit_description_entry.grid(row=1, column=0, padx=6, pady=(3,6), sticky='nsew', columnspan=2)
@@ -151,7 +141,7 @@ class MeetingPointManagerApp:
         self.point_entry = CTkStickyPlaceholderEntry(self.add_screen, placeholder_text="Point", font=("Arial", 18), fg_color=COLOR_PRIMARY, border_color=COLOR_HOVER, placeholder_text_color=COLOR_DISABLED_TEXT, text_color=COLOR_TEXT)
         self.point_entry.grid(row=0, column=0, padx=6, pady=(6,3), sticky='nsew', columnspan=2)
         self.point_entry.bind("<Return>", lambda event: self.add())
-        self.point_entry.bind("<KeyPress>", lambda event: self.root.after_idle(self.update_add_button_state))
+        self.point_entry.bind("<KeyPress>", lambda event: self.after_idle(self.update_add_button_state))
 
         self.description_entry = CTkStickyPlaceholderEntry(self.add_screen, placeholder_text="Description (optional)", font=("Arial", 18), fg_color=COLOR_PRIMARY, border_color=COLOR_HOVER, placeholder_text_color=COLOR_DISABLED_TEXT, text_color=COLOR_TEXT)
         self.description_entry.grid(row=1, column=0, padx=6, pady=(3,6), sticky='nsew', columnspan=2)
@@ -209,7 +199,7 @@ class MeetingPointManagerApp:
         self.edit_description_entry.delete(0, "end")
         self.edit_description_entry.insert(0, data.get("description", ""))
         self.in_edit_point_screen = True
-        self.root.after_idle(self.edit_point_entry.focus_set)
+        self.after_idle(self.edit_point_entry.focus_set)
         self.edit_point_entry.select_range(0, 'end')
 
     def hide_edit_point_screen(self):
@@ -222,7 +212,7 @@ class MeetingPointManagerApp:
 
     def back(self):
         if not self.in_edit_screen:
-            self.root.destroy()
+            self.navigate_back()
         elif self.in_edit_point_screen:
             self.hide_edit_point_screen()
         else:
@@ -328,7 +318,7 @@ class MeetingPointManagerApp:
             return
         title = title[0].upper() + title[1:]
         description = self.description_entry.get().strip()
-        doc = self.status_meeting_collection.find_one({"_id": "Discussion Points"})
+        doc = status_meeting.find_one({"_id": "Discussion Points"})
         year, week = self.selected_year_week
         if year not in doc:
             doc[year] = {}
@@ -345,7 +335,7 @@ class MeetingPointManagerApp:
         if description and description != "":
             point["description"] = description
         points.append(point)
-        self.status_meeting_collection.update_one({"_id": "Discussion Points"}, {"$set": {f"{year}.{week}": points}}, upsert=True)
+        status_meeting.update_one({"_id": "Discussion Points"}, {"$set": {f"{year}.{week}": points}}, upsert=True)
         frame = self.week_list_frames[self.selected_week_index]
         self.create_point_label(frame, point)
         frame.bug_fix_frame.configure(height=len(frame.point_frames)*40)
@@ -362,10 +352,10 @@ class MeetingPointManagerApp:
             self.show_add_screen()
             self.point_entry.delete(0, "end")
             self.description_entry.delete(0, "end")
-            self.root.after_idle(self.point_entry.focus_set)
+            self.after_idle(self.point_entry.focus_set)
             return
         self.add()
-        self.root.focus_set()
+        self.focus_set()
 
     def update_selected_week(self, value):
         self.selected_week_index = ["-1", "0", "+1"].index(value)
@@ -380,12 +370,21 @@ class MeetingPointManagerApp:
             self.add_button.configure(state="normal")
 
     def _reset_focus_if_needed(self, event):
+        if not self.winfo_ismapped():
+            return
         widget = event.widget
+        w = widget
+        while w is not None:
+            if w == self:
+                break
+            w = getattr(w, "master", None)
+        else:
+            return
         if ".!ctkentry" in str(widget):
             return
         if ".!ctksegmentedbutton" in str(widget):
             return
-        self.root.focus_set()
+        self.focus_set()
         for attr_name in dir(self):
             if attr_name.endswith('_entry'):
                 entry_widget = getattr(self, attr_name, None)
@@ -401,7 +400,7 @@ class MeetingPointManagerApp:
         new_description = self.edit_description_entry.get().strip()
         # DB
         year, week = self.selected_year_week
-        doc = self.status_meeting_collection.find_one({"_id": "Discussion Points"})
+        doc = status_meeting.find_one({"_id": "Discussion Points"})
         points = doc[year][week]
         old_title = self.edit_point["data"].get("title")
         for p in points:
@@ -412,7 +411,7 @@ class MeetingPointManagerApp:
                 elif "description" in p:
                     del p["description"]
                 break
-        self.status_meeting_collection.update_one(
+        status_meeting.update_one(
             {"_id": "Discussion Points"},
             {"$set": {f"{year}.{week}": points}},
             upsert=True
@@ -471,7 +470,7 @@ class MeetingPointManagerApp:
     def animate_to(self, point_data, target_y):
         # Cancel previous animation if any
         if point_data['anim_after_id']:
-            self.root.after_cancel(point_data['anim_after_id'])
+            self.after_cancel(point_data['anim_after_id'])
             point_data['anim_after_id'] = None
     
         def step():
@@ -504,20 +503,20 @@ class MeetingPointManagerApp:
             max_delay = 100  # slowest
 
             delay = int(min_delay + (max_delay - min_delay) * (1 - ease))
-            point_data['anim_after_id'] = self.root.after(delay, step)
+            point_data['anim_after_id'] = self.after(delay, step)
         step()
 
     def shrink_debug_frame(self, frame, height):
-        self.root.after(750, lambda: frame.configure(height=height))
+        self.after(750, lambda: frame.configure(height=height))
 
     def delete_point(self, point_data):
         # DB
         year, week = self.selected_year_week
-        doc = self.status_meeting_collection.find_one({"_id": "Discussion Points"})
+        doc = status_meeting.find_one({"_id": "Discussion Points"})
         points = doc[year][week]
         title = point_data["data"].get("title")
         new_points = [p for p in points if p.get("title") != title]
-        self.status_meeting_collection.update_one({"_id": "Discussion Points"}, {"$set": {f"{year}.{week}": new_points}}, upsert=True)
+        status_meeting.update_one({"_id": "Discussion Points"}, {"$set": {f"{year}.{week}": new_points}}, upsert=True)
         # Cache
         frame = self.week_list_frames[self.selected_week_index]
         frame.point_frames.remove(point_data)
@@ -590,29 +589,15 @@ class MeetingPointManagerApp:
             self.animate_to(pd, target_y)
         # DB
         year, week = self.selected_year_week
-        doc = self.status_meeting_collection.find_one({"_id": "Discussion Points"})
+        doc = status_meeting.find_one({"_id": "Discussion Points"})
         latest_points = doc[year][week]
         latest_points_by_title = {p["title"]: p for p in latest_points}
         new_points = []
         for pd in point_frames:
             title = pd["data"]["title"]
             new_points.append(latest_points_by_title.get(title, pd["data"]))
-        self.status_meeting_collection.update_one(
+        status_meeting.update_one(
             {"_id": "Discussion Points"},
             {"$set": {f"{year}.{week}": new_points}},
             upsert=True
         )
-
-if __name__ == "__main__":
-    root = ctk.CTk(COLOR_BACKGROUND)
-    app = MeetingPointManagerApp(root)
-    try:
-        from ctypes import windll, byref, sizeof, c_int
-        HWND = windll.user32.GetParent(root.winfo_id()) # type: ignore
-        # 34 = Border, 35 = Titlebar, 36 = TEXT, color format: 0xAABBGGRR
-        windll.dwmapi.DwmSetWindowAttribute(HWND, 34, byref(c_int(0x00000000)), sizeof(c_int)) # type: ignore
-        windll.dwmapi.DwmSetWindowAttribute(HWND, 35, byref(c_int(0x00000000)), sizeof(c_int)) # type: ignore
-    except (ImportError, AttributeError, OSError):
-        print("DWM API not available, skipping window attribute settings.")
-        pass
-    root.mainloop()

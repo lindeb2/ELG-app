@@ -62,8 +62,9 @@ def load_notification_config() -> dict[str, Any]:
     notif = cfg.get("notifications") or {}
     gae_url = (notif.get("gae_url") or "").strip()
     secret = (notif.get("secret") or "").strip()
+    enabled_flag = notif.get("enabled", True)
     return {
-        "enabled": bool(gae_url and secret),
+        "enabled": bool(enabled_flag and gae_url and secret),
         "gae_url": gae_url,
         "secret": secret,
     }
