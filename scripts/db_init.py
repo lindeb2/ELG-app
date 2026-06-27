@@ -81,6 +81,12 @@ def init_database():
         "data": {}
     })
 
+    # A6: Notification Preferences
+    status_col.insert_one({
+        "_id": "Notification Preferences",
+        "data": {}
+    })
+
     # B. Collection: Timetable Aggregations
     print("    -> Initializing 'Timetable Aggregations' collection...")
     agg_col = db['Timetable Aggregations']

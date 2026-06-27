@@ -28,6 +28,8 @@ class CommitPlan:
     combined_agg_update: dict[str, Any]
     highscore_update: dict[str, Any]
     broken_records: list
+    projected_user: dict[str, Any]
+    projected_combined: dict[str, Any]
 
 
 def _activity_merge(existing: dict, active_inc: int, total_days: int, elapsed: int) -> dict:
@@ -241,6 +243,8 @@ def build_commit_plan(
         combined_agg_update=combined_agg_update,
         highscore_update=highscore_update,
         broken_records=broken_records,
+        projected_user=projected_user,
+        projected_combined=projected_combined,
     )
 
 
