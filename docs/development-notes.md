@@ -20,6 +20,7 @@
 - [X]  **Team Hours Bar:** Add Goal Line?
 - [X]  S1 Highscore
 - [X]  Stats_viewer
+- [X]  Notification system
 
 ## Moved to Issues
 - [ ]  `self.days_chart_data_row.bind("<Configure>", update_day_bars)`? (Moved to issue)
@@ -45,6 +46,5 @@
    - [ ]  Integrate all parts
    - [ ]  Dry function calls between parts
    - [ ]  On close logic
-- [ ]  Notification system
 - [ ]  Logic if new week
 - [ ]  Auto log and record during meetings

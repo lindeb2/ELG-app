@@ -154,7 +154,7 @@ def _format_week_stats_block(
     *,
     for_self: bool,
 ) -> str:
-    header = "Your weeks stats:" if for_self else "Their weeks stats:"
+    header = "## Your weeks stats:" if for_self else "## Their weeks stats:"
     return "\n".join([
         header,
         _format_hours_stat_line(hours, goal_hours),
@@ -180,7 +180,7 @@ def format_start_message(
     )
     if for_self:
         return stats
-    return f"**{actor}** just started a session!\n\n{stats}"
+    return f"## **{actor}** just started a session!\n\n{stats}"
 
 
 def format_end_message(
@@ -201,7 +201,7 @@ def format_end_message(
     )
     if for_self:
         return stats
-    return f"**{actor}** just finished a session!\n\n{stats}"
+    return f"## **{actor}** just finished a session!\n\n{stats}"
 
 
 def days_since_record(old_date: datetime | None, reference: datetime) -> int:
@@ -289,11 +289,11 @@ def create_broken_records_notification(
         )
 
     if len(record_counts) == 1:
-        message = f"{actor} just broke {record_counts[0]}!\n\n"
+        message = f"## {actor} just broke {record_counts[0]}!\n\n"
     elif len(record_counts) == 2:
-        message = f"{actor} just broke {record_counts[0]} and {record_counts[1]}!\n\n"
+        message = f"## {actor} just broke {record_counts[0]} and {record_counts[1]}!\n\n"
     else:
-        message = f"{actor} just broke {record_counts[0]}, {record_counts[1]} and {record_counts[2]}!\n\n"
+        message = f"## {actor} just broke {record_counts[0]}, {record_counts[1]} and {record_counts[2]}!\n\n"
 
     all_records = global_records + filtered_personal_records + combined_records
     for record_pair in all_records:
