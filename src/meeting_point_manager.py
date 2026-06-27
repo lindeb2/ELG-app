@@ -6,6 +6,7 @@ from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
 from CtkSmartScrollableFrame import CtkSmartScrollableFrame
 from CTkFlexToolTip import CTkFlexToolTip
+from CTkStickyPlaceholderEntry import CTkStickyPlaceholderEntry
 from period_model import as_utc, monday_midnight_local, to_local, utc_naive_after_calendar_days
 
 COLOR_BACKGROUND=   "#000000" # Background [Root, MenuBar, ScreenFrame, Add- Edit- & Editpoint-Screens, EditScreen.F, EditScreen.F.F] 0      0       0
@@ -131,12 +132,12 @@ class MeetingPointManagerApp:
         self.edit_point_screen.grid_rowconfigure([0, 1], weight=1, uniform='a')
         self.edit_point_screen.grid_columnconfigure([0, 1], weight=1, uniform='b')
 
-        self.edit_point_entry = ctk.CTkEntry(self.edit_point_screen, placeholder_text="Point", font=("Arial", 18), state="disabled", fg_color=COLOR_PRIMARY, border_color=COLOR_HOVER, placeholder_text_color=COLOR_DISABLED_TEXT, text_color=COLOR_TEXT)
+        self.edit_point_entry = CTkStickyPlaceholderEntry(self.edit_point_screen, placeholder_text="Point", font=("Arial", 18), state="disabled", fg_color=COLOR_PRIMARY, border_color=COLOR_HOVER, placeholder_text_color=COLOR_DISABLED_TEXT, text_color=COLOR_TEXT)
         self.edit_point_entry.grid(row=0, column=0, padx=6, pady=(6,3), sticky='nsew', columnspan=2)
         self.edit_point_entry.bind("<Return>", lambda event: self.update_point())
         self.edit_point_entry.bind("<KeyPress>", lambda event: self.root.after_idle(self.update_add_button_state))
 
-        self.edit_description_entry = ctk.CTkEntry(self.edit_point_screen, placeholder_text="Description (optional)", font=("Arial", 18), state="disabled", fg_color=COLOR_PRIMARY, border_color=COLOR_HOVER, placeholder_text_color=COLOR_DISABLED_TEXT, text_color=COLOR_TEXT)
+        self.edit_description_entry = CTkStickyPlaceholderEntry(self.edit_point_screen, placeholder_text="Description (optional)", font=("Arial", 18), state="disabled", fg_color=COLOR_PRIMARY, border_color=COLOR_HOVER, placeholder_text_color=COLOR_DISABLED_TEXT, text_color=COLOR_TEXT)
         self.edit_description_entry.grid(row=1, column=0, padx=6, pady=(3,6), sticky='nsew', columnspan=2)
         self.edit_description_entry.bind("<Return>", lambda event: self.update_point())
 
@@ -147,12 +148,12 @@ class MeetingPointManagerApp:
         self.add_screen.grid_rowconfigure([0, 1], weight=1, uniform='a')
         self.add_screen.grid_columnconfigure([0, 1], weight=1, uniform='b')
 
-        self.point_entry = ctk.CTkEntry(self.add_screen, placeholder_text="Point", font=("Arial", 18), fg_color=COLOR_PRIMARY, border_color=COLOR_HOVER, placeholder_text_color=COLOR_DISABLED_TEXT, text_color=COLOR_TEXT)
+        self.point_entry = CTkStickyPlaceholderEntry(self.add_screen, placeholder_text="Point", font=("Arial", 18), fg_color=COLOR_PRIMARY, border_color=COLOR_HOVER, placeholder_text_color=COLOR_DISABLED_TEXT, text_color=COLOR_TEXT)
         self.point_entry.grid(row=0, column=0, padx=6, pady=(6,3), sticky='nsew', columnspan=2)
         self.point_entry.bind("<Return>", lambda event: self.add())
         self.point_entry.bind("<KeyPress>", lambda event: self.root.after_idle(self.update_add_button_state))
 
-        self.description_entry = ctk.CTkEntry(self.add_screen, placeholder_text="Description (optional)", font=("Arial", 18), fg_color=COLOR_PRIMARY, border_color=COLOR_HOVER, placeholder_text_color=COLOR_DISABLED_TEXT, text_color=COLOR_TEXT)
+        self.description_entry = CTkStickyPlaceholderEntry(self.add_screen, placeholder_text="Description (optional)", font=("Arial", 18), fg_color=COLOR_PRIMARY, border_color=COLOR_HOVER, placeholder_text_color=COLOR_DISABLED_TEXT, text_color=COLOR_TEXT)
         self.description_entry.grid(row=1, column=0, padx=6, pady=(3,6), sticky='nsew', columnspan=2)
         self.description_entry.bind("<Return>", lambda event: self.add())
 

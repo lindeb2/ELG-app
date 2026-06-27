@@ -4,6 +4,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 from commit_transaction import CommitTransactionManager, TXN_REFRESH_INTERVAL_MS
+from CTkStickyPlaceholderEntry import CTkStickyPlaceholderEntry
 from notifications import (
     create_broken_records_notification,
     fetch_week_goal_context_at_start,
@@ -43,12 +44,6 @@ class TimetableApp(ctk.CTk):
 
         self._commit_txn = CommitTransactionManager(collection, aggregations, client, user)
 
-        self.name_var = ctk.StringVar()
-        self.desc_var = ctk.StringVar()
-
-        self.name_var.trace_add("write", self.validate_inputs)
-        self.desc_var.trace_add("write", self.validate_inputs)
-
         self.grid_rowconfigure([0, 1], weight=1, uniform='a')
         self.grid_columnconfigure([0, 1], weight=1, uniform='a')
 
@@ -65,13 +60,15 @@ class TimetableApp(ctk.CTk):
         self.overlay_canvas.grid_rowconfigure(2, weight=2)
         self.overlay_canvas.grid_columnconfigure([0, 1], weight=1, uniform='a')
 
-        ctk.CTkEntry(self.overlay_canvas, placeholder_text="Name", textvariable=self.name_var,
-                     fg_color=COLOR_PRIMARY, border_color=COLOR_HOVER, placeholder_text_color=COLOR_DISABLED_TEXT, text_color=COLOR_TEXT
-        ).grid(row=0, column=0, padx=4, pady=4, sticky='nsew', columnspan=2)
+        self.name_entry = CTkStickyPlaceholderEntry(self.overlay_canvas, placeholder_text="Name", font=("Arial", 18),
+                     fg_color=COLOR_PRIMARY, border_color=COLOR_HOVER, placeholder_text_color=COLOR_DISABLED_TEXT, text_color=COLOR_TEXT)
+        self.name_entry.grid(row=0, column=0, padx=4, pady=4, sticky='nsew', columnspan=2)
+        self.name_entry.bind("<KeyPress>", lambda event: self.after_idle(self.validate_inputs))
 
-        ctk.CTkEntry(self.overlay_canvas, placeholder_text="Description", textvariable=self.desc_var,
-                     fg_color=COLOR_PRIMARY, border_color=COLOR_HOVER, placeholder_text_color=COLOR_DISABLED_TEXT, text_color=COLOR_TEXT
-        ).grid(row=1, column=0, padx=4, pady=4, sticky='nsew', columnspan=2)
+        self.desc_entry = CTkStickyPlaceholderEntry(self.overlay_canvas, placeholder_text="Description", font=("Arial", 18),
+                     fg_color=COLOR_PRIMARY, border_color=COLOR_HOVER, placeholder_text_color=COLOR_DISABLED_TEXT, text_color=COLOR_TEXT)
+        self.desc_entry.grid(row=1, column=0, padx=4, pady=4, sticky='nsew', columnspan=2)
+        self.desc_entry.bind("<KeyPress>", lambda event: self.after_idle(self.validate_inputs))
 
         ctk.CTkButton(self.overlay_canvas, text="Continue", fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER,
                       command=self.continue_timer, text_color=COLOR_TEXT, font=("Arial", 14), corner_radius=8
@@ -235,8 +232,8 @@ class TimetableApp(ctk.CTk):
     def submit_entry(self):
         self.log_button.configure(state="disabled")
         self._commit_txn.finalize_async(
-            self.name_var.get().strip(),
-            self.desc_var.get().strip(),
+            self.name_entry.get().strip(),
+            self.desc_entry.get().strip(),
             on_success=lambda ts, broken: self.after(0, lambda: self._on_commit_success(ts, broken)),
             on_error=lambda _exc: self.after(0, lambda: self._on_commit_finalize_failed()),
         )
@@ -328,7 +325,7 @@ class TimetableApp(ctk.CTk):
 
     def _on_commit_success(self, timestamp, broken_records):
         plan = self._commit_plan
-        log_name = self.name_var.get().strip()
+        log_name = self.name_entry.get().strip()
         if plan is not None:
             threading.Thread(
                 target=self._send_end_notification,
@@ -357,8 +354,10 @@ class TimetableApp(ctk.CTk):
         self.time_label.configure(text="00:00")
         self.hide_done_button("Start")
         self.done_button.configure(state="disabled")
-        self.name_var.set("")
-        self.desc_var.set("")
+        self.name_entry.delete(0, "end")
+        self.desc_entry.delete(0, "end")
+        self.name_entry._activate_placeholder()
+        self.desc_entry._activate_placeholder()
         self.overlay_canvas.grid_forget()
 
     def continue_timer(self):
@@ -367,13 +366,17 @@ class TimetableApp(ctk.CTk):
         self.toggle_button()
 
     def validate_inputs(self, *args):
-        if self._commit_plan and self.name_var.get().strip() and self.desc_var.get().strip():
+        if self._commit_plan and self.name_entry.get().strip() and self.desc_entry.get().strip():
             self.log_button.configure(state="normal")
         else:
             self.log_button.configure(state="disabled")
 
     def show_entry_overlay(self):
         self.overlay_canvas.grid(row=0, column=0, sticky="nsew", columnspan=2, rowspan=2)
+        if self.name_entry.get() == "":
+            self.name_entry._activate_placeholder()
+        if self.desc_entry.get() == "":
+            self.desc_entry._activate_placeholder()
         self._start_prepare_commit()
 
 
