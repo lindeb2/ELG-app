@@ -49,5 +49,10 @@
    - [ ]  Windows topbar after maximized
    - [ ]  Sidebar gone at maximized]
    - [ ]  [Timetable widget](https://gemini.google.com/app/849f65b0762fd705)
+   - [ ]  Disable OS to shut down
+   - [ ]  Minimize app to system tray on close?
 - [ ]  Logic if new week
 - [ ]  Auto log and record during meetings
+- [ ]  Implement Color Themes
+
+https://claude.ai/share/8466402d-f266-4cf3-b2e7-020d1bc208fa
