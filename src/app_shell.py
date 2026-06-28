@@ -35,8 +35,9 @@ _SHORTCUT_VIEWS: dict[str, str] = {
     "4": "meeting_points",
 }
 
-_BTN_TRANSPARENT = {"fg_color": "transparent", "hover_color": "#2C2C2C", "text_color": "white"}
-_BTN_ACTIVE = {"fg_color": "#2C2C2C", "hover_color": "#3C3C3C", "text_color": "white"}
+_SIDEBAR_BG = "#141414"
+_BTN_INACTIVE = {"fg_color": _SIDEBAR_BG, "hover_color": "#252525", "text_color": "#888888"}
+_BTN_ACTIVE = {"fg_color": "#333333", "hover_color": "#404040", "text_color": "white"}
 
 
 def apply_dwm_theming(window: ctk.CTk) -> None:
@@ -72,7 +73,7 @@ class AppShell(ctk.CTkFrame):
             "settings": None,
         }
 
-        self._sidebar = ctk.CTkFrame(self, width=_SIDEBAR_WIDTH, corner_radius=0)
+        self._sidebar = ctk.CTkFrame(self, width=_SIDEBAR_WIDTH, corner_radius=0, fg_color=_SIDEBAR_BG)
         self._sidebar.grid(row=0, column=0, sticky="ns")
         self._sidebar.grid_propagate(False)
         self._sidebar.grid_rowconfigure(len(_NAV_ITEMS) + 1, weight=1)
@@ -83,7 +84,7 @@ class AppShell(ctk.CTkFrame):
                 text=label,
                 anchor="w",
                 command=lambda k=key: self.switch_view(k),
-                **_BTN_TRANSPARENT,
+                **_BTN_INACTIVE,
             )
             btn.grid(row=row, column=0, sticky="ew", padx=6, pady=2)
             self._nav_buttons[key] = btn
@@ -96,7 +97,7 @@ class AppShell(ctk.CTkFrame):
             text="Settings",
             anchor="w",
             command=lambda: self.switch_view("settings"),
-            **_BTN_TRANSPARENT,
+            **_BTN_INACTIVE,
         )
         self._settings_btn.grid(
             row=len(_NAV_ITEMS) + 2,
@@ -202,9 +203,11 @@ class AppShell(ctk.CTkFrame):
         if update_geometry:
             self._apply_window_geometry()
 
+        self._update_nav_styles(name)
+
+    def _update_nav_styles(self, active: str) -> None:
         for key, btn in self._nav_buttons.items():
-            style = _BTN_ACTIVE if key == name else _BTN_TRANSPARENT
-            btn.configure(**style)
+            btn.configure(**(_BTN_ACTIVE if key == active else _BTN_INACTIVE))
 
     def _square_host(self, frame_cls: type, **kwargs) -> ctk.CTkFrame:
         host = ctk.CTkFrame(
