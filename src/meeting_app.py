@@ -78,9 +78,10 @@ def format_time(seconds):
 
 class MeetingFrame(ctk.CTkFrame):
     ### INIT ###
-    def __init__(self, parent):
+    def __init__(self, parent, shell=None):
         super().__init__(parent)
         self._window = self.winfo_toplevel()
+        self._shell = shell
 
         self.fullscreen = False
         self._init_complete = False
@@ -393,6 +394,8 @@ class MeetingFrame(ctk.CTkFrame):
         self.fullscreen = not self.fullscreen
         if self.fullscreen:
             self._pre_fullscreen_geometry = window.geometry()
+            if self._shell:
+                self._shell.enter_meeting_fullscreen()
 
             window_x = window.winfo_x()
             window_y = window.winfo_y()
@@ -402,16 +405,24 @@ class MeetingFrame(ctk.CTkFrame):
             window.update_idletasks()
             window.geometry(f"+{window_x}+{window_y}")
         else:
-            window.attributes("-fullscreen", False)
-            if hasattr(self, '_pre_fullscreen_geometry'):
-                window.geometry(self._pre_fullscreen_geometry)
+            self._leave_fullscreen()
 
     def exit_fullscreen(self, _event):
-        if self.fullscreen:
-            self.fullscreen = False
-            self._window.attributes("-fullscreen", False)
-            if hasattr(self, '_pre_fullscreen_geometry'):
-                self._window.geometry(self._pre_fullscreen_geometry)
+        self.leave_fullscreen_if_active()
+
+    def leave_fullscreen_if_active(self) -> None:
+        if not self.fullscreen:
+            return
+        self.fullscreen = False
+        self._leave_fullscreen()
+
+    def _leave_fullscreen(self) -> None:
+        window = self._window
+        window.attributes("-fullscreen", False)
+        if hasattr(self, "_pre_fullscreen_geometry"):
+            window.geometry(self._pre_fullscreen_geometry)
+        if self._shell:
+            self._shell.exit_meeting_fullscreen()
 
     def update_db(self):
         while True:

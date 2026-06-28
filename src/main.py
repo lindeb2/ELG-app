@@ -7,7 +7,7 @@ import os
 import customtkinter as ctk
 
 import timetable_db
-from app_shell import AppShell
+from app_shell import AppShell, apply_dwm_theming
 from setup_window import SetupFrame
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -20,17 +20,6 @@ _APP_BG = "#000000"
 def load_config() -> dict:
     with open(_CONFIG_PATH, encoding="utf-8") as file:
         return json.load(file)
-
-
-def apply_dwm_theming(window: ctk.CTk) -> None:
-    try:
-        from ctypes import byref, c_int, sizeof, windll
-
-        hwnd = windll.user32.GetParent(window.winfo_id())  # type: ignore[attr-defined]
-        windll.dwmapi.DwmSetWindowAttribute(hwnd, 34, byref(c_int(0x00000000)), sizeof(c_int))  # type: ignore[attr-defined]
-        windll.dwmapi.DwmSetWindowAttribute(hwnd, 35, byref(c_int(0x00000000)), sizeof(c_int))  # type: ignore[attr-defined]
-    except (ImportError, AttributeError, OSError):
-        print("DWM API not available, skipping window attribute settings.")
 
 
 def _sync_db_user() -> None:

@@ -28,14 +28,35 @@ _NAV_ITEMS: tuple[tuple[str, str], ...] = (
     ("meeting_points", "Point Manager"),
 )
 
+_SHORTCUT_VIEWS: dict[str, str] = {
+    "1": "timetable",
+    "2": "statistics",
+    "3": "meeting",
+    "4": "meeting_points",
+}
+
 _BTN_TRANSPARENT = {"fg_color": "transparent", "hover_color": "#2C2C2C", "text_color": "white"}
 _BTN_ACTIVE = {"fg_color": "#2C2C2C", "hover_color": "#3C3C3C", "text_color": "white"}
+
+
+def apply_dwm_theming(window: ctk.CTk) -> None:
+    try:
+        from ctypes import byref, c_int, sizeof, windll
+
+        hwnd = windll.user32.GetParent(window.winfo_id())  # type: ignore[attr-defined]
+        windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, byref(c_int(1)), sizeof(c_int))  # type: ignore[attr-defined]
+        windll.dwmapi.DwmSetWindowAttribute(hwnd, 34, byref(c_int(0x00000000)), sizeof(c_int))  # type: ignore[attr-defined]
+        windll.dwmapi.DwmSetWindowAttribute(hwnd, 35, byref(c_int(0x00000000)), sizeof(c_int))  # type: ignore[attr-defined]
+    except (ImportError, AttributeError, OSError):
+        print("DWM API not available, skipping window attribute settings.")
 
 
 class AppShell(ctk.CTkFrame):
     def __init__(self, window: ctk.CTk, master: ctk.CTkFrame):
         super().__init__(master, fg_color="#000000", corner_radius=0)
         self._window = window
+        self._sidebar_visible = True
+        self._sidebar_before_fullscreen: bool | None = None
 
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(1, weight=1)
@@ -90,6 +111,53 @@ class AppShell(ctk.CTkFrame):
         self._content.grid(row=0, column=1, sticky="nsew")
 
         window.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._bind_shortcuts()
+
+    def _bind_shortcuts(self) -> None:
+        self._window.bind("<Control-b>", self._on_toggle_sidebar, add="+")
+        self._window.bind("<Control-B>", self._on_toggle_sidebar, add="+")
+        for key, view in _SHORTCUT_VIEWS.items():
+            self._window.bind(f"<Control-Key-{key}>", lambda _e, v=view: self.switch_view(v), add="+")
+            self._window.bind(f"<Control-{key}>", lambda _e, v=view: self.switch_view(v), add="+")
+        self._window.bind("<Control-comma>", lambda _e: self.switch_view("settings"), add="+")
+
+    def _on_toggle_sidebar(self, _event=None) -> None:
+        self.toggle_sidebar()
+
+    def toggle_sidebar(self) -> None:
+        self.set_sidebar_visible(not self._sidebar_visible)
+
+    def set_sidebar_visible(self, visible: bool) -> None:
+        if visible == self._sidebar_visible:
+            return
+        self._sidebar_visible = visible
+        if visible:
+            self._sidebar.grid(row=0, column=0, sticky="ns")
+        else:
+            self._sidebar.grid_remove()
+        self._apply_window_geometry()
+
+    def enter_meeting_fullscreen(self) -> None:
+        if self._sidebar_before_fullscreen is None:
+            self._sidebar_before_fullscreen = self._sidebar_visible
+        if self._sidebar_visible:
+            self.set_sidebar_visible(False)
+
+    def exit_meeting_fullscreen(self) -> None:
+        if self._sidebar_before_fullscreen is not None:
+            self.set_sidebar_visible(self._sidebar_before_fullscreen)
+            self._sidebar_before_fullscreen = None
+        self._window.update_idletasks()
+        apply_dwm_theming(self._window)
+        self._window.after_idle(lambda: apply_dwm_theming(self._window))
+
+    def _apply_window_geometry(self) -> None:
+        if self._active_view is None:
+            return
+        width, height = _VIEW_SIZES[self._active_view]
+        if not self._sidebar_visible:
+            width -= _SIDEBAR_WIDTH
+        self._window.geometry(f"{width}x{height}")
 
     def _apply_layout(self, name: str) -> None:
         is_small = name in ("timetable", "meeting_points")
@@ -105,7 +173,15 @@ class AppShell(ctk.CTkFrame):
             self._content.grid(row=0, column=1, sticky="nsew")
             self._content.grid_propagate(True)
 
+    def _leave_meeting_fullscreen(self) -> None:
+        meeting = self._frames.get("meeting")
+        if meeting is not None:
+            meeting.leave_fullscreen_if_active()
+
     def switch_view(self, name: str, *, update_geometry: bool = True) -> None:
+        if name != "meeting":
+            self._leave_meeting_fullscreen()
+
         self._apply_layout(name)
 
         if self._current_frame is not None:
@@ -124,8 +200,7 @@ class AppShell(ctk.CTkFrame):
             frame.focus_set()
 
         if update_geometry:
-            width, height = _VIEW_SIZES[name]
-            self._window.geometry(f"{width}x{height}")
+            self._apply_window_geometry()
 
         for key, btn in self._nav_buttons.items():
             style = _BTN_ACTIVE if key == name else _BTN_TRANSPARENT
@@ -149,7 +224,7 @@ class AppShell(ctk.CTkFrame):
         if name == "statistics":
             return StatsFrame(self._content)
         if name == "meeting":
-            return MeetingFrame(self._content)
+            return MeetingFrame(self._content, shell=self)
         if name == "settings":
             return SettingsFrame(self._content)
         if name == "meeting_points":
