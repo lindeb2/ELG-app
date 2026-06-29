@@ -40,9 +40,6 @@ TASKBAR_ICON_PATH = os.path.join(
     "ELG Studio 0.1_256_128_64_48_32_24_clean_rounded.ico",
 )
 
-_blank_caption_icon_file: str | None = None
-
-
 def deactivate_ctk_title_bar_manipulation() -> None:
     if sys.platform.startswith("win"):
         ctk.CTk._deactivate_windows_window_header_manipulation = True  # type: ignore[attr-defined]
@@ -54,28 +51,9 @@ def _hwnd(window: ctk.CTk) -> int:
     return windll.user32.GetParent(window.winfo_id())  # type: ignore[attr-defined]
 
 
-def _blank_caption_icon_path() -> str:
-    """Solid caption-colored icon so a brief title-bar flash is invisible."""
-    global _blank_caption_icon_file
-    if _blank_caption_icon_file is not None:
-        return _blank_caption_icon_file
-
-    import tempfile
-
-    from PIL import Image
-
-    path = os.path.join(tempfile.gettempdir(), "elg_blank_caption_black.ico")
-    if not os.path.isfile(path):
-        img = Image.new("RGBA", (32, 32), (0, 0, 0, 255))
-        img.save(path, format="ICO", sizes=[(16, 16), (32, 32)])
-    _blank_caption_icon_file = path
-    return path
-
-
 def warm_widget_title_bar_assets() -> None:
-    """Pre-create assets used by widget mode so the first enter does not flicker."""
-    if sys.platform.startswith("win"):
-        _blank_caption_icon_path()
+    """No-op; kept for callers that pre-warm widget chrome."""
+    return
 
 
 def _hide_title_bar_icon_hwnd(hwnd: int) -> None:
@@ -86,7 +64,13 @@ def _hide_title_bar_icon_hwnd(hwnd: int) -> None:
     if needs_frame_refresh:
         windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_DLGMODALFRAME)
 
-    _set_title_bar_icons_from_file(hwnd, _blank_caption_icon_path())
+    # Real icons on both slots (Task Manager reads ICON_SMALL). DLGMODALFRAME hides
+    # the caption icon in the title bar without replacing it with a black placeholder.
+    _set_window_icons(
+        hwnd,
+        caption_icon_path=CAPTION_ICON_PATH,
+        taskbar_icon_path=TASKBAR_ICON_PATH,
+    )
 
     if needs_frame_refresh:
         windll.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, _FRAME_CHANGED)
@@ -176,16 +160,8 @@ def _set_window_icons(
         _set_icon_from_file(hwnd, ICON_BIG, taskbar_icon_path, 32, 32)
 
 
-def _set_title_bar_icons_from_file(hwnd: int, icon_path: str) -> None:
-    _set_window_icons(
-        hwnd,
-        caption_icon_path=icon_path,
-        taskbar_icon_path=icon_path,
-    )
-
-
 def hide_title_bar_icon(window: ctk.CTk) -> None:
-    """Remove the title-bar icon without -toolwindow (keeps native Win11 close button)."""
+    """Hide the caption icon only; taskbar / Alt+Tab keep the app icon."""
     if not sys.platform.startswith("win"):
         return
     try:
