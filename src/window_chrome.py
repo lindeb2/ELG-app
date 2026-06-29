@@ -33,9 +33,11 @@ SWP_NOZORDER = 0x0004
 SWP_NOACTIVATE = 0x0010
 _FRAME_CHANGED = SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE
 
-_APP_ICON_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    "ELG Studio 0.1_16_clean_big.ico",
+_ICON_DIR = os.path.dirname(os.path.abspath(__file__))
+CAPTION_ICON_PATH = os.path.join(_ICON_DIR, "ELG Studio 0.1_16_clean_big.ico")
+TASKBAR_ICON_PATH = os.path.join(
+    _ICON_DIR,
+    "ELG Studio 0.1_256_128_64_48_32_24_clean_rounded.ico",
 )
 
 _blank_caption_icon_file: str | None = None
@@ -114,48 +116,72 @@ def hide_visible_caption_text(window: ctk.CTk, caption_color: int | None = None)
         pass
 
 
-def configure_app_icon(window: ctk.CTk, icon_path: str | None = None) -> None:
-    """Install the app icon before the window maps so Tk's default never appears."""
-    path = icon_path or _APP_ICON_PATH
-    if not os.path.isfile(path):
-        return
-    try:
-        window.tk.call("wm", "iconbitmap", window._w, "-default", path)  # type: ignore[attr-defined]
-    except tkinter.TclError:
-        pass
-    window.iconbitmap(path)
+def configure_app_icon(
+    window: ctk.CTk,
+    *,
+    caption_icon_path: str | None = None,
+    taskbar_icon_path: str | None = None,
+) -> None:
+    """Install caption (16px) and taskbar icons before the window maps."""
+    caption = caption_icon_path or CAPTION_ICON_PATH
+    taskbar = taskbar_icon_path or TASKBAR_ICON_PATH
+    taskbar_for_tk = taskbar if os.path.isfile(taskbar) else caption
+    if os.path.isfile(taskbar_for_tk):
+        try:
+            window.tk.call(  # type: ignore[attr-defined]
+                "wm", "iconbitmap", window._w, "-default", taskbar_for_tk
+            )
+        except tkinter.TclError:
+            pass
+        window.iconbitmap(taskbar_for_tk)
     if sys.platform.startswith("win"):
-        _set_title_bar_icons_from_file(_hwnd(window), path)
+        _set_window_icons(_hwnd(window), caption_icon_path=caption, taskbar_icon_path=taskbar)
 
 
-def _set_title_bar_icons_from_file(hwnd: int, icon_path: str) -> None:
+def _set_icon_from_file(hwnd: int, icon_type: int, icon_path: str, width: int, height: int) -> None:
     from ctypes import windll
 
     lr_loadfromfile = 0x0010
     image_icon = 1
-    for icon_type, width, height in (
-        (ICON_SMALL, 16, 16),
-        (ICON_BIG, 32, 32),
-    ):
+    handle = windll.user32.LoadImageW(
+        0,
+        icon_path,
+        image_icon,
+        width,
+        height,
+        lr_loadfromfile,
+    )
+    if not handle:
         handle = windll.user32.LoadImageW(
             0,
             icon_path,
             image_icon,
-            width,
-            height,
+            0,
+            0,
             lr_loadfromfile,
         )
-        if not handle:
-            handle = windll.user32.LoadImageW(
-                0,
-                icon_path,
-                image_icon,
-                0,
-                0,
-                lr_loadfromfile,
-            )
-        if handle:
-            windll.user32.SendMessageW(hwnd, WM_SETICON, icon_type, handle)
+    if handle:
+        windll.user32.SendMessageW(hwnd, WM_SETICON, icon_type, handle)
+
+
+def _set_window_icons(
+    hwnd: int,
+    *,
+    caption_icon_path: str,
+    taskbar_icon_path: str,
+) -> None:
+    if os.path.isfile(caption_icon_path):
+        _set_icon_from_file(hwnd, ICON_SMALL, caption_icon_path, 16, 16)
+    if os.path.isfile(taskbar_icon_path):
+        _set_icon_from_file(hwnd, ICON_BIG, taskbar_icon_path, 32, 32)
+
+
+def _set_title_bar_icons_from_file(hwnd: int, icon_path: str) -> None:
+    _set_window_icons(
+        hwnd,
+        caption_icon_path=icon_path,
+        taskbar_icon_path=icon_path,
+    )
 
 
 def hide_title_bar_icon(window: ctk.CTk) -> None:
@@ -168,16 +194,21 @@ def hide_title_bar_icon(window: ctk.CTk) -> None:
         pass
 
 
-def restore_title_bar_icon(window: ctk.CTk, icon_path: str | None = None) -> None:
+def restore_title_bar_icon(
+    window: ctk.CTk,
+    *,
+    caption_icon_path: str | None = None,
+    taskbar_icon_path: str | None = None,
+) -> None:
     if not sys.platform.startswith("win"):
         return
-    path = icon_path or _APP_ICON_PATH
+    caption = caption_icon_path or CAPTION_ICON_PATH
+    taskbar = taskbar_icon_path or TASKBAR_ICON_PATH
     try:
         from ctypes import windll
 
         hwnd = _hwnd(window)
-        if os.path.isfile(path):
-            _set_title_bar_icons_from_file(hwnd, path)
+        _set_window_icons(hwnd, caption_icon_path=caption, taskbar_icon_path=taskbar)
         ex_style = windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
         windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style & ~WS_EX_DLGMODALFRAME)
         windll.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, _FRAME_CHANGED)
@@ -246,10 +277,15 @@ def outer_size_for_client(
 def apply_app_title_bar_chrome(
     window: ctk.CTk,
     *,
-    icon_path: str | None = None,
+    caption_icon_path: str | None = None,
+    taskbar_icon_path: str | None = None,
 ) -> None:
     """Full app: icon, hidden title text, normal min/max/close."""
-    restore_title_bar_icon(window, icon_path)
+    restore_title_bar_icon(
+        window,
+        caption_icon_path=caption_icon_path,
+        taskbar_icon_path=taskbar_icon_path,
+    )
     hide_visible_caption_text(window, CAPTION_COLOR_BLACK_BGR)
     restore_minimize_maximize_buttons(window)
 
