@@ -1,16 +1,21 @@
 """Main application shell with sidebar navigation."""
 from __future__ import annotations
 
+import os
 import sys
 import tkinter as tk
 from collections.abc import Callable
 
 import customtkinter as ctk
 
+from app_config import app_preferences_from_config, read_config
 from meeting_app import MeetingFrame
 from meeting_point_manager import MeetingPointManagerFrame
+from session_guard import has_unlogged_time, prompt_unlogged_action_blocked, prompt_unlogged_exit
 from settings_frame import SettingsFrame
+from shutdown_block import ShutdownBlocker
 from stats_viewer import StatsFrame
+from system_tray import SystemTray
 from Timetable import TimetableFrame
 from title_bar_pin import FLUENT_ICON_FONT, TitleBarButtonOverlay, WIDGET_ENTER_GLYPH
 from window_chrome import (
@@ -20,6 +25,9 @@ from window_chrome import (
     hide_title_bar_icon,
     warm_widget_title_bar_assets,
 )
+
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_ICON_PATH = os.path.join(_SCRIPT_DIR, "ELG Studio 0.1_16_clean_big.ico")
 
 _APP_BG = "#000000"
 _SECTION_GAP = 1
@@ -39,7 +47,7 @@ _VIEW_SIZES: dict[str, tuple[int, int]] = {
     "statistics": (1420, 800),
     "meeting": (1360, 820),
     "meeting_points": _SMALL_VIEW,
-    "settings": (500, 450),
+    "settings": (520, 720),
 }
 
 _NAV_ITEMS: tuple[tuple[str, str], ...] = (
@@ -101,9 +109,29 @@ def _apply_sidebar_nav_text_inset(btn: ctk.CTkButton) -> None:
 
 
 class AppShell(tk.Frame):
-    def __init__(self, window: ctk.CTk, master: tk.Misc):
+    def __init__(
+        self,
+        window: ctk.CTk,
+        master: tk.Misc,
+        *,
+        initial_view: str = "timetable",
+        start_minimized_to_tray: bool = False,
+    ):
         super().__init__(master, bg=_APP_BG, **_TK_FRAME)
         self._window = window
+        self._initial_view = initial_view
+        self._start_minimized_to_tray = start_minimized_to_tray
+        self._app_prefs = app_preferences_from_config(read_config())
+        self._tray = SystemTray(
+            _ICON_PATH,
+            on_show=self._show_from_tray,
+            on_exit=self._exit_from_tray,
+        )
+        self._shutdown_blocker = ShutdownBlocker(
+            window,
+            should_block=lambda: has_unlogged_time(self.get_timetable()),
+        )
+        self._ctrl_r_bound = False
         self._sidebar_visible = True
         self._sidebar_before_fullscreen: bool | None = None
         self._widget_mode = False
@@ -170,10 +198,121 @@ class AppShell(tk.Frame):
 
         window.protocol("WM_DELETE_WINDOW", self._on_close)
         self._bind_shortcuts()
+        self._sync_ctrl_r_binding()
+        self._shutdown_blocker.install()
         if sys.platform.startswith("win"):
             self._window.bind("<FocusIn>", self._on_widget_window_focus, add="+")
             self._window.bind("<Activate>", self._on_widget_window_focus, add="+")
             self._window.after(300, self.warm_widget_title_bar_pin)
+
+    def set_app_preferences(self, app_prefs: dict) -> None:
+        self._app_prefs = dict(app_prefs)
+        self._sync_ctrl_r_binding()
+
+    def get_timetable(self) -> TimetableFrame | None:
+        host = self._frames.get("timetable")
+        child = self._view_child(host)
+        return child if isinstance(child, TimetableFrame) else None
+
+    def on_timetable_session_changed(self) -> None:
+        self._shutdown_blocker.sync()
+        settings_host = self._frames.get("settings")
+        settings = self._view_child(settings_host)
+        if settings is not None and hasattr(settings, "refresh_session_controls"):
+            settings.refresh_session_controls()
+
+    def discard_timetable_session(self) -> None:
+        timetable = self.get_timetable()
+        if timetable is not None:
+            timetable.discard_session()
+
+    def _sync_ctrl_r_binding(self) -> None:
+        if self._app_prefs.get("enable_ctrl_r_reload"):
+            if not self._ctrl_r_bound:
+                self._window.bind("<Control-r>", self._on_ctrl_r_reload, add="+")
+                self._window.bind("<Control-R>", self._on_ctrl_r_reload, add="+")
+                self._ctrl_r_bound = True
+        elif self._ctrl_r_bound:
+            self._window.unbind("<Control-r>")
+            self._window.unbind("<Control-R>")
+            self._ctrl_r_bound = False
+
+    def _on_ctrl_r_reload(self, _event=None) -> str | None:
+        if not self._app_prefs.get("enable_ctrl_r_reload"):
+            return None
+        if self._active_view in (None, "settings"):
+            return "break"
+        timetable = self.get_timetable()
+        if has_unlogged_time(timetable):
+            prompt_unlogged_action_blocked(self._window, timetable, action="reload the view")
+            return "break"
+        self.reload_current_view()
+        return "break"
+
+    def reload_current_view(self) -> None:
+        name = self._active_view
+        if not name or name == "settings":
+            return
+        if self._widget_mode:
+            self._exit_widget_mode(restore_view=False)
+        host = self._frames.get(name)
+        if host is not None:
+            for child in list(host.winfo_children()):
+                child.destroy()
+            self._frames[name] = None
+        self._activate_view(name)
+
+    def _minimize_to_tray(self) -> None:
+        self._tray.ensure_started()
+        self._window.withdraw()
+
+    def _show_from_tray(self) -> None:
+        self._window.after(0, self.restore_after_secondary_launch)
+
+    def restore_after_secondary_launch(self) -> None:
+        """Show, un-minimize, and focus the app (tray or second launch)."""
+        if self._window.state() == "iconic":
+            self._window.state("normal")
+        self._window.deiconify()
+        self._window.lift()
+        self._window.attributes("-topmost", True)
+        self._window.update_idletasks()
+        self._window.attributes("-topmost", False)
+        self._window.focus_force()
+        self._sync_title_bar_chrome()
+
+    def _deiconify_main_window(self) -> None:
+        self.restore_after_secondary_launch()
+
+    def _exit_from_tray(self) -> None:
+        self._window.after(0, self._request_exit)
+
+    def _request_exit(self) -> None:
+        timetable = self.get_timetable()
+        if has_unlogged_time(timetable):
+            choice = prompt_unlogged_exit(self._window, timetable)
+            if choice != "discard":
+                return
+            self.discard_timetable_session()
+        self._quit_app()
+
+    def _quit_app(self) -> None:
+        self._shutdown_blocker.teardown()
+        if self._title_bar_pin is not None and self._title_bar_pin.winfo_exists():
+            self._title_bar_pin.destroy()
+        self._title_bar_pin = None
+        self._stop_widget_icon_upkeep()
+        self._cancel_widget_resync()
+        self._tray.stop()
+        self._window.destroy()
+
+    def mount_initial_view(self) -> None:
+        if self._start_minimized_to_tray:
+            self._tray.ensure_started()
+            self.switch_view(self._initial_view, update_geometry=False)
+            self._window.withdraw()
+            return
+        self.switch_view(self._initial_view)
 
     def _sync_title_bar_chrome(self) -> None:
         if self._widget_mode:
@@ -646,6 +785,10 @@ class AppShell(tk.Frame):
 
         if name == "statistics":
             self._set_stats_refresh_active(True)
+        if name == "settings":
+            settings = self._view_child(self._frames.get("settings"))
+            if settings is not None and hasattr(settings, "refresh_session_controls"):
+                settings.refresh_session_controls()
 
         if update_geometry:
             self._apply_window_geometry()
@@ -708,13 +851,13 @@ class AppShell(tk.Frame):
 
     def _create_frame(self, name: str) -> tk.Frame | ctk.CTkFrame:
         if name == "timetable":
-            return self._square_host(TimetableFrame)
+            return self._square_host(TimetableFrame, shell=self)
         if name == "statistics":
             return self._view_host(StatsFrame)
         if name == "meeting":
             return self._view_host(MeetingFrame, shell=self)
         if name == "settings":
-            return self._view_host(SettingsFrame)
+            return self._view_host(SettingsFrame, shell=self)
         if name == "meeting_points":
             return self._square_host(
                 MeetingPointManagerFrame,
@@ -723,18 +866,7 @@ class AppShell(tk.Frame):
         raise ValueError(f"Unknown view: {name}")
 
     def _on_close(self) -> None:
-        host = self._frames.get("timetable")
-        timetable = host.winfo_children()[0] if host and host.winfo_children() else None
-        if timetable is not None and getattr(timetable, "running", False):
-            dialog = ctk.CTkInputDialog(
-                text="Timer is running. Type anything to close, or cancel to stay.",
-                title="Confirm close",
-            )
-            if dialog.get_input() is None:
-                return
-        if self._title_bar_pin is not None and self._title_bar_pin.winfo_exists():
-            self._title_bar_pin.destroy()
-        self._title_bar_pin = None
-        self._stop_widget_icon_upkeep()
-        self._cancel_widget_resync()
-        self._window.destroy()
+        if self._app_prefs.get("close_action", "tray") == "tray":
+            self._minimize_to_tray()
+            return
+        self._request_exit()

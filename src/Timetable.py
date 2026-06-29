@@ -26,8 +26,9 @@ COLOR_DISABLED_TEXT="#666666"
 COLOR_TEXT=         "#FFFFFF"
 
 class TimetableFrame(ctk.CTkFrame):
-    def __init__(self, parent):
+    def __init__(self, parent, shell=None):
         super().__init__(parent, fg_color=COLOR_BACKGROUND)
+        self._shell = shell
         self.local_start = self.log_ts = None
         self.elapsed_time = self._monotonic_anchor = 0.0
         self.running = False
@@ -73,6 +74,32 @@ class TimetableFrame(ctk.CTkFrame):
                                    command=self.submit_entry, text_color=COLOR_TEXT, text_color_disabled=COLOR_DISABLED_TEXT, font=("Arial", 14), corner_radius=8, state="disabled")
         self.log_button.grid(row=2, column=1, padx=4, pady=4, sticky='nsew')
 
+    def _notify_session_changed(self) -> None:
+        shell = self._shell
+        if shell is not None and hasattr(shell, "on_timetable_session_changed"):
+            shell.on_timetable_session_changed()
+
+    def discard_session(self) -> None:
+        if self.running:
+            self.elapsed_time += time.perf_counter() - self._monotonic_anchor
+            self.running = False
+        self._clear_commit_state()
+        self._cancel_commit_jobs()
+        self._commit_txn.abort_async()
+        self.log_ts = self.local_start = self._commit_plan = None
+        self.elapsed_time = 0.0
+        self._monotonic_anchor = 0.0
+        self._start_notified = False
+        self.time_label.configure(text="00:00")
+        self.hide_done_button("Start")
+        self.done_button.configure(state="disabled")
+        self.name_entry.delete(0, "end")
+        self.desc_entry.delete(0, "end")
+        self.name_entry._activate_placeholder()
+        self.desc_entry._activate_placeholder()
+        self.overlay_canvas.grid_forget()
+        self._notify_session_changed()
+
     def toggle_button(self):
         if self.log_ts is None:
             threading.Thread(target=self.get_log_db_timestamp, name="get_log_db_timestamp", daemon=True).start()
@@ -88,6 +115,7 @@ class TimetableFrame(ctk.CTkFrame):
             self.time_label.configure(text=format_time(self.elapsed_time))
             self.done_button.grid(row=0, column=1, sticky='nsew', padx=4, pady=(0, 4))
             self.toggle_run_button.grid_configure(columnspan=1)
+        self._notify_session_changed()
 
     def get_log_db_timestamp(self):
         """Sets self.log_ts."""
@@ -354,6 +382,7 @@ class TimetableFrame(ctk.CTkFrame):
         self.name_entry._activate_placeholder()
         self.desc_entry._activate_placeholder()
         self.overlay_canvas.grid_forget()
+        self._notify_session_changed()
 
     def continue_timer(self):
         self._clear_commit_state()

@@ -1,7 +1,7 @@
 """Single entry point for the ELG desktop app."""
 from __future__ import annotations
 
-import json
+import argparse
 import os
 import sys
 import tkinter as tk
@@ -9,8 +9,10 @@ import tkinter as tk
 import customtkinter as ctk
 
 import timetable_db
+from app_config import app_preferences_from_config, config_path, read_config
 from app_shell import AppShell
 from setup_window import SetupFrame
+from single_instance import SingleInstanceGuard
 from window_chrome import (
     apply_app_title_bar_chrome,
     configure_app_icon,
@@ -20,44 +22,116 @@ from window_chrome import (
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)
-_CONFIG_PATH = os.path.join(_PROJECT_ROOT, "config.json")
 _ICON_PATH = os.path.join(_SCRIPT_DIR, "ELG Studio 0.1_16_clean_big.ico")
 _APP_BG = "#000000"
 
 
 def load_config() -> dict:
-    with open(_CONFIG_PATH, encoding="utf-8") as file:
-        return json.load(file)
+    return read_config(config_path())
 
 
 def _sync_db_user() -> None:
-    with open(_CONFIG_PATH, encoding="utf-8") as file:
-        timetable_db.user = json.load(file)["user"]
+    timetable_db.user = read_config(config_path())["user"]
 
 
-def _mount_app_shell(root: ctk.CTk, container: tk.Frame) -> None:
-    shell = AppShell(root, container)
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="ELG desktop app")
+    parser.add_argument(
+        "--started-at-login",
+        action="store_true",
+        help="Set when launched from the Windows startup registry entry.",
+    )
+    parser.add_argument(
+        "--minimized-tray",
+        action="store_true",
+        help="Start hidden in the system tray.",
+    )
+    return parser.parse_args()
+
+
+def _resolve_startup_view(app_prefs: dict) -> str:
+    view = app_prefs.get("startup_view", "timetable")
+    return view if view in ("timetable", "statistics") else "timetable"
+
+
+def _should_start_minimized(app_prefs: dict, args: argparse.Namespace) -> bool:
+    if args.minimized_tray:
+        return True
+    if args.started_at_login and app_prefs.get("launch_minimized_to_tray"):
+        return True
+    return False
+
+
+def _mount_app_shell(
+    root: ctk.CTk,
+    container: tk.Frame,
+    shell_holder: dict[str, AppShell | None],
+    *,
+    initial_view: str,
+    start_minimized_to_tray: bool,
+) -> AppShell:
+    shell = AppShell(
+        root,
+        container,
+        initial_view=initial_view,
+        start_minimized_to_tray=start_minimized_to_tray,
+    )
     shell.grid(row=0, column=0, sticky="nsew")
-    shell.switch_view("timetable")
+    shell.mount_initial_view()
+    shell_holder["shell"] = shell
+    return shell
 
 
-def _finish_setup(root: ctk.CTk, setup: SetupFrame) -> None:
+def _finish_setup(root: ctk.CTk, setup: SetupFrame, shell: AppShell) -> None:
     _sync_db_user()
+    app_prefs = app_preferences_from_config(read_config())
+    shell._initial_view = _resolve_startup_view(app_prefs)
+    shell.set_app_preferences(app_prefs)
     setup.grid_remove()
     setup.destroy()
     configure_app_icon(root, _ICON_PATH)
     configure_window_title(root, "ELG")
     apply_app_title_bar_chrome(root)
+    shell.mount_initial_view()
 
 
 def main() -> None:
+    args = _parse_args()
+
+    instance_guard = SingleInstanceGuard()
+    if not instance_guard.try_acquire_or_notify():
+        return
+
     ctk.set_appearance_mode("Dark")
     ctk.set_default_color_theme("blue")
     deactivate_ctk_title_bar_manipulation()
 
     root = ctk.CTk(fg_color=_APP_BG)
-    needs_setup = not (load_config().get("discordname") or "").strip()
-    _map_on_start = not needs_setup
+    shell_holder: dict[str, AppShell | None] = {"shell": None}
+
+    def _on_second_instance_launch() -> None:
+        def restore() -> None:
+            shell = shell_holder["shell"]
+            if shell is not None:
+                shell.restore_after_secondary_launch()
+            else:
+                if root.state() == "iconic":
+                    root.state("normal")
+                root.deiconify()
+                root.lift()
+                root.focus_force()
+
+        root.after(0, restore)
+
+    instance_guard.start_listener(_on_second_instance_launch)
+
+    config = load_config()
+    app_prefs = app_preferences_from_config(config)
+    initial_view = _resolve_startup_view(app_prefs)
+    start_minimized = _should_start_minimized(app_prefs, args)
+
+    needs_setup = not (config.get("discordname") or "").strip()
+    _map_on_start = not needs_setup and not start_minimized
     if sys.platform.startswith("win") and _map_on_start:
         root.withdraw()
     configure_app_icon(root, _ICON_PATH)
@@ -70,15 +144,21 @@ def main() -> None:
 
     if needs_setup:
         root.title("ELG Setup")
-        root.geometry("420x440")
+        root.geometry("460x760")
 
-        shell = AppShell(root, container)
+        shell = AppShell(
+            root,
+            container,
+            initial_view=initial_view,
+            start_minimized_to_tray=False,
+        )
         shell.grid(row=0, column=0, sticky="nsew")
+        shell_holder["shell"] = shell
 
         setup = SetupFrame(
             container,
-            on_complete=lambda: _finish_setup(root, setup),
-            config_path=_CONFIG_PATH,
+            on_complete=lambda: _finish_setup(root, setup, shell),
+            config_path=config_path(),
         )
         setup.grid(row=0, column=0, sticky="nsew")
         setup.tkraise()
@@ -90,14 +170,26 @@ def main() -> None:
 
         root.after(0, _preload)
     else:
-        root.after(0, lambda: _mount_app_shell(root, container))
+        root.after(
+            0,
+            lambda: _mount_app_shell(
+                root,
+                container,
+                shell_holder,
+                initial_view=initial_view,
+                start_minimized_to_tray=start_minimized,
+            ),
+        )
 
     if sys.platform.startswith("win") and _map_on_start:
         root.after(0, lambda: (apply_app_title_bar_chrome(root), root.deiconify()))
-    else:
+    elif not start_minimized:
         root.after(150, lambda: apply_app_title_bar_chrome(root))
 
-    root.mainloop()
+    try:
+        root.mainloop()
+    finally:
+        instance_guard.release()
 
 
 if __name__ == "__main__":
