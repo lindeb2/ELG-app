@@ -22,7 +22,6 @@ from window_chrome import (
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)
-_ICON_PATH = os.path.join(_SCRIPT_DIR, "ELG Studio 0.1_16_clean_big.ico")
 _APP_BG = "#000000"
 
 
@@ -89,7 +88,7 @@ def _finish_setup(root: ctk.CTk, setup: SetupFrame, shell: AppShell) -> None:
     shell.set_app_preferences(app_prefs)
     setup.grid_remove()
     setup.destroy()
-    configure_app_icon(root, _ICON_PATH)
+    configure_app_icon(root)
     configure_window_title(root, "ELG")
     apply_app_title_bar_chrome(root)
     shell.mount_initial_view()
@@ -134,7 +133,7 @@ def main() -> None:
     _map_on_start = not needs_setup and not start_minimized
     if sys.platform.startswith("win") and _map_on_start:
         root.withdraw()
-    configure_app_icon(root, _ICON_PATH)
+    configure_app_icon(root)
     configure_window_title(root, "ELG")
 
     container = tk.Frame(root, bg=_APP_BG, highlightthickness=0, bd=0)

@@ -19,15 +19,13 @@ from system_tray import SystemTray
 from Timetable import TimetableFrame
 from title_bar_pin import FLUENT_ICON_FONT, TitleBarButtonOverlay, WIDGET_ENTER_GLYPH
 from window_chrome import (
+    CAPTION_ICON_PATH,
     apply_app_title_bar_chrome,
     apply_widget_chrome,
     apply_widget_title_bar_chrome,
     hide_title_bar_icon,
     warm_widget_title_bar_assets,
 )
-
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_ICON_PATH = os.path.join(_SCRIPT_DIR, "ELG Studio 0.1_16_clean_big.ico")
 
 _APP_BG = "#000000"
 _SECTION_GAP = 1
@@ -123,7 +121,7 @@ class AppShell(tk.Frame):
         self._start_minimized_to_tray = start_minimized_to_tray
         self._app_prefs = app_preferences_from_config(read_config())
         self._tray = SystemTray(
-            _ICON_PATH,
+            CAPTION_ICON_PATH,
             on_show=self._show_from_tray,
             on_exit=self._exit_from_tray,
         )
