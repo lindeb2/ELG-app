@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import threading
 import time
+import tkinter as tk
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
@@ -578,6 +579,7 @@ class StatsFrame(ctk.CTkFrame):
         self._users: list[str] = []
         self._fetch_gen = 0
         self._refresh_job: str | None = None
+        self._refresh_paused = False
         self._records_page = 0
         self._logs_page = 0
         self._logs_page_size = LOGS_PAGE_SIZE
@@ -614,6 +616,26 @@ class StatsFrame(ctk.CTkFrame):
 
         self._start_watchers()
         self._load_users_then_show()
+
+    def _is_view_active(self) -> bool:
+        try:
+            return self.winfo_ismapped() and self.winfo_viewable()
+        except tk.TclError:
+            return False
+
+    def pause_refresh(self) -> None:
+        self._refresh_paused = True
+        self._fetch_gen += 1
+        if self._refresh_job is not None:
+            self.after_cancel(self._refresh_job)
+            self._refresh_job = None
+
+    def resume_refresh(self) -> None:
+        if not self._refresh_paused:
+            return
+        self._refresh_paused = False
+        if self._is_view_active():
+            self._refresh_current_page()
 
     # --- Sidebar ---
 
@@ -657,6 +679,16 @@ class StatsFrame(ctk.CTkFrame):
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_users_loaded(self, users: list[str], error: str | None = None):
+        if not self._is_view_active():
+            self._users = users
+            if not self._selected_user and users:
+                self._selected_user = users[0]
+            elif self._selected_user and self._selected_user not in users and users:
+                self._selected_user = users[0]
+            for u in users:
+                if u not in self._log_user_checks:
+                    self._log_user_checks[u] = ctk.BooleanVar(value=False)
+            return
         self._users = users
         if not self._selected_user and users:
             self._selected_user = users[0]
@@ -744,6 +776,8 @@ class StatsFrame(ctk.CTkFrame):
         ctk.CTkLabel(parent, text=text, font=("Arial", 16), text_color=color).pack(pady=20)
 
     def _refresh_current_page(self, error: str | None = None):
+        if self._refresh_paused or not self._is_view_active():
+            return
         if self._refresh_job:
             self.after_cancel(self._refresh_job)
             self._refresh_job = None
@@ -796,7 +830,7 @@ class StatsFrame(ctk.CTkFrame):
         threading.Thread(target=worker, daemon=True).start()
 
     def _apply_fetch(self, gen: int, payload: Any, err: str | None, apply_fn: Callable[[Any], None]):
-        if gen != self._fetch_gen:
+        if gen != self._fetch_gen or self._refresh_paused or not self._is_view_active():
             return
         self._clear_content()
         if err:
@@ -1494,6 +1528,8 @@ class StatsFrame(ctk.CTkFrame):
                 time.sleep(1)
 
     def _schedule_refresh(self):
+        if self._refresh_paused or not self._is_view_active():
+            return
         if self._refresh_job:
             self.after_cancel(self._refresh_job)
         self._refresh_job = self.after(WATCHER_DEBOUNCE_MS, self._debounced_refresh)

@@ -46,7 +46,7 @@ class TimetableFrame(ctk.CTkFrame):
         self.time_label.grid(row=1, column=0, sticky='nsew', columnspan=2)
 
         self.toggle_run_button = ctk.CTkButton(self, text="Start", fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER, text_color=COLOR_TEXT, font=("Arial", 24), corner_radius=8, command=self.toggle_button)
-        self.toggle_run_button.grid(row=0, column=0, sticky='nsew', padx=4, pady=4, columnspan=2)
+        self.toggle_run_button.grid(row=0, column=0, sticky='nsew', padx=4, pady=(0, 4), columnspan=2)
 
         self.done_button = ctk.CTkButton(self, text="Done", fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER, text_color=COLOR_TEXT, text_color_disabled=COLOR_DISABLED_TEXT, font=("Arial", 14), corner_radius=8, command=self.show_entry_overlay, state="disabled")
 
@@ -86,7 +86,7 @@ class TimetableFrame(ctk.CTkFrame):
             self.running = False
             self.toggle_run_button.configure(text="Continue", font=("Arial", 14))
             self.time_label.configure(text=format_time(self.elapsed_time))
-            self.done_button.grid(row=0, column=1, sticky='nsew', padx=4, pady=4)
+            self.done_button.grid(row=0, column=1, sticky='nsew', padx=4, pady=(0, 4))
             self.toggle_run_button.grid_configure(columnspan=1)
 
     def get_log_db_timestamp(self):

@@ -51,6 +51,7 @@
    - [ ]  [Timetable widget](https://gemini.google.com/app/849f65b0762fd705)
    - [ ]  Disable OS to shut down
    - [ ]  Minimize app to system tray on close?
+   - [ ]  Icon
 - [ ]  Logic if new week
 - [ ]  Auto log and record during meetings
 - [ ]  Implement Color Themes

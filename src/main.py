@@ -3,12 +3,20 @@ from __future__ import annotations
 
 import json
 import os
+import sys
+import tkinter as tk
 
 import customtkinter as ctk
 
 import timetable_db
-from app_shell import AppShell, apply_dwm_theming
+from app_shell import AppShell
 from setup_window import SetupFrame
+from window_chrome import (
+    apply_app_title_bar_chrome,
+    configure_app_icon,
+    configure_window_title,
+    deactivate_ctk_title_bar_manipulation,
+)
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)
@@ -27,7 +35,7 @@ def _sync_db_user() -> None:
         timetable_db.user = json.load(file)["user"]
 
 
-def _mount_app_shell(root: ctk.CTk, container: ctk.CTkFrame) -> None:
+def _mount_app_shell(root: ctk.CTk, container: tk.Frame) -> None:
     shell = AppShell(root, container)
     shell.grid(row=0, column=0, sticky="nsew")
     shell.switch_view("timetable")
@@ -37,23 +45,28 @@ def _finish_setup(root: ctk.CTk, setup: SetupFrame) -> None:
     _sync_db_user()
     setup.grid_remove()
     setup.destroy()
-    root.title("ELG")
+    configure_app_icon(root, _ICON_PATH)
+    configure_window_title(root, "ELG")
+    apply_app_title_bar_chrome(root)
 
 
 def main() -> None:
     ctk.set_appearance_mode("Dark")
     ctk.set_default_color_theme("blue")
+    deactivate_ctk_title_bar_manipulation()
 
     root = ctk.CTk(fg_color=_APP_BG)
-    root.iconbitmap(_ICON_PATH)
-    apply_dwm_theming(root)
+    needs_setup = not (load_config().get("discordname") or "").strip()
+    _map_on_start = not needs_setup
+    if sys.platform.startswith("win") and _map_on_start:
+        root.withdraw()
+    configure_app_icon(root, _ICON_PATH)
+    configure_window_title(root, "ELG")
 
-    container = ctk.CTkFrame(root, fg_color=_APP_BG, corner_radius=0)
+    container = tk.Frame(root, bg=_APP_BG, highlightthickness=0, bd=0)
     container.pack(fill="both", expand=True)
     container.grid_rowconfigure(0, weight=1)
     container.grid_columnconfigure(0, weight=1)
-
-    needs_setup = not (load_config().get("discordname") or "").strip()
 
     if needs_setup:
         root.title("ELG Setup")
@@ -77,8 +90,12 @@ def main() -> None:
 
         root.after(0, _preload)
     else:
-        root.title("ELG")
         root.after(0, lambda: _mount_app_shell(root, container))
+
+    if sys.platform.startswith("win") and _map_on_start:
+        root.after(0, lambda: (apply_app_title_bar_chrome(root), root.deiconify()))
+    else:
+        root.after(150, lambda: apply_app_title_bar_chrome(root))
 
     root.mainloop()
 

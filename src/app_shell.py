@@ -1,6 +1,10 @@
 """Main application shell with sidebar navigation."""
 from __future__ import annotations
 
+import sys
+import tkinter as tk
+from collections.abc import Callable
+
 import customtkinter as ctk
 
 from meeting_app import MeetingFrame
@@ -8,8 +12,25 @@ from meeting_point_manager import MeetingPointManagerFrame
 from settings_frame import SettingsFrame
 from stats_viewer import StatsFrame
 from Timetable import TimetableFrame
+from title_bar_pin import FLUENT_ICON_FONT, TitleBarButtonOverlay, WIDGET_ENTER_GLYPH
+from window_chrome import (
+    apply_app_title_bar_chrome,
+    apply_widget_chrome,
+    apply_widget_title_bar_chrome,
+    hide_title_bar_icon,
+    warm_widget_title_bar_assets,
+)
 
-_SIDEBAR_WIDTH = 110
+_APP_BG = "#000000"
+_SECTION_GAP = 1
+_GAP_COLOR = "#303030"
+_CONTENT_TOP_INSET_VIEWS = frozenset({"timetable", "meeting_points"})
+_CONTENT_TOP_INSET = 4
+_SIDEBAR_WIDTH = 100
+_SIDEBAR_BTN_PADX = (0, 0)
+_SIDEBAR_BTN_PADY = (0, 1)
+_SIDEBAR_BTN_TEXT_INSET = 5
+_SIDEBAR_BTN_WIDTH = _SIDEBAR_WIDTH
 _CONTENT_SQUARE = 200
 _SMALL_VIEW = (_SIDEBAR_WIDTH + _CONTENT_SQUARE, _CONTENT_SQUARE)
 
@@ -35,37 +56,72 @@ _SHORTCUT_VIEWS: dict[str, str] = {
     "4": "meeting_points",
 }
 
-_SIDEBAR_BG = "#141414"
+_SIDEBAR_BG = _APP_BG
 _BTN_INACTIVE = {"fg_color": _SIDEBAR_BG, "hover_color": "#252525", "text_color": "#888888"}
 _BTN_ACTIVE = {"fg_color": "#333333", "hover_color": "#404040", "text_color": "white"}
+_NAV_BTN = {
+    **_BTN_INACTIVE,
+    "width": _SIDEBAR_BTN_WIDTH,
+    "anchor": "w",
+    "corner_radius": 0,
+}
+_PIN_TRAILING = 1
+_WIDGET_ICON_UPKEEP_MS = 250
+_TK_FRAME = {"highlightthickness": 0, "bd": 0}
 
 
-def apply_dwm_theming(window: ctk.CTk) -> None:
-    try:
-        from ctypes import byref, c_int, sizeof, windll
-
-        hwnd = windll.user32.GetParent(window.winfo_id())  # type: ignore[attr-defined]
-        windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, byref(c_int(1)), sizeof(c_int))  # type: ignore[attr-defined]
-        windll.dwmapi.DwmSetWindowAttribute(hwnd, 34, byref(c_int(0x00000000)), sizeof(c_int))  # type: ignore[attr-defined]
-        windll.dwmapi.DwmSetWindowAttribute(hwnd, 35, byref(c_int(0x00000000)), sizeof(c_int))  # type: ignore[attr-defined]
-    except (ImportError, AttributeError, OSError):
-        print("DWM API not available, skipping window attribute settings.")
+def _tk_frame(parent: tk.Misc, *, bg: str, width: int | None = None, height: int | None = None) -> tk.Frame:
+    kwargs: dict = {"bg": bg, **_TK_FRAME}
+    if width is not None:
+        kwargs["width"] = width
+    if height is not None:
+        kwargs["height"] = height
+    return tk.Frame(parent, **kwargs)
 
 
-class AppShell(ctk.CTkFrame):
-    def __init__(self, window: ctk.CTk, master: ctk.CTkFrame):
-        super().__init__(master, fg_color="#000000", corner_radius=0)
+def _paint_ctk_button(btn: ctk.CTkButton, fg: str, text_color: str) -> None:
+    fg_mode = btn._apply_appearance_mode(fg)
+    text_mode = btn._apply_appearance_mode(text_color)
+    btn._canvas.itemconfig("inner_parts", outline=fg_mode, fill=fg_mode)
+    if btn._text_label is not None:
+        btn._text_label.configure(bg=fg_mode, fg=text_mode)
+
+
+def _apply_sidebar_nav_text_inset(btn: ctk.CTkButton) -> None:
+    text_label = btn._text_label
+    if text_label is None:
+        return
+    grid_info = text_label.grid_info()
+    text_label.grid(
+        row=int(grid_info["row"]),
+        column=int(grid_info["column"]),
+        sticky=grid_info.get("sticky", "w"),
+        padx=(_SIDEBAR_BTN_TEXT_INSET, 0),
+    )
+
+
+class AppShell(tk.Frame):
+    def __init__(self, window: ctk.CTk, master: tk.Misc):
+        super().__init__(master, bg=_APP_BG, **_TK_FRAME)
         self._window = window
         self._sidebar_visible = True
         self._sidebar_before_fullscreen: bool | None = None
-
-        self.grid_rowconfigure(0, weight=1)
-        self.grid_columnconfigure(1, weight=1)
+        self._widget_mode = False
+        self._view_before_widget: str | None = None
+        self._sidebar_before_widget = True
+        self._title_bar_pin: TitleBarButtonOverlay | None = None
+        self._widget_icon_upkeep_job: str | None = None
+        self._widget_resync_jobs: list[str] = []
+        self._widget_session = 0
+        self._timetable_nav_hovered = False
+        self._timetable_pin_hovered = False
+        self._content_row = 0
+        self._content_col = 0
 
         self._active_view: str | None = None
-        self._current_frame: ctk.CTkFrame | None = None
+        self._current_frame: tk.Frame | ctk.CTkFrame | None = None
         self._nav_buttons: dict[str, ctk.CTkButton] = {}
-        self._frames: dict[str, ctk.CTkFrame | None] = {
+        self._frames: dict[str, tk.Frame | ctk.CTkFrame | None] = {
             "timetable": None,
             "statistics": None,
             "meeting": None,
@@ -73,46 +129,208 @@ class AppShell(ctk.CTkFrame):
             "settings": None,
         }
 
-        self._sidebar = ctk.CTkFrame(self, width=_SIDEBAR_WIDTH, corner_radius=0, fg_color=_SIDEBAR_BG)
-        self._sidebar.grid(row=0, column=0, sticky="ns")
+        self._sidebar = _tk_frame(self, bg=_SIDEBAR_BG, width=_SIDEBAR_WIDTH)
         self._sidebar.grid_propagate(False)
-        self._sidebar.grid_rowconfigure(len(_NAV_ITEMS) + 1, weight=1)
+        self._sidebar.grid_columnconfigure(0, weight=1, minsize=0)
+        self._sidebar.grid_rowconfigure(len(_NAV_ITEMS), weight=1)
 
         for row, (key, label) in enumerate(_NAV_ITEMS):
+            if key == "timetable":
+                self._build_timetable_nav(row)
+                continue
             btn = ctk.CTkButton(
                 self._sidebar,
                 text=label,
-                anchor="w",
                 command=lambda k=key: self.switch_view(k),
-                **_BTN_INACTIVE,
+                **_NAV_BTN,
             )
-            btn.grid(row=row, column=0, sticky="ew", padx=6, pady=2)
+            btn.grid(row=row, column=0, sticky="ew", padx=_SIDEBAR_BTN_PADX, pady=_SIDEBAR_BTN_PADY)
+            _apply_sidebar_nav_text_inset(btn)
             self._nav_buttons[key] = btn
-
-        divider = ctk.CTkFrame(self._sidebar, height=1, fg_color="#333333")
-        divider.grid(row=len(_NAV_ITEMS), column=0, sticky="ew", padx=8, pady=8)
 
         self._settings_btn = ctk.CTkButton(
             self._sidebar,
             text="Settings",
-            anchor="w",
             command=lambda: self.switch_view("settings"),
-            **_BTN_INACTIVE,
+            **_NAV_BTN,
         )
         self._settings_btn.grid(
-            row=len(_NAV_ITEMS) + 2,
+            row=len(_NAV_ITEMS) + 1,
             column=0,
             sticky="sew",
-            padx=6,
-            pady=(2, 8),
+            padx=_SIDEBAR_BTN_PADX,
+            pady=(0, 0),
         )
         self._nav_buttons["settings"] = self._settings_btn
+        _apply_sidebar_nav_text_inset(self._settings_btn)
 
-        self._content = ctk.CTkFrame(self, fg_color="#000000", corner_radius=0)
-        self._content.grid(row=0, column=1, sticky="nsew")
+        self._content = _tk_frame(self, bg=_APP_BG)
+
+        self._apply_shell_layout()
 
         window.protocol("WM_DELETE_WINDOW", self._on_close)
         self._bind_shortcuts()
+        if sys.platform.startswith("win"):
+            self._window.bind("<FocusIn>", self._on_widget_window_focus, add="+")
+            self._window.bind("<Activate>", self._on_widget_window_focus, add="+")
+            self._window.after(300, self.warm_widget_title_bar_pin)
+
+    def _sync_title_bar_chrome(self) -> None:
+        if self._widget_mode:
+            apply_widget_title_bar_chrome(self._window)
+        else:
+            apply_app_title_bar_chrome(self._window)
+
+    def _section_gaps_active(self) -> bool:
+        return self._sidebar_visible and not self._widget_mode
+
+    def _content_top_inset(self) -> int:
+        if not self._section_gaps_active():
+            return 0
+        if self._active_view in _CONTENT_TOP_INSET_VIEWS:
+            return _CONTENT_TOP_INSET
+        return 0
+
+    def _sync_content_top_inset(self) -> None:
+        inset = self._content_top_inset()
+        for name in _CONTENT_TOP_INSET_VIEWS:
+            host = self._frames.get(name)
+            if host is not None and host.winfo_children():
+                pad = (inset, 0) if self._active_view == name else (0, 0)
+                host.winfo_children()[0].pack_configure(pady=pad)
+        meeting_frame = self._view_child(self._frames.get("meeting"))
+        if meeting_frame is not None:
+            meeting_frame.pack_configure(pady=(0, 0))
+
+    def _apply_shell_layout(self) -> None:
+        """Strip-colored shell + grid gaps: empty cells show through as 1px dividers."""
+        gaps = self._section_gaps_active()
+
+        if gaps:
+            self.configure(bg=_GAP_COLOR)
+            self.grid_rowconfigure(0, weight=0, minsize=_SECTION_GAP)
+            self.grid_rowconfigure(1, weight=1)
+            self.grid_columnconfigure(0, weight=0, minsize=_SIDEBAR_WIDTH)
+            self.grid_columnconfigure(1, weight=0, minsize=_SECTION_GAP)
+            self.grid_columnconfigure(2, weight=1)
+
+            self._content_row = 1
+            self._content_col = 2
+            self._sidebar.grid(row=1, column=0, sticky="nsew")
+        else:
+            self.configure(bg=_APP_BG)
+            self._sidebar.grid_remove()
+
+            self.grid_rowconfigure(0, weight=1)
+            self.grid_rowconfigure(1, weight=0, minsize=0)
+            self.grid_columnconfigure(0, weight=1)
+            for col in (1, 2):
+                self.grid_columnconfigure(col, weight=0, minsize=0)
+
+            self._content_row = 0
+            self._content_col = 0
+
+        self._sync_content_top_inset()
+
+    def warm_widget_title_bar_pin(self) -> None:
+        if not sys.platform.startswith("win"):
+            return
+        warm_widget_title_bar_assets()
+        try:
+            self._ensure_title_bar_pin()
+        except OSError:
+            pass
+
+    def _build_timetable_nav(self, row: int) -> None:
+        nav_btn = ctk.CTkButton(
+            self._sidebar,
+            text="Timetable",
+            command=lambda: self.switch_view("timetable"),
+            hover=False,
+            **_NAV_BTN,
+        )
+        nav_btn.grid(row=row, column=0, sticky="ew", padx=_SIDEBAR_BTN_PADX, pady=_SIDEBAR_BTN_PADY)
+        _apply_sidebar_nav_text_inset(nav_btn)
+
+        pin_btn = ctk.CTkButton(
+            nav_btn,
+            text=WIDGET_ENTER_GLYPH,
+            width=26,
+            height=26,
+            font=FLUENT_ICON_FONT,
+            corner_radius=0,
+            command=self._enter_widget_mode,
+            hover=False,
+            border_width=0,
+            fg_color=_BTN_INACTIVE["fg_color"],
+            hover_color=_BTN_INACTIVE["hover_color"],
+            text_color=_BTN_INACTIVE["text_color"],
+        )
+        pin_btn.place(relx=1.0, rely=0.5, anchor="e", x=-_PIN_TRAILING)
+        pin_btn.lift()
+
+        self._nav_buttons["timetable"] = nav_btn
+        self._timetable_pin_btn = pin_btn
+        self._wire_timetable_nav_hover(nav_btn, pin_btn)
+        self._sync_timetable_nav_appearance()
+
+    def _timetable_nav_palette(self, *, hovered: bool) -> tuple[str, str]:
+        palette = _BTN_ACTIVE if self._active_view == "timetable" else _BTN_INACTIVE
+        fg = palette["hover_color"] if hovered else palette["fg_color"]
+        return fg, palette["text_color"]
+
+    def _wire_timetable_nav_hover(
+        self,
+        nav_btn: ctk.CTkButton,
+        pin_btn: ctk.CTkButton,
+    ) -> None:
+        def bind_hover_targets(
+            btn: ctk.CTkButton,
+            on_enter: Callable[[object], None],
+            on_leave: Callable[[object], None],
+        ) -> None:
+            for target in (btn, btn._canvas, btn._text_label):
+                if target is not None:
+                    target.bind("<Enter>", on_enter, add="+")
+                    target.bind("<Leave>", on_leave, add="+")
+
+        bind_hover_targets(
+            nav_btn,
+            lambda _e: self._set_timetable_nav_hovered(True),
+            lambda _e: self._set_timetable_nav_hovered(False),
+        )
+        bind_hover_targets(
+            pin_btn,
+            lambda _e: self._set_timetable_pin_hovered(True),
+            lambda _e: self._set_timetable_pin_hovered(False),
+        )
+
+    def _set_timetable_nav_hovered(self, hovered: bool) -> None:
+        self._timetable_nav_hovered = hovered
+        self._sync_timetable_nav_appearance()
+
+    def _set_timetable_pin_hovered(self, hovered: bool) -> None:
+        self._timetable_pin_hovered = hovered
+        self._sync_timetable_nav_appearance()
+
+    def _sync_timetable_nav_appearance(self) -> None:
+        if "timetable" not in self._nav_buttons or not hasattr(self, "_timetable_pin_btn"):
+            return
+
+        nav_btn = self._nav_buttons["timetable"]
+        pin_btn = self._timetable_pin_btn
+        base_fg, base_text = self._timetable_nav_palette(hovered=False)
+        hover_fg, hover_text = self._timetable_nav_palette(hovered=True)
+
+        if self._timetable_pin_hovered and not self._timetable_nav_hovered:
+            _paint_ctk_button(nav_btn, base_fg, base_text)
+            _paint_ctk_button(pin_btn, hover_fg, hover_text)
+        elif self._timetable_nav_hovered:
+            _paint_ctk_button(nav_btn, hover_fg, hover_text)
+            _paint_ctk_button(pin_btn, hover_fg, hover_text)
+        else:
+            _paint_ctk_button(nav_btn, base_fg, base_text)
+            _paint_ctk_button(pin_btn, base_fg, base_text)
 
     def _bind_shortcuts(self) -> None:
         self._window.bind("<Control-b>", self._on_toggle_sidebar, add="+")
@@ -121,22 +339,29 @@ class AppShell(ctk.CTkFrame):
             self._window.bind(f"<Control-Key-{key}>", lambda _e, v=view: self.switch_view(v), add="+")
             self._window.bind(f"<Control-{key}>", lambda _e, v=view: self.switch_view(v), add="+")
         self._window.bind("<Control-comma>", lambda _e: self.switch_view("settings"), add="+")
+        self._window.bind("<Alt-Up>", self._on_alt_enter_widget, add="+")
+        self._window.bind("<Alt-Down>", self._on_alt_exit_widget, add="+")
+        self._window.bind("<Alt-Key-Down>", self._on_alt_exit_widget, add="+")
 
     def _on_toggle_sidebar(self, _event=None) -> None:
         self.toggle_sidebar()
 
     def toggle_sidebar(self) -> None:
+        if self._widget_mode:
+            return
         self.set_sidebar_visible(not self._sidebar_visible)
 
     def set_sidebar_visible(self, visible: bool) -> None:
+        if self._widget_mode:
+            return
         if visible == self._sidebar_visible:
             return
         self._sidebar_visible = visible
-        if visible:
-            self._sidebar.grid(row=0, column=0, sticky="ns")
-        else:
-            self._sidebar.grid_remove()
+        self._apply_shell_layout()
+        if self._active_view is not None:
+            self._apply_layout(self._active_view)
         self._apply_window_geometry()
+        self._sync_title_bar_chrome()
 
     def enter_meeting_fullscreen(self) -> None:
         if self._sidebar_before_fullscreen is None:
@@ -149,44 +374,252 @@ class AppShell(ctk.CTkFrame):
             self.set_sidebar_visible(self._sidebar_before_fullscreen)
             self._sidebar_before_fullscreen = None
         self._window.update_idletasks()
-        apply_dwm_theming(self._window)
-        self._window.after_idle(lambda: apply_dwm_theming(self._window))
+        self._sync_title_bar_chrome()
+        self._window.after_idle(self._sync_title_bar_chrome)
 
     def _apply_window_geometry(self) -> None:
+        if self._widget_mode:
+            self._apply_widget_geometry()
+            return
         if self._active_view is None:
             return
         width, height = _VIEW_SIZES[self._active_view]
         if not self._sidebar_visible:
             width -= _SIDEBAR_WIDTH
+        elif self._section_gaps_active():
+            width += _SECTION_GAP
+            height += _SECTION_GAP
         self._window.geometry(f"{width}x{height}")
 
+    def _apply_widget_geometry(self) -> None:
+        self._window.geometry(f"{_CONTENT_SQUARE}x{_CONTENT_SQUARE}")
+
+    def _on_alt_enter_widget(self, _event=None) -> str | None:
+        if self._active_view == "timetable" and not self._widget_mode:
+            self._enter_widget_mode()
+            return "break"
+        return None
+
+    def _on_alt_exit_widget(self, _event=None) -> str | None:
+        if self._widget_mode:
+            self._exit_widget_mode(restore_view=True)
+            return "break"
+        return None
+
+    def _exit_widget_mode_from_pin(self) -> None:
+        self._exit_widget_mode(restore_view=True)
+
+    def _ensure_title_bar_pin(self) -> TitleBarButtonOverlay:
+        if self._title_bar_pin is None:
+            if not sys.platform.startswith("win"):
+                raise OSError("Widget title pin requires Windows.")
+            self._title_bar_pin = TitleBarButtonOverlay(
+                self._window,
+                command=self._exit_widget_mode_from_pin,
+            )
+        return self._title_bar_pin
+
+    def _on_widget_window_focus(self, _event=None) -> None:
+        if self._widget_mode:
+            hide_title_bar_icon(self._window)
+
+    def _start_widget_icon_upkeep(self) -> None:
+        self._stop_widget_icon_upkeep()
+
+        def tick() -> None:
+            if not self._widget_mode:
+                return
+            hide_title_bar_icon(self._window)
+            self._widget_icon_upkeep_job = self._window.after(
+                _WIDGET_ICON_UPKEEP_MS, tick
+            )
+
+        tick()
+
+    def _stop_widget_icon_upkeep(self) -> None:
+        if self._widget_icon_upkeep_job is not None:
+            self._window.after_cancel(self._widget_icon_upkeep_job)
+            self._widget_icon_upkeep_job = None
+
+    def _cancel_widget_resync(self) -> None:
+        for job in self._widget_resync_jobs:
+            self._window.after_cancel(job)
+        self._widget_resync_jobs = []
+
+    def _sync_widget_pin(self) -> None:
+        if self._widget_mode and self._title_bar_pin is not None:
+            self._title_bar_pin.show()
+
+    def _resync_widget_pin(self, widget_session: int) -> None:
+        if not self._widget_mode or widget_session != self._widget_session:
+            return
+        self._apply_widget_geometry()
+        self._sync_widget_pin()
+
+    def _schedule_widget_pin_resyncs(self, widget_session: int) -> None:
+        self._cancel_widget_resync()
+        self._window.after_idle(self._sync_widget_pin)
+        for delay_ms in (50, 160, 320):
+            job = self._window.after(
+                delay_ms,
+                lambda s=widget_session: self._resync_widget_pin(s),
+            )
+            self._widget_resync_jobs.append(job)
+
+    def _bind_widget_exit_shortcut(self) -> None:
+        self._window.bind_all("<Alt-Down>", self._on_alt_exit_widget, add="+")
+        self._window.bind_all("<Alt-Key-Down>", self._on_alt_exit_widget, add="+")
+
+    def _unbind_widget_exit_shortcut(self) -> None:
+        try:
+            self._window.unbind_all("<Alt-Down>")
+            self._window.unbind_all("<Alt-Key-Down>")
+        except tk.TclError:
+            pass
+
+    def _forgot_inactive_view_hosts(self, active: str) -> None:
+        for key, host in self._frames.items():
+            if key != active and host is not None:
+                host.pack_forget()
+                host.lower()
+
+    def _focus_view(self, name: str) -> None:
+        child = self._view_child(self._frames.get(name))
+        if child is not None:
+            try:
+                child.focus_set()
+            except tk.TclError:
+                pass
+
+    def _set_stats_refresh_active(self, active: bool) -> None:
+        stats = self._view_child(self._frames.get("statistics"))
+        if stats is None:
+            return
+        if active and hasattr(stats, "resume_refresh"):
+            stats.resume_refresh()
+        elif not active and hasattr(stats, "pause_refresh"):
+            stats.pause_refresh()
+
+    def _enter_widget_mode(self) -> None:
+        if self._widget_mode:
+            return
+        warm_widget_title_bar_assets()
+        hide_title_bar_icon(self._window)
+        self._leave_meeting_fullscreen()
+
+        self._view_before_widget = self._active_view or "timetable"
+        self._sidebar_before_widget = self._sidebar_visible
+        self._set_stats_refresh_active(False)
+
+        self._widget_mode = True
+        self._widget_session += 1
+        widget_session = self._widget_session
+        self._cancel_widget_resync()
+        self._start_widget_icon_upkeep()
+
+        self._sidebar_visible = False
+        self._apply_shell_layout()
+
+        if self._active_view != "timetable":
+            self._activate_view("timetable", update_geometry=False)
+        else:
+            self._apply_widget_layout()
+            self._forgot_inactive_view_hosts("timetable")
+
+        apply_widget_chrome(self._window, enabled=True)
+
+        self._update_nav_styles("timetable")
+        self._apply_widget_geometry()
+        self._window.update_idletasks()
+
+        self._focus_view("timetable")
+        self._bind_widget_exit_shortcut()
+
+        pin = self._ensure_title_bar_pin()
+        pin.show()
+        self._schedule_widget_pin_resyncs(widget_session)
+
+    def _exit_widget_mode(self, *, restore_view: bool = True) -> None:
+        if not self._widget_mode:
+            return
+        self._widget_mode = False
+        self._widget_session += 1
+        self._cancel_widget_resync()
+        self._stop_widget_icon_upkeep()
+        self._unbind_widget_exit_shortcut()
+
+        if self._title_bar_pin is not None:
+            self._title_bar_pin.hide()
+
+        apply_widget_chrome(self._window, enabled=False)
+
+        self._sidebar_visible = self._sidebar_before_widget
+        self._apply_shell_layout()
+
+        restore_name = self._view_before_widget or "timetable"
+        if restore_view:
+            self._activate_view(restore_name)
+        else:
+            if self._active_view is not None:
+                self._apply_layout(self._active_view)
+                if self._active_view == "statistics":
+                    self._set_stats_refresh_active(True)
+            self._apply_window_geometry()
+
+        self._window.update_idletasks()
+
+    def _apply_widget_layout(self) -> None:
+        self.grid_rowconfigure(0, weight=0)
+        self.grid_columnconfigure(0, weight=0, minsize=_CONTENT_SQUARE)
+        self._content.grid(row=0, column=0, sticky="n")
+        self._content.configure(width=_CONTENT_SQUARE, height=_CONTENT_SQUARE)
+        self._content.grid_propagate(False)
+
     def _apply_layout(self, name: str) -> None:
+        if self._widget_mode:
+            self._apply_widget_layout()
+            return
+
+        row = self._content_row
+        col = self._content_col
+        self.grid_rowconfigure(row, weight=0)
         is_small = name in ("timetable", "meeting_points")
         if is_small:
-            self.grid_rowconfigure(0, weight=0)
-            self.grid_columnconfigure(1, weight=0, minsize=_CONTENT_SQUARE)
-            self._content.grid(row=0, column=1, sticky="nw")
+            self.grid_rowconfigure(row, weight=0)
+            self.grid_columnconfigure(col, weight=0, minsize=_CONTENT_SQUARE)
+            self._content.grid(
+                row=row,
+                column=col,
+                sticky="nw",
+            )
             self._content.configure(width=_CONTENT_SQUARE, height=_CONTENT_SQUARE)
             self._content.grid_propagate(False)
         else:
-            self.grid_rowconfigure(0, weight=1)
-            self.grid_columnconfigure(1, weight=1, minsize=0)
-            self._content.grid(row=0, column=1, sticky="nsew")
+            self.grid_rowconfigure(row, weight=1)
+            self.grid_columnconfigure(col, weight=1, minsize=0)
+            self._content.grid(
+                row=row,
+                column=col,
+                sticky="nsew",
+            )
             self._content.grid_propagate(True)
 
     def _leave_meeting_fullscreen(self) -> None:
-        meeting = self._frames.get("meeting")
-        if meeting is not None:
+        meeting = self._view_child(self._frames.get("meeting"))
+        if meeting is not None and hasattr(meeting, "leave_fullscreen_if_active"):
             meeting.leave_fullscreen_if_active()
 
-    def switch_view(self, name: str, *, update_geometry: bool = True) -> None:
+    def _activate_view(self, name: str, *, update_geometry: bool = True) -> None:
+        """Show a view without leaving widget mode."""
         if name != "meeting":
             self._leave_meeting_fullscreen()
 
-        self._apply_layout(name)
+        previous = self._active_view
+        if previous == "statistics" and name != "statistics":
+            self._set_stats_refresh_active(False)
 
-        if self._current_frame is not None:
-            self._current_frame.pack_forget()
+        self._apply_layout(name)
+        self._forgot_inactive_view_hosts(name)
 
         if self._frames[name] is None:
             self._frames[name] = self._create_frame(name)
@@ -194,25 +627,62 @@ class AppShell(ctk.CTkFrame):
         frame = self._frames[name]
         assert frame is not None
         frame.pack(fill="both", expand=True)
+        frame.lift()
         self._current_frame = frame
         self._active_view = name
 
-        if name == "meeting":
-            frame.focus_set()
+        if name == "statistics":
+            self._set_stats_refresh_active(True)
 
         if update_geometry:
             self._apply_window_geometry()
 
         self._update_nav_styles(name)
+        self._sync_content_top_inset()
+        self._focus_view(name)
+
+    def switch_view(self, name: str, *, update_geometry: bool = True) -> None:
+        if self._widget_mode:
+            if name == self._active_view:
+                return
+            self._exit_widget_mode(restore_view=False)
+
+        self._activate_view(name, update_geometry=update_geometry)
 
     def _update_nav_styles(self, active: str) -> None:
         for key, btn in self._nav_buttons.items():
+            if key == "timetable":
+                continue
             btn.configure(**(_BTN_ACTIVE if key == active else _BTN_INACTIVE))
 
-    def _square_host(self, frame_cls: type, **kwargs) -> ctk.CTkFrame:
-        host = ctk.CTkFrame(
+        if "timetable" not in self._nav_buttons:
+            return
+
+        palette = _BTN_ACTIVE if active == "timetable" else _BTN_INACTIVE
+        self._nav_buttons["timetable"].configure(**palette, hover=False)
+        if hasattr(self, "_timetable_pin_btn"):
+            self._timetable_pin_btn.configure(**palette, hover=False)
+        self._timetable_nav_hovered = False
+        self._timetable_pin_hovered = False
+        self._sync_timetable_nav_appearance()
+
+    @staticmethod
+    def _view_child(host: tk.Frame | ctk.CTkFrame | None) -> tk.Misc | None:
+        if host is None:
+            return None
+        children = host.winfo_children()
+        return children[0] if children else host
+
+    def _view_host(self, frame_cls: type, **kwargs) -> tk.Frame:
+        host = _tk_frame(self._content, bg=_APP_BG)
+        frame = frame_cls(host, **kwargs)
+        frame.pack(fill="both", expand=True)
+        return host
+
+    def _square_host(self, frame_cls: type, **kwargs) -> tk.Frame:
+        host = _tk_frame(
             self._content,
-            fg_color="#000000",
+            bg=_APP_BG,
             width=_CONTENT_SQUARE,
             height=_CONTENT_SQUARE,
         )
@@ -221,15 +691,15 @@ class AppShell(ctk.CTkFrame):
         frame.pack(fill="both", expand=True)
         return host
 
-    def _create_frame(self, name: str) -> ctk.CTkFrame:
+    def _create_frame(self, name: str) -> tk.Frame | ctk.CTkFrame:
         if name == "timetable":
             return self._square_host(TimetableFrame)
         if name == "statistics":
-            return StatsFrame(self._content)
+            return self._view_host(StatsFrame)
         if name == "meeting":
-            return MeetingFrame(self._content, shell=self)
+            return self._view_host(MeetingFrame, shell=self)
         if name == "settings":
-            return SettingsFrame(self._content)
+            return self._view_host(SettingsFrame)
         if name == "meeting_points":
             return self._square_host(
                 MeetingPointManagerFrame,
@@ -247,4 +717,8 @@ class AppShell(ctk.CTkFrame):
             )
             if dialog.get_input() is None:
                 return
+        if self._title_bar_pin is not None:
+            self._title_bar_pin.destroy()
+        self._stop_widget_icon_upkeep()
+        self._cancel_widget_resync()
         self._window.destroy()
