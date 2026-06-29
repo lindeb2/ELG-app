@@ -672,9 +672,9 @@ class StatsFrame(ctk.CTkFrame):
         def worker():
             try:
                 users = list_users()
-                self.after(0, lambda: self._on_users_loaded(users))
+                self.after_idle(lambda: self._on_users_loaded(users))
             except Exception as exc:
-                self.after(0, lambda: self._on_users_loaded([], str(exc)))
+                self.after_idle(lambda: self._on_users_loaded([], str(exc)))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -825,7 +825,7 @@ class StatsFrame(ctk.CTkFrame):
             except Exception as exc:
                 payload = None
                 err = str(exc)
-            self.after(0, lambda: self._apply_fetch(gen, payload, err, apply_fn))
+            self.after_idle(lambda: self._apply_fetch(gen, payload, err, apply_fn))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1542,7 +1542,7 @@ class StatsFrame(ctk.CTkFrame):
         pipeline = [{"$match": {"operationType": {"$in": ["insert", "update", "replace"]}}}]
 
         def on_change():
-            self.after(0, self._schedule_refresh)
+            self.after_idle(self._schedule_refresh)
 
         self._run_watcher(aggregations, pipeline, on_change)
 
@@ -1557,7 +1557,7 @@ class StatsFrame(ctk.CTkFrame):
         ]
 
         def on_change():
-            self.after(0, self._schedule_refresh)
+            self.after_idle(self._schedule_refresh)
 
         self._run_watcher(status_meeting, pipeline, on_change)
 
@@ -1565,7 +1565,7 @@ class StatsFrame(ctk.CTkFrame):
         pipeline = [{"$match": {"operationType": {"$in": ["insert", "update", "replace"]}}}]
 
         def on_change():
-            self.after(0, self._schedule_refresh)
+            self.after_idle(self._schedule_refresh)
 
         self._run_watcher(collection, pipeline, on_change)
 

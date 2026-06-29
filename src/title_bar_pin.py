@@ -187,7 +187,7 @@ class TitleBarButtonOverlay(ctk.CTkToplevel):
         *,
         command: Callable[[], None] | None = None,
     ) -> None:
-        super().__init__()
+        super().__init__(master)
         if not sys.platform.startswith("win"):
             raise OSError("TitleBarButtonOverlay is supported on Windows only.")
 
@@ -213,27 +213,36 @@ class TitleBarButtonOverlay(ctk.CTkToplevel):
 
         master.bind("<Configure>", self._sync_geometry, add="+")
         master.bind("<Map>", self._sync_geometry, add="+")
-        master.bind("<Destroy>", lambda _e: self.destroy(), add="+")
+        master.bind("<Destroy>", self._on_master_destroy, add="+")
 
         self.withdraw()
+
+    def _on_master_destroy(self, event: tk.Event) -> None:
+        if event.widget is self._master:
+            self.destroy()
 
     def set_command(self, command: Callable[[], None]) -> None:
         self._command = command
         self._button._command = command
 
     def show(self) -> None:
+        if not self.winfo_exists():
+            return
         self._visible = True
         self.attributes("-topmost", True)
         self._sync_geometry()
         self.lift()
 
     def hide(self) -> None:
+        if not self.winfo_exists():
+            self._visible = False
+            return
         self._visible = False
         self.attributes("-topmost", False)
         self.withdraw()
 
     def _sync_geometry(self, _event=None) -> None:
-        if not self._visible:
+        if not self._visible or not self.winfo_exists():
             return
         try:
             if not self._master.winfo_viewable() or self._master.state() == "iconic":

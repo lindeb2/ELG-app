@@ -103,6 +103,8 @@ class CtkSmartScrollableFrame(tkinter.Frame, CTkAppearanceModeBaseClass, CTkScal
 
         self._shift_pressed = False
 
+        self._scrollbar_vis_job: str | None = None
+
         # Smart scrollbar logic - bind to update scrollbar visibility
         self._parent_canvas.bind('<Configure>', self._update_scrollbar_visibility, add="+")
         self.bind('<Configure>', self._update_scrollbar_visibility, add="+")
@@ -111,33 +113,42 @@ class CtkSmartScrollableFrame(tkinter.Frame, CTkAppearanceModeBaseClass, CTkScal
         self.after(500, lambda: self._parent_canvas.configure(scrollregion=self._parent_canvas.bbox("all")))
 
     def _smart_scrollbar_set(self, first, last):
-        """Smart scrollbar set that updates scrollbar visibility"""
-        # Update scrollbar position
         self._scrollbar.set(first, last)
-        # Update scrollbar visibility
         self._update_scrollbar_visibility()
 
-    def _update_scrollbar_visibility(self, event=None):
-        """Update scrollbar visibility based on content size"""
-        self.update_idletasks()
+    def _scrollbar_should_show(self) -> bool:
         scrollregion = self._parent_canvas.bbox("all")
-        
-        if self._orientation == 'vertical':
+        if self._orientation == "vertical":
             canvas_height = self._parent_canvas.winfo_height()
             content_height = (scrollregion[3] - scrollregion[1]) if scrollregion else 0
-            if content_height > canvas_height + 2:
-                self._scrollbar.grid()  # Show scrollbar
-            else:
-                self._scrollbar.grid_remove()  # Hide scrollbar
+            return content_height > canvas_height + 2
+        canvas_width = self._parent_canvas.winfo_width()
+        content_width = (scrollregion[2] - scrollregion[0]) if scrollregion else 0
+        return content_width > canvas_width + 2
+
+    def _apply_scrollbar_visibility(self) -> None:
+        if self._scrollbar_should_show():
+            self._scrollbar.grid()
         else:
-            canvas_width = self._parent_canvas.winfo_width()
-            content_width = (scrollregion[2] - scrollregion[0]) if scrollregion else 0
-            if content_width > canvas_width + 2:
-                self._scrollbar.grid()  # Show scrollbar
-            else:
-                self._scrollbar.grid_remove()  # Hide scrollbar
+            self._scrollbar.grid_remove()
+
+    def _update_scrollbar_visibility(self, event=None):
+        if not self.winfo_ismapped():
+            return
+        if self._scrollbar_vis_job is not None:
+            return
+
+        def apply() -> None:
+            self._scrollbar_vis_job = None
+            if self.winfo_ismapped():
+                self._apply_scrollbar_visibility()
+
+        self._scrollbar_vis_job = self.after_idle(apply)
 
     def destroy(self):
+        if self._scrollbar_vis_job is not None:
+            self.after_cancel(self._scrollbar_vis_job)
+            self._scrollbar_vis_job = None
         tkinter.Frame.destroy(self)
         CTkAppearanceModeBaseClass.destroy(self)
         CTkScalingBaseClass.destroy(self)

@@ -113,13 +113,13 @@ class AppShell(tk.Frame):
         self._widget_icon_upkeep_job: str | None = None
         self._widget_resync_jobs: list[str] = []
         self._widget_session = 0
+        self._entering_widget_mode = False
         self._timetable_nav_hovered = False
         self._timetable_pin_hovered = False
         self._content_row = 0
         self._content_col = 0
 
         self._active_view: str | None = None
-        self._current_frame: tk.Frame | ctk.CTkFrame | None = None
         self._nav_buttons: dict[str, ctk.CTkButton] = {}
         self._frames: dict[str, tk.Frame | ctk.CTkFrame | None] = {
             "timetable": None,
@@ -242,24 +242,28 @@ class AppShell(tk.Frame):
             pass
 
     def _build_timetable_nav(self, row: int) -> None:
+        row_frame = _tk_frame(self._sidebar, bg=_SIDEBAR_BG)
+        row_frame.grid(row=row, column=0, sticky="ew", padx=_SIDEBAR_BTN_PADX, pady=_SIDEBAR_BTN_PADY)
+        row_frame.grid_columnconfigure(0, weight=1)
+
         nav_btn = ctk.CTkButton(
-            self._sidebar,
+            row_frame,
             text="Timetable",
-            command=lambda: self.switch_view("timetable"),
+            command=self._on_timetable_nav_clicked,
             hover=False,
             **_NAV_BTN,
         )
-        nav_btn.grid(row=row, column=0, sticky="ew", padx=_SIDEBAR_BTN_PADX, pady=_SIDEBAR_BTN_PADY)
+        nav_btn.grid(row=0, column=0, sticky="ew")
         _apply_sidebar_nav_text_inset(nav_btn)
 
         pin_btn = ctk.CTkButton(
-            nav_btn,
+            row_frame,
             text=WIDGET_ENTER_GLYPH,
             width=26,
             height=26,
             font=FLUENT_ICON_FONT,
             corner_radius=0,
-            command=self._enter_widget_mode,
+            command=self._on_widget_pin_clicked,
             hover=False,
             border_width=0,
             fg_color=_BTN_INACTIVE["fg_color"],
@@ -273,6 +277,12 @@ class AppShell(tk.Frame):
         self._timetable_pin_btn = pin_btn
         self._wire_timetable_nav_hover(nav_btn, pin_btn)
         self._sync_timetable_nav_appearance()
+
+    def _on_timetable_nav_clicked(self) -> None:
+        self.switch_view("timetable")
+
+    def _on_widget_pin_clicked(self) -> None:
+        self._enter_widget_mode()
 
     def _timetable_nav_palette(self, *, hovered: bool) -> tuple[str, str]:
         palette = _BTN_ACTIVE if self._active_view == "timetable" else _BTN_INACTIVE
@@ -410,6 +420,8 @@ class AppShell(tk.Frame):
         self._exit_widget_mode(restore_view=True)
 
     def _ensure_title_bar_pin(self) -> TitleBarButtonOverlay:
+        if self._title_bar_pin is not None and not self._title_bar_pin.winfo_exists():
+            self._title_bar_pin = None
         if self._title_bar_pin is None:
             if not sys.platform.startswith("win"):
                 raise OSError("Widget title pin requires Windows.")
@@ -418,6 +430,10 @@ class AppShell(tk.Frame):
                 command=self._exit_widget_mode_from_pin,
             )
         return self._title_bar_pin
+
+    def _hide_title_bar_pin(self) -> None:
+        if self._title_bar_pin is not None and self._title_bar_pin.winfo_exists():
+            self._title_bar_pin.hide()
 
     def _on_widget_window_focus(self, _event=None) -> None:
         if self._widget_mode:
@@ -446,25 +462,16 @@ class AppShell(tk.Frame):
             self._window.after_cancel(job)
         self._widget_resync_jobs = []
 
-    def _sync_widget_pin(self) -> None:
-        if self._widget_mode and self._title_bar_pin is not None:
-            self._title_bar_pin.show()
-
-    def _resync_widget_pin(self, widget_session: int) -> None:
-        if not self._widget_mode or widget_session != self._widget_session:
-            return
-        self._apply_widget_geometry()
-        self._sync_widget_pin()
-
-    def _schedule_widget_pin_resyncs(self, widget_session: int) -> None:
+    def _schedule_widget_pin_resync(self, widget_session: int) -> None:
         self._cancel_widget_resync()
-        self._window.after_idle(self._sync_widget_pin)
-        for delay_ms in (50, 160, 320):
-            job = self._window.after(
-                delay_ms,
-                lambda s=widget_session: self._resync_widget_pin(s),
-            )
-            self._widget_resync_jobs.append(job)
+
+        def tick() -> None:
+            if not self._widget_mode or widget_session != self._widget_session:
+                return
+            self._apply_widget_geometry()
+            self._ensure_title_bar_pin().show()
+
+        self._widget_resync_jobs.append(self._window.after(160, tick))
 
     def _bind_widget_exit_shortcut(self) -> None:
         self._window.bind_all("<Alt-Down>", self._on_alt_exit_widget, add="+")
@@ -495,14 +502,16 @@ class AppShell(tk.Frame):
         stats = self._view_child(self._frames.get("statistics"))
         if stats is None:
             return
-        if active and hasattr(stats, "resume_refresh"):
+        if active:
             stats.resume_refresh()
-        elif not active and hasattr(stats, "pause_refresh"):
+        else:
             stats.pause_refresh()
 
     def _enter_widget_mode(self) -> None:
-        if self._widget_mode:
+        if self._widget_mode or self._entering_widget_mode:
             return
+        self._entering_widget_mode = True
+
         warm_widget_title_bar_assets()
         hide_title_bar_icon(self._window)
         self._leave_meeting_fullscreen()
@@ -527,20 +536,26 @@ class AppShell(tk.Frame):
             self._forgot_inactive_view_hosts("timetable")
 
         apply_widget_chrome(self._window, enabled=True)
-
         self._update_nav_styles("timetable")
         self._apply_widget_geometry()
-        self._window.update_idletasks()
 
-        self._focus_view("timetable")
-        self._bind_widget_exit_shortcut()
+        self._window.after_idle(
+            lambda s=widget_session: self._finish_enter_widget_mode(s),
+        )
 
-        pin = self._ensure_title_bar_pin()
-        pin.show()
-        self._schedule_widget_pin_resyncs(widget_session)
+    def _finish_enter_widget_mode(self, widget_session: int) -> None:
+        try:
+            if not self._widget_mode or widget_session != self._widget_session:
+                return
+            self._focus_view("timetable")
+            self._bind_widget_exit_shortcut()
+            self._ensure_title_bar_pin().show()
+            self._schedule_widget_pin_resync(widget_session)
+        finally:
+            self._entering_widget_mode = False
 
     def _exit_widget_mode(self, *, restore_view: bool = True) -> None:
-        if not self._widget_mode:
+        if not self._widget_mode or self._entering_widget_mode:
             return
         self._widget_mode = False
         self._widget_session += 1
@@ -548,8 +563,7 @@ class AppShell(tk.Frame):
         self._stop_widget_icon_upkeep()
         self._unbind_widget_exit_shortcut()
 
-        if self._title_bar_pin is not None:
-            self._title_bar_pin.hide()
+        self._hide_title_bar_pin()
 
         apply_widget_chrome(self._window, enabled=False)
 
@@ -566,7 +580,7 @@ class AppShell(tk.Frame):
                     self._set_stats_refresh_active(True)
             self._apply_window_geometry()
 
-        self._window.update_idletasks()
+        self._window.after_idle(self._sync_title_bar_chrome)
 
     def _apply_widget_layout(self) -> None:
         self.grid_rowconfigure(0, weight=0)
@@ -628,7 +642,6 @@ class AppShell(tk.Frame):
         assert frame is not None
         frame.pack(fill="both", expand=True)
         frame.lift()
-        self._current_frame = frame
         self._active_view = name
 
         if name == "statistics":
@@ -642,6 +655,8 @@ class AppShell(tk.Frame):
         self._focus_view(name)
 
     def switch_view(self, name: str, *, update_geometry: bool = True) -> None:
+        if self._entering_widget_mode:
+            return
         if self._widget_mode:
             if name == self._active_view:
                 return
@@ -717,8 +732,9 @@ class AppShell(tk.Frame):
             )
             if dialog.get_input() is None:
                 return
-        if self._title_bar_pin is not None:
+        if self._title_bar_pin is not None and self._title_bar_pin.winfo_exists():
             self._title_bar_pin.destroy()
+        self._title_bar_pin = None
         self._stop_widget_icon_upkeep()
         self._cancel_widget_resync()
         self._window.destroy()
