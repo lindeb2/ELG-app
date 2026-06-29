@@ -43,14 +43,14 @@
 - [ ]  Ponder: Args vs Instance variables
 - [ ]  Merge into one app
    - [ ]  Correct local data storage
-   - [ ]  Integrate all parts
+   - [X]  Integrate all parts
    - [ ]  Dry function calls between parts
-   - [ ]  On close logic
+   - [X]  On close logic
    - [X]  Windows topbar after maximized
    - [X]  Sidebar gone at maximized
    - [X]  [Timetable widget](https://gemini.google.com/app/849f65b0762fd705)
-   - [ ]  Disable OS to shut down
-   - [ ]  Minimize app to system tray on close?
+   - [X]  Disable OS to shut down
+   - [X]  Minimize app to system tray on close?
    - [ ]  Icon
 - [ ]  Logic if new week
 - [ ]  Auto log and record during meetings
