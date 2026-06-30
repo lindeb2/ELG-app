@@ -50,29 +50,26 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 is_macos = sys.platform == "darwin"
 
-exe = EXE(
-    pyz,
-    a.scripts,
-    [] if is_macos else a.binaries,
-    [] if is_macos else a.datas,
-    [] if is_macos else [],
-    name="ELG-app",
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    console=False,
-    disable_windowed_traceback=False,
-    argv_emulation=is_macos,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-    onefile=not is_macos,
-)
-
 if is_macos:
+    exe = EXE(
+        pyz,
+        a.scripts,
+        [],
+        exclude_binaries=True,
+        name="ELG-app",
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=True,
+        upx_exclude=[],
+        runtime_tmpdir=None,
+        console=False,
+        disable_windowed_traceback=False,
+        argv_emulation=True,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+    )
     coll = COLLECT(
         exe,
         a.binaries,
@@ -87,4 +84,26 @@ if is_macos:
         name="ELG-app.app",
         icon=None,
         bundle_identifier="com.lindeb2.elg-app",
+    )
+else:
+    exe = EXE(
+        pyz,
+        a.scripts,
+        a.binaries,
+        a.datas,
+        [],
+        name="ELG-app",
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=True,
+        upx_exclude=[],
+        runtime_tmpdir=None,
+        console=False,
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+        onefile=True,
     )
