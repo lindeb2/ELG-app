@@ -5,10 +5,33 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from PIL import Image
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 project_root = Path(SPECPATH)
 src_dir = project_root / "src"
+source_icon = src_dir / "ELG Studio 0.1_256_128_64_48_32_24_clean_rounded.ico"
+caption_icon = src_dir / "ELG Studio 0.1_16_clean_big.ico"
+shell_icon_path = project_root / "build" / "elg_app.ico"
+
+
+def _build_shell_icon(source: Path, dest: Path) -> str:
+    """Build a Windows-shell-friendly ICO (16px first, no spaces in path)."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if not dest.exists() or source.stat().st_mtime > dest.stat().st_mtime:
+        image = Image.open(source).convert("RGBA").resize(
+            (256, 256),
+            Image.Resampling.LANCZOS,
+        )
+        image.save(
+            dest,
+            format="ICO",
+            sizes=[(16, 16), (20, 20), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)],
+        )
+    return str(dest)
+
+
+app_icon = _build_shell_icon(source_icon, shell_icon_path)
 
 block_cipher = None
 
@@ -16,11 +39,8 @@ datas = collect_data_files("customtkinter")
 datas += collect_data_files("pystray")
 datas += collect_data_files("tzdata")
 
-for icon_name in (
-    "ELG Studio 0.1_16_clean_big.ico",
-    "ELG Studio 0.1_256_128_64_48_32_24_clean_rounded.ico",
-):
-    datas.append((str(src_dir / icon_name), "."))
+for icon_path in (caption_icon, source_icon):
+    datas.append((str(icon_path), "."))
 
 hiddenimports = []
 for package in (
@@ -83,7 +103,7 @@ if is_macos:
     app = BUNDLE(
         coll,
         name="ELG-app.app",
-        icon=None,
+        icon=app_icon,
         bundle_identifier="com.lindeb2.elg-app",
     )
 else:
@@ -106,5 +126,6 @@ else:
         target_arch=None,
         codesign_identity=None,
         entitlements_file=None,
+        icon=app_icon,
         onefile=True,
     )
