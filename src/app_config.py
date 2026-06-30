@@ -1,10 +1,11 @@
-"""Load/save config.json and Windows startup registration."""
+"""Load/save user data and Windows startup registration."""
 from __future__ import annotations
 
-import json
 import os
 import sys
 from typing import Literal
+
+from storage import get_data_file, load_data, save_data
 
 CloseAction = Literal["tray", "exit"]
 StartupView = Literal["timetable", "statistics"]
@@ -19,26 +20,23 @@ DEFAULT_APP_PREFERENCES: dict = {
 
 _STARTUP_REG_NAME = "ELG"
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)
-_DEFAULT_CONFIG_PATH = os.path.join(_PROJECT_ROOT, "config.json")
 _MAIN_SCRIPT = os.path.join(_SCRIPT_DIR, "main.py")
 
 
 def config_path() -> str:
-    return _DEFAULT_CONFIG_PATH
+    return str(get_data_file())
 
 
 def read_config(path: str | None = None) -> dict:
-    path = path or _DEFAULT_CONFIG_PATH
-    with open(path, encoding="utf-8") as file:
-        return json.load(file)
+    del path
+    return dict(load_data()["data"])
 
 
 def write_config(config: dict, path: str | None = None) -> None:
-    path = path or _DEFAULT_CONFIG_PATH
-    with open(path, "w", encoding="utf-8") as file:
-        json.dump(config, file, indent=4)
-        file.write("\n")
+    del path
+    wrapper = load_data()
+    wrapper["data"] = dict(config)
+    save_data(wrapper)
 
 
 def normalize_app_preferences(app: dict | None) -> dict:
@@ -76,13 +74,17 @@ def merge_app_preferences(config: dict, app_prefs: dict) -> dict:
 
 
 def startup_command(*, minimized: bool) -> str:
-    python = sys.executable
-    if os.name == "nt" and python.lower().endswith("python.exe"):
-        pythonw = os.path.join(os.path.dirname(python), "pythonw.exe")
-        if os.path.isfile(pythonw):
-            python = pythonw
+    if getattr(sys, "frozen", False):
+        launch_target = f'"{sys.executable}"'
+    else:
+        python = sys.executable
+        if os.name == "nt" and python.lower().endswith("python.exe"):
+            pythonw = os.path.join(os.path.dirname(python), "pythonw.exe")
+            if os.path.isfile(pythonw):
+                python = pythonw
+        launch_target = f'"{python}" "{_MAIN_SCRIPT}"'
 
-    parts = [f'"{python}"', f'"{_MAIN_SCRIPT}"', "--started-at-login"]
+    parts = [launch_target, "--started-at-login"]
     if minimized:
         parts.append("--minimized-tray")
     return " ".join(parts)

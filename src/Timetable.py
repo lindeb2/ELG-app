@@ -15,7 +15,7 @@ from notifications import (
 )
 from period_model import to_local
 from stats_viewer import week_goals
-from timetable_db import aggregations, client, collection, db, status_meeting, user
+from timetable_db import aggregations, client, collection, db, get_user, status_meeting
 from utils import flash_error
 
 COLOR_BACKGROUND=   "#000000"
@@ -38,7 +38,8 @@ class TimetableFrame(ctk.CTkFrame):
         self._prepare_retry_job = None
         self._start_notified = False
 
-        self._commit_txn = CommitTransactionManager(collection, aggregations, client, user)
+        self._user = get_user()
+        self._commit_txn = CommitTransactionManager(collection, aggregations, client, self._user)
 
         self.grid_rowconfigure([0, 1], weight=1, uniform='a')
         self.grid_columnconfigure([0, 1], weight=1, uniform='a')
@@ -148,7 +149,7 @@ class TimetableFrame(ctk.CTkFrame):
             iso_year, iso_week, _ = local.isocalendar()
             iso_year_s, iso_week_s = str(iso_year), str(iso_week)
             context = fetch_week_goal_context_at_start(
-                user, iso_year_s, iso_week_s, self.log_ts
+                self._user, iso_year_s, iso_week_s, self.log_ts
             )
             common = {
                 "hours": context["hours"],
@@ -158,9 +159,9 @@ class TimetableFrame(ctk.CTkFrame):
             }
             post_notification(
                 "session_start",
-                user,
-                format_start_message(user, for_self=False, **common),
-                message_self=format_start_message(user, for_self=True, **common),
+                self._user,
+                format_start_message(self._user, for_self=False, **common),
+                message_self=format_start_message(self._user, for_self=True, **common),
             )
         except Exception as exc:
             print(f"Failed to prepare start notification: {exc}")
@@ -286,7 +287,7 @@ class TimetableFrame(ctk.CTkFrame):
             metric = old["metric"]
 
             if scope == "personal":
-                slot = f"data.{iso_year}.{iso_week}.personal.{user}.{time_type}.{metric}"
+                slot = f"data.{iso_year}.{iso_week}.personal.{self._user}.{time_type}.{metric}"
             elif scope == "global":
                 slot = f"data.{iso_year}.{iso_week}.global.{time_type}.{metric}"
             else:  # combined
@@ -297,7 +298,7 @@ class TimetableFrame(ctk.CTkFrame):
                 "scope": scope,
                 "time_type": time_type,
                 "metric": metric,
-                "broken_by": user,
+                "broken_by": self._user,
             }
             if scope == "global":
                 defaults["old_holder"] = old.get("user")
@@ -328,7 +329,7 @@ class TimetableFrame(ctk.CTkFrame):
             personal_hours = int(week_bucket.get("time") or 0) / 3600
             active_days = int(week_bucket.get("active_days") or 0)
             goals_doc = status_meeting.find_one({"_id": "Goals"}) or {}
-            user_goals = (week_goals(goals_doc, iso_year_s, iso_week_s).get(user)) or {}
+            user_goals = (week_goals(goals_doc, iso_year_s, iso_week_s).get(self._user)) or {}
             goal_hours = int(user_goals.get("hours") or 0)
             goal_days = int(user_goals.get("days") or 0)
             common = {
@@ -339,9 +340,9 @@ class TimetableFrame(ctk.CTkFrame):
             }
             post_notification(
                 "session_end",
-                user,
-                format_end_message(user, for_self=False, **common),
-                message_self=format_end_message(user, for_self=True, **common),
+                self._user,
+                format_end_message(self._user, for_self=False, **common),
+                message_self=format_end_message(self._user, for_self=True, **common),
             )
         except Exception as exc:
             print(f"Failed to prepare end notification: {exc}")
@@ -361,9 +362,9 @@ class TimetableFrame(ctk.CTkFrame):
             personal_records = [r for r in broken_records if r["old_record"]["scope"] == "personal"]
             combined_records = [r for r in broken_records if r["old_record"]["scope"] == "combined"]
             message = create_broken_records_notification(
-                user, global_records, personal_records, combined_records, timestamp
+                self._user, global_records, personal_records, combined_records, timestamp
             )
-            post_notification("records_broken", user, message)
+            post_notification("records_broken", self._user, message)
             threading.Thread(
                 target=self._persist_broken_records,
                 args=(broken_records, timestamp),

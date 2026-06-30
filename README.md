@@ -148,17 +148,26 @@ pre-commit install --hook-type commit-msg
 
 ```
 ELG-app/
-├── config.json          # Per-machine user identity (gitignored)
+├── config.json          # Legacy per-machine config (gitignored; migrated on first run)
 ├── src/                 # Application code loaded at runtime
+│   └── storage.py       # User data in OS app-data dir (data.json)
 ├── scripts/             # Admin-only CLI entry points
 │   └── lib/             # Admin-only rebuild logic (not imported by src/)
 ├── tools/               # Dev-only utilities
 └── docs/                # Design notes and diagrams
 ```
 
-### Run applications
+User settings are stored in the OS-specific application data directory (via `platformdirs`), not beside the executable. On first launch after an update, an existing repo-root `config.json` is migrated automatically.
+
+### Run the desktop app
 
 From the repo root (with venv active):
+
+```bash
+python src/main.py
+```
+
+Legacy per-view entry points (still work for development):
 
 ```bash
 python src/Timetable.py
@@ -168,6 +177,25 @@ python src/stats_viewer.py
 ```
 
 Or set `PYTHONPATH=src` (Windows: `set PYTHONPATH=src`) if you prefer running modules by name.
+
+## 5. Releases
+
+Tagged commits (`v*`) trigger a GitHub Actions workflow that builds Windows, macOS, and Linux artifacts and attaches them to a GitHub Release.
+
+### Local Windows build (before relying on CI)
+
+```bash
+pip install -r requirements.txt pyinstaller
+pyinstaller build.spec
+```
+
+The executable is written to `dist/ELG-app.exe`.
+
+### First-run notes for downloaded builds
+
+- **Windows**: SmartScreen may warn about an unrecognized publisher. Click **More info** → **Run anyway**.
+- **macOS**: Gatekeeper blocks unsigned apps on first open. Right-click the `.app` → **Open** (not double-click), then confirm in the dialog.
+- **Linux**: Mark the binary executable if needed: `chmod +x ELG-app-linux`
 
 ### Admin scripts
 

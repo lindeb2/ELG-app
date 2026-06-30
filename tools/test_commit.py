@@ -9,8 +9,7 @@ from pathlib import Path
 
 import bson
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import path_setup  # noqa: F401, E402
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from commit_plan import (
     build_agg_update_ops,
@@ -227,7 +226,12 @@ def main() -> int:
     parser.add_argument("--config-user", action="store_true", help="Use user from config.json")
     parser.add_argument("--parity-only", action="store_true", help="Run parity checks only")
     args = parser.parse_args()
-    test_user = config_user if args.config_user else args.user
+    if args.config_user:
+        from timetable_db import get_user
+
+        test_user = get_user()
+    else:
+        test_user = args.user
     log_ts = datetime.now(timezone.utc)
 
     parity_ok = (

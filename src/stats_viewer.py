@@ -23,7 +23,7 @@ from period_model import (
     period_keys,
     to_local,
 )
-from timetable_db import aggregations, collection, status_meeting, user as config_user
+from timetable_db import aggregations, collection, get_user, status_meeting
 
 _TZ = ZoneInfo(APP_TIMEZONE)
 
@@ -569,6 +569,7 @@ class StatsFrame(ctk.CTkFrame):
         super().__init__(parent)
 
         self._view = VIEW_WORLD
+        config_user = get_user()
         self._selected_user = config_user if config_user and config_user != "Unknown" else None
         now_keys = period_keys(datetime.now(timezone.utc).replace(tzinfo=None))
         self._period_mode = "all"
@@ -708,7 +709,7 @@ class StatsFrame(ctk.CTkFrame):
         if self._view != VIEW_USER:
             return
         for i, username in enumerate(self._users):
-            is_config = username == config_user
+            is_config = username == get_user()
             is_sel = username == self._selected_user
             btn = ctk.CTkButton(
                 self._user_list_frame,
@@ -730,6 +731,7 @@ class StatsFrame(ctk.CTkFrame):
             return
         self._view = view
         self._goals_grid_open = False
+        config_user = get_user()
         if view == VIEW_USER and config_user in self._users:
             self._selected_user = config_user
         self._update_nav_styles()

@@ -9,7 +9,7 @@ import tkinter as tk
 import customtkinter as ctk
 
 import timetable_db
-from app_config import app_preferences_from_config, config_path, read_config
+from app_config import app_preferences_from_config, read_config
 from app_shell import AppShell
 from setup_window import SetupFrame
 from single_instance import SingleInstanceGuard
@@ -26,11 +26,11 @@ _APP_BG = "#000000"
 
 
 def load_config() -> dict:
-    return read_config(config_path())
+    return read_config()
 
 
 def _sync_db_user() -> None:
-    timetable_db.user = read_config(config_path())["user"]
+    timetable_db.sync_user()
 
 
 def _parse_args() -> argparse.Namespace:
@@ -124,6 +124,8 @@ def main() -> None:
 
     instance_guard.start_listener(_on_second_instance_launch)
 
+    _sync_db_user()
+
     config = load_config()
     app_prefs = app_preferences_from_config(config)
     initial_view = _resolve_startup_view(app_prefs)
@@ -157,7 +159,6 @@ def main() -> None:
         setup = SetupFrame(
             container,
             on_complete=lambda: _finish_setup(root, setup, shell),
-            config_path=config_path(),
         )
         setup.grid(row=0, column=0, sticky="nsew")
         setup.tkraise()

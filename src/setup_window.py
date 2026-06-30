@@ -1,7 +1,6 @@
 """First-launch setup UI."""
 from __future__ import annotations
 
-import json
 from typing import Callable
 
 import customtkinter as ctk
@@ -10,18 +9,18 @@ from app_config import (
     apply_startup_registration,
     merge_app_preferences,
     normalize_app_preferences,
+    read_config,
+    write_config,
 )
 from app_preferences_ui import AppBehaviorPreferencesPanel
 
 
 class SetupFrame(ctk.CTkFrame):
-    def __init__(self, master: ctk.CTkFrame, on_complete: Callable[[], None], config_path: str):
+    def __init__(self, master: ctk.CTkFrame, on_complete: Callable[[], None]):
         super().__init__(master, fg_color="#000000", corner_radius=0)
         self._on_complete = on_complete
-        self._config_path = config_path
 
-        with open(config_path, encoding="utf-8") as file:
-            config = json.load(file)
+        config = read_config()
 
         notif = config.get("notifications") or {}
 
@@ -118,9 +117,8 @@ class SetupFrame(ctk.CTkFrame):
             return
 
         try:
-            with open(self._config_path, encoding="utf-8") as file:
-                config = json.load(file)
-        except (OSError, json.JSONDecodeError) as exc:
+            config = read_config()
+        except OSError as exc:
             self._error_label.configure(text=f"Could not read config: {exc}")
             return
 
@@ -137,9 +135,7 @@ class SetupFrame(ctk.CTkFrame):
         config = merge_app_preferences(config, app_prefs)
 
         try:
-            with open(self._config_path, "w", encoding="utf-8") as file:
-                json.dump(config, file, indent=4)
-                file.write("\n")
+            write_config(config)
         except OSError as exc:
             self._error_label.configure(text=f"Could not save config: {exc}")
             return

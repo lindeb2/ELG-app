@@ -1,20 +1,15 @@
 """Discord notification helpers for ELG Timetable events."""
 from __future__ import annotations
 
-import json
-import os
 import threading
 from datetime import datetime, timedelta
 from typing import Any
 
 import requests
 
+from app_config import read_config
 from period_model import add_calendar_days, as_utc, to_local
 from timetable_db import aggregations, collection, status_meeting
-
-_script_dir = os.path.dirname(os.path.abspath(__file__))
-_project_root = os.path.dirname(_script_dir)
-_config_path = os.path.join(_project_root, "config.json")
 
 NOTIFICATION_TYPES = frozenset({"session_start", "session_end", "records_broken"})
 
@@ -54,9 +49,8 @@ def week_bucket_from_agg(agg: dict, iso_year: str, iso_week: str) -> dict:
 
 def load_notification_config() -> dict[str, Any]:
     try:
-        with open(_config_path, encoding="utf-8") as file:
-            cfg = json.load(file)
-    except (FileNotFoundError, json.JSONDecodeError):
+        cfg = read_config()
+    except OSError:
         return {"enabled": False, "gae_url": "", "secret": ""}
 
     notif = cfg.get("notifications") or {}
@@ -321,7 +315,7 @@ def _post_notification_sync(
     print("===========================\n")
 
     if not config["enabled"]:
-        print("Notifications disabled (missing gae_url or secret in config.json).")
+        print("Notifications disabled (missing gae_url or secret in user data).")
         return
 
     payload = {

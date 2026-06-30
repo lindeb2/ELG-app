@@ -18,7 +18,6 @@ class SettingsFrame(ctk.CTkFrame):
     def __init__(self, parent, shell=None):
         super().__init__(parent, fg_color="transparent")
         self._shell = shell
-        self._config_path = None
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
@@ -132,10 +131,7 @@ class SettingsFrame(ctk.CTkFrame):
         self.after(2500, lambda: self._status_label.configure(text=""))
 
     def _load_config(self) -> None:
-        from app_config import config_path
-
-        self._config_path = config_path()
-        config = read_config(self._config_path)
+        config = read_config()
 
         notif = config.get("notifications") or {}
         app_prefs = app_preferences_from_config(config)
@@ -155,7 +151,7 @@ class SettingsFrame(ctk.CTkFrame):
         self.refresh_session_controls()
 
     def _save(self) -> None:
-        config = read_config(self._config_path)
+        config = read_config()
 
         notif = config.get("notifications") or {}
         notif["secret"] = self._secret_entry.get().strip()
@@ -169,7 +165,7 @@ class SettingsFrame(ctk.CTkFrame):
         config["notifications"] = notif
         config = merge_app_preferences(config, app_prefs)
 
-        write_config(config, self._config_path)
+        write_config(config)
         apply_startup_registration(
             enabled=app_prefs["launch_at_startup"],
             minimized=app_prefs["launch_minimized_to_tray"],

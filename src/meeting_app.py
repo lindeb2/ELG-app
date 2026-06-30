@@ -2,7 +2,7 @@ import customtkinter as ctk
 from pymongo import UpdateOne
 import datetime
 import os
-import json
+from app_config import read_config
 import threading
 import tkinter
 import math
@@ -27,7 +27,7 @@ from timetable_db import (
     collection as main_collection,
     status_meeting as status_meeting_collection,
     aggregations as aggregations_collection,
-    user,
+    get_user,
 )
 
 # TODO: Set up color scheme or theme
@@ -100,7 +100,7 @@ class MeetingFrame(ctk.CTkFrame):
         self.current_slide, self.current_week_start, self.next_week_start, self.local_target_timestamp = self.fetch_state()
         self.current_year, self.current_week, self.next_year, self.next_week = self._calculate_week_info()
         threading.Thread(target=self.week_check, name="WeekSync", daemon=True).start()
-        self.user_name = user
+        self.user_name = get_user()
 
         with ThreadPoolExecutor() as executor:
             future_logs = executor.submit(self._fetch_logs)
@@ -2657,9 +2657,7 @@ Strict rules:
 - Be punchy. No filler. No greetings. No sign-offs.
 - Return ONLY the phrase. No explanations, extra text or having quotation marks around the phrase."""
 
-        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.json")
-        with open(config_path) as f:
-            github_token = json.load(f)["github_token"]
+        github_token = read_config()["github_token"]
         ai_client = OpenAI(base_url="https://models.github.ai/inference", api_key=github_token)
         response = ai_client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],  # type: ignore[arg-type]

@@ -38,7 +38,6 @@
    - [X]  Rework DB with ISODate instead of multiple fields
 
 ## To-Do
-- [ ]  Create & Show functions
 - [ ]  DRY (Don't Repeat Yourself) / First runs
 - [ ]  Ponder: Args vs Instance variables
 - [ ]  Merge into one app

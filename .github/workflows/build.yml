@@ -1,0 +1,67 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: ELG-app-windows.exe
+            output_path: dist/ELG-app.exe
+          - os: macos-latest
+            artifact_name: ELG-app-macos.zip
+            output_path: dist/ELG-app.app
+          - os: ubuntu-latest
+            artifact_name: ELG-app-linux
+            output_path: dist/ELG-app
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build
+        run: pyinstaller build.spec
+
+      - name: Zip macOS app
+        if: matrix.os == 'macos-latest'
+        run: cd dist && zip -r ../${{ matrix.artifact_name }} ELG-app.app
+
+      - name: Rename Windows/Linux artifact
+        if: matrix.os != 'macos-latest'
+        shell: bash
+        run: mv "${{ matrix.output_path }}" "${{ matrix.artifact_name }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          draft: false
