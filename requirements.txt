@@ -4,3 +4,4 @@ openai
 pystray
 Pillow
 platformdirs
+tzdata

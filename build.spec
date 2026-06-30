@@ -14,6 +14,7 @@ block_cipher = None
 
 datas = collect_data_files("customtkinter")
 datas += collect_data_files("pystray")
+datas += collect_data_files("tzdata")
 
 for icon_name in (
     "ELG Studio 0.1_16_clean_big.ico",
