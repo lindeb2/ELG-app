@@ -41,7 +41,7 @@
 - [ ]  DRY (Don't Repeat Yourself) / First runs
 - [ ]  Ponder: Args vs Instance variables
 - [ ]  Merge into one app
-   - [ ]  Correct local data storage
+   - [X]  Correct local data storage
    - [X]  Integrate all parts
    - [ ]  Dry function calls between parts
    - [X]  On close logic
