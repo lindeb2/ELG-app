@@ -8,6 +8,7 @@ from typing import Any
 import requests
 
 from app_config import read_config
+from app_secrets import get_gae_url, get_notifications_secret
 from period_model import add_calendar_days, as_utc, to_local
 from timetable_db import aggregations, collection, status_meeting
 
@@ -53,14 +54,10 @@ def load_notification_config() -> dict[str, Any]:
     except OSError:
         return {"enabled": False, "gae_url": "", "secret": ""}
 
-    notif = cfg.get("notifications") or {}
-    gae_url = (notif.get("gae_url") or "").strip()
-    secret = (notif.get("secret") or "").strip()
-    enabled_flag = notif.get("enabled", True)
     return {
-        "enabled": bool(enabled_flag and gae_url and secret),
-        "gae_url": gae_url,
-        "secret": secret,
+        "enabled": bool(cfg.get("notifications_enabled", True)),
+        "gae_url": get_gae_url(),
+        "secret": get_notifications_secret(),
     }
 
 

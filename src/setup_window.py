@@ -22,8 +22,6 @@ class SetupFrame(ctk.CTkFrame):
 
         config = read_config()
 
-        notif = config.get("notifications") or {}
-
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
@@ -64,17 +62,8 @@ class SetupFrame(ctk.CTkFrame):
         self._discord_entry.insert(0, config.get("discordname") or "")
         row += 1
 
-        ctk.CTkLabel(scroll, text="Notification secret", anchor="w").grid(
-            row=row, column=0, padx=12, pady=(0, 4), sticky="ew"
-        )
-        row += 1
-        self._secret_entry = ctk.CTkEntry(scroll, show="•")
-        self._secret_entry.grid(row=row, column=0, padx=12, pady=(0, 12), sticky="ew")
-        self._secret_entry.insert(0, notif.get("secret") or "")
-        row += 1
-
         self._notifications_var = ctk.BooleanVar(
-            value=bool(notif.get("enabled", True))
+            value=bool(config.get("notifications_enabled", True))
         )
         ctk.CTkCheckBox(
             scroll,
@@ -100,7 +89,7 @@ class SetupFrame(ctk.CTkFrame):
         self._continue_btn = ctk.CTkButton(scroll, text="Continue", command=self._submit)
         self._continue_btn.grid(row=row, column=0, padx=12, pady=(0, 16), sticky="ew")
 
-        for entry in (self._username_entry, self._discord_entry, self._secret_entry):
+        for entry in (self._username_entry, self._discord_entry):
             entry.bind("<Return>", lambda _event: self._submit())
 
     def set_continue_enabled(self, enabled: bool) -> None:
@@ -122,15 +111,9 @@ class SetupFrame(ctk.CTkFrame):
             self._error_label.configure(text=f"Could not read config: {exc}")
             return
 
-        notif = config.get("notifications") or {}
-        notif["secret"] = self._secret_entry.get().strip()
-        notif["enabled"] = bool(self._notifications_var.get())
-        if "gae_url" not in notif:
-            notif["gae_url"] = "https://training-bot-450717.appspot.com/notify"
-
         config["user"] = username
         config["discordname"] = discordname
-        config["notifications"] = notif
+        config["notifications_enabled"] = bool(self._notifications_var.get())
         app_prefs = self._behavior_panel.values()
         config = merge_app_preferences(config, app_prefs)
 

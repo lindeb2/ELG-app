@@ -2,7 +2,7 @@ import customtkinter as ctk
 from pymongo import UpdateOne
 import datetime
 import os
-from app_config import read_config
+from app_secrets import get_gh_models_token
 import threading
 import tkinter
 import math
@@ -2657,7 +2657,7 @@ Strict rules:
 - Be punchy. No filler. No greetings. No sign-offs.
 - Return ONLY the phrase. No explanations, extra text or having quotation marks around the phrase."""
 
-        github_token = read_config()["github_token"]
+        github_token = get_gh_models_token()
         ai_client = OpenAI(base_url="https://models.github.ai/inference", api_key=github_token)
         response = ai_client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],  # type: ignore[arg-type]

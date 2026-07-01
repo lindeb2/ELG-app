@@ -12,12 +12,6 @@ APP_NAME = "ELG-app"
 APP_AUTHOR = "ELG Studio"
 CURRENT_SCHEMA_VERSION = 1
 
-_DEFAULT_NOTIFICATIONS = {
-    "enabled": True,
-    "gae_url": "https://training-bot-450717.appspot.com/notify",
-    "secret": "",
-}
-
 _DEFAULT_APP = {
     "close_action": "tray",
     "launch_at_startup": False,
@@ -40,9 +34,8 @@ def get_data_file() -> Path:
 def _default_payload() -> dict:
     return {
         "user": "",
-        "github_token": "",
-        "notifications": dict(_DEFAULT_NOTIFICATIONS),
         "discordname": "",
+        "notifications_enabled": True,
         "app": dict(_DEFAULT_APP),
     }
 

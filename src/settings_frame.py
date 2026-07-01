@@ -54,14 +54,6 @@ class SettingsFrame(ctk.CTkFrame):
         self._discord_entry.grid(row=row, column=0, padx=12, pady=(0, 12), sticky="ew")
         row += 1
 
-        ctk.CTkLabel(scroll, text="Notification secret", anchor="w").grid(
-            row=row, column=0, padx=12, pady=(0, 4), sticky="ew"
-        )
-        row += 1
-        self._secret_entry = ctk.CTkEntry(scroll, show="•")
-        self._secret_entry.grid(row=row, column=0, padx=12, pady=(0, 12), sticky="ew")
-        row += 1
-
         self._notifications_var = ctk.BooleanVar(value=True)
         ctk.CTkCheckBox(
             scroll,
@@ -133,7 +125,6 @@ class SettingsFrame(ctk.CTkFrame):
     def _load_config(self) -> None:
         config = read_config()
 
-        notif = config.get("notifications") or {}
         app_prefs = app_preferences_from_config(config)
 
         self._username_entry.delete(0, "end")
@@ -142,10 +133,7 @@ class SettingsFrame(ctk.CTkFrame):
         self._discord_entry.delete(0, "end")
         self._discord_entry.insert(0, config.get("discordname") or "")
 
-        self._secret_entry.delete(0, "end")
-        self._secret_entry.insert(0, notif.get("secret") or "")
-
-        self._notifications_var.set(bool(notif.get("enabled", True)))
+        self._notifications_var.set(bool(config.get("notifications_enabled", True)))
         self._behavior_panel.load_from(app_prefs)
         self._ctrl_r_reload_var.set(bool(app_prefs.get("enable_ctrl_r_reload", False)))
         self.refresh_session_controls()
@@ -153,16 +141,12 @@ class SettingsFrame(ctk.CTkFrame):
     def _save(self) -> None:
         config = read_config()
 
-        notif = config.get("notifications") or {}
-        notif["secret"] = self._secret_entry.get().strip()
-        notif["enabled"] = bool(self._notifications_var.get())
-
         app_prefs = self._behavior_panel.values()
         app_prefs["enable_ctrl_r_reload"] = bool(self._ctrl_r_reload_var.get())
 
         config["user"] = self._username_entry.get().strip()
         config["discordname"] = self._discord_entry.get().strip()
-        config["notifications"] = notif
+        config["notifications_enabled"] = bool(self._notifications_var.get())
         config = merge_app_preferences(config, app_prefs)
 
         write_config(config)

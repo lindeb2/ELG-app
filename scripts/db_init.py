@@ -1,9 +1,13 @@
+import os
 import sys
 import argparse
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure, OperationFailure
 
-MONGO_URI = "mongodb+srv://johan:baLlbeTtertRacer@elg-timetable.txhpj.mongodb.net/?retryWrites=true&w=majority&appName=ELG-timetable"
+MONGO_URI = os.environ.get("ELG_MONGODB_URI")
+if not MONGO_URI:
+    print("Set ELG_MONGODB_URI before running this script.")
+    sys.exit(1)
 
 def get_db_name():
     """

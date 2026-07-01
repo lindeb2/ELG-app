@@ -34,6 +34,19 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
+      - name: Write runtime secrets
+        shell: python
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          GH_MODELS_TOKEN: ${{ secrets.GH_MODELS_TOKEN }}
+          GAE_URL: ${{ secrets.GAE_URL }}
+          NOTIFICATIONS_SECRET: ${{ secrets.NOTIFICATIONS_SECRET }}
+        run: |
+          import os
+          with open("src/runtime_secrets.py", "w") as f:
+              for name in ("MONGODB_URI", "GH_MODELS_TOKEN", "GAE_URL", "NOTIFICATIONS_SECRET"):
+                  f.write(f'{name} = "{os.environ[name]}"\n')
+
       - name: Build
         run: pyinstaller build.spec
 

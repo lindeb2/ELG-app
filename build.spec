@@ -42,7 +42,7 @@ datas += collect_data_files("tzdata")
 for icon_path in (caption_icon, source_icon):
     datas.append((str(icon_path), "."))
 
-hiddenimports = []
+hiddenimports = ["runtime_secrets"]
 for package in (
     "CtkSmartScrollableFrame",
     "CTkStickyPlaceholderEntry",
