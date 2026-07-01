@@ -43,9 +43,19 @@ jobs:
           NOTIFICATIONS_SECRET: ${{ secrets.NOTIFICATIONS_SECRET }}
         run: |
           import os
-          with open("src/runtime_secrets.py", "w") as f:
-              for name in ("MONGODB_URI", "GH_MODELS_TOKEN", "GAE_URL", "NOTIFICATIONS_SECRET"):
-                  f.write(f'{name} = "{os.environ[name]}"\n')
+          from pathlib import Path
+
+          names = ("MONGODB_URI", "GH_MODELS_TOKEN", "GAE_URL", "NOTIFICATIONS_SECRET")
+          lines = []
+          for name in names:
+              value = os.environ.get(name, "")
+              if not value:
+                  raise SystemExit(f"Missing GitHub Actions secret: {name}")
+              lines.append(f"{name} = {value!r}")
+
+          path = Path("src/runtime_secrets.py")
+          path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          print(f"Wrote {path} with {len(names)} secrets")
 
       - name: Build
         run: pyinstaller build.spec

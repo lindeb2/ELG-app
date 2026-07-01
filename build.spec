@@ -42,7 +42,15 @@ datas += collect_data_files("tzdata")
 for icon_path in (caption_icon, source_icon):
     datas.append((str(icon_path), "."))
 
-hiddenimports = ["runtime_secrets"]
+runtime_secrets_path = src_dir / "runtime_secrets.py"
+if not runtime_secrets_path.is_file():
+    raise SystemExit(
+        "Missing src/runtime_secrets.py. Create it for local builds, "
+        "or run the CI 'Write runtime secrets' step before pyinstaller."
+    )
+datas.append((str(runtime_secrets_path), "."))
+
+hiddenimports = []
 for package in (
     "CtkSmartScrollableFrame",
     "CTkStickyPlaceholderEntry",

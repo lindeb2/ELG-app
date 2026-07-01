@@ -1,16 +1,44 @@
 """Centralized access to shared build-time secrets (not per-user)."""
 from __future__ import annotations
 
+import importlib.util
 import os
+import sys
+from pathlib import Path
+from types import ModuleType
 
-try:
-    import runtime_secrets as _rs
-except ImportError:
-    _rs = None
+_rs: ModuleType | None = None
+
+
+def _load_runtime_secrets() -> ModuleType | None:
+    global _rs
+    if _rs is not None:
+        return _rs
+
+    if getattr(sys, "frozen", False):
+        path = Path(sys._MEIPASS) / "runtime_secrets.py"
+        if not path.is_file():
+            return None
+        spec = importlib.util.spec_from_file_location("runtime_secrets", path)
+        if spec is None or spec.loader is None:
+            return None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _rs = module
+        return _rs
+
+    try:
+        import runtime_secrets
+    except ImportError:
+        return None
+
+    _rs = runtime_secrets
+    return _rs
 
 
 def _get(name: str, env_name: str) -> str:
-    value = getattr(_rs, name, None) if _rs else None
+    rs = _load_runtime_secrets()
+    value = getattr(rs, name, None) if rs else None
     if not value:
         value = os.environ.get(env_name)
     if not value:
