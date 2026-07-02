@@ -180,22 +180,30 @@ Or set `PYTHONPATH=src` (Windows: `set PYTHONPATH=src`) if you prefer running mo
 
 ## 5. Releases
 
-Tagged commits (`v*`) trigger a GitHub Actions workflow that builds Windows, macOS, and Linux artifacts and attaches them to a GitHub Release.
+Tagged commits (`v*`) trigger a GitHub Actions workflow that builds four release artifacts (Windows x64 installer, Windows ARM64 installer, macOS ARM64 `.dmg`, Linux x64 `.tar.gz`) and attaches them to a GitHub Release.
 
 ### Local Windows build (before relying on CI)
 
-```bash
-pip install -r requirements.txt pyinstaller
-pyinstaller build.spec
+```powershell
+pip install -r requirements.txt nuitka
+python -m nuitka --output-dir=build/win-x64 --msvc=latest --product-version=0.0.1 src/main.py
 ```
 
-The executable is written to `dist/ELG-app.exe`.
+Use Python 3.12 (matches CI). Nuitka requires a numeric `major.minor.patch` for `--product-version` (no `v` prefix, no suffixes like `-test`).
+
+The standalone app folder is written to `build/win-x64/main.dist/`. Run `build/win-x64/main.dist/main.exe` to test.
+
+To produce an installer locally (requires [Inno Setup](https://jrsoftware.org/isinfo.php)):
+
+```powershell
+iscc /DMyAppVersion=0.0.1-test /DMyAppArch=x64 installer\windows\ELG-app.iss
+```
 
 ### First-run notes for downloaded builds
 
 - **Windows**: SmartScreen may warn about an unrecognized publisher. Click **More info** → **Run anyway**.
 - **macOS**: Gatekeeper blocks unsigned apps on first open. Right-click the `.app` → **Open** (not double-click), then confirm in the dialog.
-- **Linux**: Mark the binary executable if needed: `chmod +x ELG-app-linux`
+- **Linux**: Extract the `.tar.gz`, then run `./main` (mark executable if needed: `chmod +x main`)
 
 ### Admin scripts
 

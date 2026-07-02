@@ -1,6 +1,5 @@
 customtkinter
 pymongo
-openai
 requests
 pystray
 Pillow

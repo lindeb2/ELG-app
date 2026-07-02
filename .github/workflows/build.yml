@@ -5,35 +5,30 @@ on:
     tags:
       - "v*"
 
-jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            artifact_name: ELG-app-windows.exe
-            output_path: dist/ELG-app.exe
-          - os: macos-latest
-            artifact_name: ELG-app-macos.zip
-            output_path: dist/ELG-app.app
-          - os: ubuntu-latest
-            artifact_name: ELG-app-linux
-            output_path: dist/ELG-app
+env:
+  NUITKA_CACHE_DIR: ${{ github.workspace }}/.nuitka-cache
 
-    runs-on: ${{ matrix.os }}
+jobs:
+  build-windows-x64:
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-
-      - name: Install dependencies
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.NUITKA_CACHE_DIR }}
+          key: nuitka-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: nuitka-${{ runner.os }}-${{ runner.arch }}-
+      - name: Set version
+        shell: bash
         run: |
-          pip install -r requirements.txt
-          pip install pyinstaller
-
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "APP_VERSION=${VERSION}" >> "$GITHUB_ENV"
+          NUITKA_VERSION="$(echo "$VERSION" | sed -nE 's/^([0-9]+\.[0-9]+\.[0-9]+).*/\1/p')"
+          if [ -z "$NUITKA_VERSION" ]; then NUITKA_VERSION="0.0.0"; fi
+          echo "NUITKA_VERSION=${NUITKA_VERSION}" >> "$GITHUB_ENV"
       - name: Write runtime secrets
         shell: python
         env:
@@ -56,26 +51,190 @@ jobs:
           path = Path("src/runtime_secrets.py")
           path.write_text("\n".join(lines) + "\n", encoding="utf-8")
           print(f"Wrote {path} with {len(names)} secrets")
-
-      - name: Build
-        run: pyinstaller build.spec
-
-      - name: Zip macOS app
-        if: matrix.os == 'macos-latest'
-        run: cd dist && zip -r ../${{ matrix.artifact_name }} ELG-app.app
-
-      - name: Rename Windows/Linux artifact
-        if: matrix.os != 'macos-latest'
-        shell: bash
-        run: mv "${{ matrix.output_path }}" "${{ matrix.artifact_name }}"
-
+      - run: pip install -r requirements.txt nuitka
+      - run: >
+          python -m nuitka --output-dir=build/win-x64 --msvc=latest
+          --product-version=${{ env.NUITKA_VERSION }}
+          --include-data-files=src/runtime_secrets.py=runtime_secrets.py
+          src/main.py
+      - name: Compile Inno Setup installer
+        run: iscc /DMyAppVersion=${{ env.APP_VERSION }} /DMyAppArch=x64 installer\windows\ELG-app.iss
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.artifact_name }}
+          name: ELG-app-win-x64
+          path: dist-installers/*.exe
+
+  build-windows-arm64:
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.NUITKA_CACHE_DIR }}
+          key: nuitka-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: nuitka-${{ runner.os }}-${{ runner.arch }}-
+      - name: Set version
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "APP_VERSION=${VERSION}" >> "$GITHUB_ENV"
+          NUITKA_VERSION="$(echo "$VERSION" | sed -nE 's/^([0-9]+\.[0-9]+\.[0-9]+).*/\1/p')"
+          if [ -z "$NUITKA_VERSION" ]; then NUITKA_VERSION="0.0.0"; fi
+          echo "NUITKA_VERSION=${NUITKA_VERSION}" >> "$GITHUB_ENV"
+      - name: Write runtime secrets
+        shell: python
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          GH_MODELS_TOKEN: ${{ secrets.GH_MODELS_TOKEN }}
+          GAE_URL: ${{ secrets.GAE_URL }}
+          NOTIFICATIONS_SECRET: ${{ secrets.NOTIFICATIONS_SECRET }}
+        run: |
+          import os
+          from pathlib import Path
+
+          names = ("MONGODB_URI", "GH_MODELS_TOKEN", "GAE_URL", "NOTIFICATIONS_SECRET")
+          lines = []
+          for name in names:
+              value = os.environ.get(name, "")
+              if not value:
+                  raise SystemExit(f"Missing GitHub Actions secret: {name}")
+              lines.append(f"{name} = {value!r}")
+
+          path = Path("src/runtime_secrets.py")
+          path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          print(f"Wrote {path} with {len(names)} secrets")
+      - run: pip install -r requirements.txt nuitka
+      - run: >
+          python -m nuitka --output-dir=build/win-arm64 --msvc=latest
+          --product-version=${{ env.NUITKA_VERSION }}
+          --include-data-files=src/runtime_secrets.py=runtime_secrets.py
+          src/main.py
+      - name: Compile Inno Setup installer
+        run: iscc /DMyAppVersion=${{ env.APP_VERSION }} /DMyAppArch=arm64 installer\windows\ELG-app.iss
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ELG-app-win-arm64
+          path: dist-installers/*.exe
+
+  build-macos-arm64:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.NUITKA_CACHE_DIR }}
+          key: nuitka-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: nuitka-${{ runner.os }}-${{ runner.arch }}-
+      - name: Set version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "APP_VERSION=${VERSION}" >> "$GITHUB_ENV"
+          NUITKA_VERSION="$(echo "$VERSION" | sed -nE 's/^([0-9]+\.[0-9]+\.[0-9]+).*/\1/p')"
+          if [ -z "$NUITKA_VERSION" ]; then NUITKA_VERSION="0.0.0"; fi
+          echo "NUITKA_VERSION=${NUITKA_VERSION}" >> "$GITHUB_ENV"
+      - name: Write runtime secrets
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          GH_MODELS_TOKEN: ${{ secrets.GH_MODELS_TOKEN }}
+          GAE_URL: ${{ secrets.GAE_URL }}
+          NOTIFICATIONS_SECRET: ${{ secrets.NOTIFICATIONS_SECRET }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          names = ("MONGODB_URI", "GH_MODELS_TOKEN", "GAE_URL", "NOTIFICATIONS_SECRET")
+          lines = []
+          for name in names:
+              value = os.environ.get(name, "")
+              if not value:
+                  raise SystemExit(f"Missing GitHub Actions secret: {name}")
+              lines.append(f"{name} = {value!r}")
+
+          path = Path("src/runtime_secrets.py")
+          path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          print(f"Wrote {path} with {len(names)} secrets")
+          PY
+      - run: pip install -r requirements.txt nuitka
+      - run: >
+          python -m nuitka --output-dir=build/macos-arm64 --macos-target-arch=arm64
+          --product-version=${{ env.NUITKA_VERSION }}
+          --include-data-files=src/runtime_secrets.py=runtime_secrets.py
+          src/main.py
+      - run: codesign --force --deep --sign - "build/macos-arm64/main.app"
+      - run: |
+          mkdir -p dist-installers
+          hdiutil create -volname "ELG" -srcfolder "build/macos-arm64/main.app" \
+            -ov -format UDZO "dist-installers/ELG-app-${{ env.APP_VERSION }}-macos-arm64.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ELG-app-macos-arm64
+          path: dist-installers/*.dmg
+
+  build-linux-x64:
+    runs-on: ubuntu-latest
+    container: python:3.12-bullseye
+    steps:
+      - uses: actions/checkout@v4
+      - run: apt-get update && apt-get install -y build-essential patchelf ccache tk-dev
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.NUITKA_CACHE_DIR }}
+          key: nuitka-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: nuitka-${{ runner.os }}-${{ runner.arch }}-
+      - name: Set version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "APP_VERSION=${VERSION}" >> "$GITHUB_ENV"
+          NUITKA_VERSION="$(echo "$VERSION" | sed -nE 's/^([0-9]+\.[0-9]+\.[0-9]+).*/\1/p')"
+          if [ -z "$NUITKA_VERSION" ]; then NUITKA_VERSION="0.0.0"; fi
+          echo "NUITKA_VERSION=${NUITKA_VERSION}" >> "$GITHUB_ENV"
+      - name: Write runtime secrets
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          GH_MODELS_TOKEN: ${{ secrets.GH_MODELS_TOKEN }}
+          GAE_URL: ${{ secrets.GAE_URL }}
+          NOTIFICATIONS_SECRET: ${{ secrets.NOTIFICATIONS_SECRET }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          names = ("MONGODB_URI", "GH_MODELS_TOKEN", "GAE_URL", "NOTIFICATIONS_SECRET")
+          lines = []
+          for name in names:
+              value = os.environ.get(name, "")
+              if not value:
+                  raise SystemExit(f"Missing GitHub Actions secret: {name}")
+              lines.append(f"{name} = {value!r}")
+
+          path = Path("src/runtime_secrets.py")
+          path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          print(f"Wrote {path} with {len(names)} secrets")
+          PY
+      - run: pip install -r requirements.txt nuitka
+      - run: >
+          python -m nuitka --output-dir=build/linux-x64
+          --product-version=${{ env.NUITKA_VERSION }}
+          --include-data-files=src/runtime_secrets.py=runtime_secrets.py
+          src/main.py
+      - run: |
+          mkdir -p dist-installers
+          tar -C build/linux-x64/main.dist -czf \
+            "dist-installers/ELG-app-${{ env.APP_VERSION }}-linux-x64.tar.gz" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ELG-app-linux-x64
+          path: dist-installers/*.tar.gz
 
   release:
-    needs: build
+    needs: [build-windows-x64, build-windows-arm64, build-macos-arm64, build-linux-x64]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -83,9 +242,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v2
         with:
           files: artifacts/**/*
           draft: false

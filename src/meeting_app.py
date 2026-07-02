@@ -13,12 +13,11 @@ from CTkPieChart import CTkPieChart
 from CTkFlexToolTip import *
 from utils import flash_error
 import random
-from openai import OpenAI
+import requests
 from collections import defaultdict
 from pymongo import ReturnDocument
 
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError, NetworkTimeout, AutoReconnect
-from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
 from period_model import APP_TIMEZONE, format_highscore_date, to_local, utc_naive_after_calendar_days
 from timetable_db import (
@@ -2570,8 +2569,13 @@ class MeetingFrame(ctk.CTkFrame):
         projection = {data_path: 1, "_id": 0}
 
         pymongo_network_errors = (ConnectionFailure, ServerSelectionTimeoutError, NetworkTimeout, AutoReconnect)
-        openai_errors = (APIConnectionError, APITimeoutError, InternalServerError, RateLimitError)
-        retry_errors = pymongo_network_errors + openai_errors # type: ignore
+        gh_models_errors = (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+            requests.exceptions.ChunkedEncodingError,
+            requests.exceptions.HTTPError,
+        )
+        retry_errors = pymongo_network_errors + gh_models_errors  # type: ignore[misc]
 
         while True:
             try:
@@ -2622,7 +2626,7 @@ class MeetingFrame(ctk.CTkFrame):
     @staticmethod
     def _s5_generate_phrase():
         """
-        Generate phrase using OpenAI API.
+        Generate phrase using the GitHub Models API.
         Returns generated phrase string and style.
         """
         style_list = [
@@ -2658,12 +2662,32 @@ Strict rules:
 - Return ONLY the phrase. No explanations, extra text or having quotation marks around the phrase."""
 
         github_token = get_gh_models_token()
-        ai_client = OpenAI(base_url="https://models.github.ai/inference", api_key=github_token)
-        response = ai_client.chat.completions.create(
-            messages=[{"role": "user", "content": prompt}],  # type: ignore[arg-type]
-            model="openai/gpt-4o", temperature=0.9, max_tokens=60, top_p=1, timeout=15.0
-        )
-        phrase = response.choices[0].message.content
+        try:
+            response = requests.post(
+                "https://models.github.ai/inference/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {github_token}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "messages": [{"role": "user", "content": prompt}],
+                    "model": "openai/gpt-4o",
+                    "temperature": 0.9,
+                    "max_tokens": 60,
+                    "top_p": 1,
+                },
+                timeout=15.0,
+            )
+        except requests.exceptions.RequestException:
+            raise
+
+        if response.status_code == 429 or response.status_code >= 500:
+            raise requests.exceptions.HTTPError(
+                f"GitHub Models request failed with status {response.status_code}",
+                response=response,
+            )
+        response.raise_for_status()
+        phrase = response.json()["choices"][0]["message"]["content"]
         return phrase, style
 
     def _s5_create_end_label(self, text, style):

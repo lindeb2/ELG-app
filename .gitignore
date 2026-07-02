@@ -7,11 +7,11 @@ __pycache__/
 .idea/
 .vscode/
 
-# PyInstaller
+# Nuitka / packaging
 build/
 dist/
-*.spec
-!build.spec
+dist-installers/
+.nuitka-cache/
 
 .venv/
 temp*

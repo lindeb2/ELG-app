@@ -10,13 +10,29 @@ from types import ModuleType
 _rs: ModuleType | None = None
 
 
+def _frozen_bundle_dir() -> Path:
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        return Path(meipass)
+    return Path(os.path.dirname(os.path.abspath(sys.executable)))
+
+
 def _load_runtime_secrets() -> ModuleType | None:
     global _rs
     if _rs is not None:
         return _rs
 
+    try:
+        import runtime_secrets
+    except ImportError:
+        runtime_secrets = None
+
+    if runtime_secrets is not None:
+        _rs = runtime_secrets
+        return _rs
+
     if getattr(sys, "frozen", False):
-        path = Path(sys._MEIPASS) / "runtime_secrets.py"
+        path = _frozen_bundle_dir() / "runtime_secrets.py"
         if not path.is_file():
             return None
         spec = importlib.util.spec_from_file_location("runtime_secrets", path)
@@ -27,13 +43,7 @@ def _load_runtime_secrets() -> ModuleType | None:
         _rs = module
         return _rs
 
-    try:
-        import runtime_secrets
-    except ImportError:
-        return None
-
-    _rs = runtime_secrets
-    return _rs
+    return None
 
 
 def _get(name: str, env_name: str) -> str:
