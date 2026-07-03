@@ -4,12 +4,6 @@ from __future__ import annotations
 import ctypes
 import sys
 from collections.abc import Callable
-from ctypes import wintypes
-
-if sys.platform.startswith("win"):
-    _user32 = ctypes.windll.user32
-else:
-    _user32 = None
 
 WM_QUERYENDSESSION = 0x0011
 WM_ENDSESSION = 0x0016
@@ -17,23 +11,15 @@ GWLP_WNDPROC = -4
 
 _SHUTDOWN_REASON = "ELG has an unlogged timetable session."
 
-if ctypes.sizeof(ctypes.c_void_p) == 8:
-    _LRESULT = ctypes.c_longlong
-else:
-    _LRESULT = ctypes.c_long
-
-_WNDPROC = ctypes.WINFUNCTYPE(
-    _LRESULT,
-    wintypes.HWND,
-    wintypes.UINT,
-    wintypes.WPARAM,
-    wintypes.LPARAM,
-)
+_user32 = None
+_WNDPROC = None
 
 
 def _configure_user32() -> None:
     if _user32 is None:
         return
+
+    from ctypes import wintypes
 
     _user32.SetWindowLongPtrW.argtypes = (
         wintypes.HWND,
@@ -65,7 +51,24 @@ def _configure_user32() -> None:
     _user32.ShutdownBlockReasonDestroy.restype = wintypes.BOOL
 
 
-_configure_user32()
+if sys.platform.startswith("win"):
+    from ctypes import wintypes
+
+    _user32 = ctypes.windll.user32
+
+    if ctypes.sizeof(ctypes.c_void_p) == 8:
+        _LRESULT = ctypes.c_longlong
+    else:
+        _LRESULT = ctypes.c_long
+
+    _WNDPROC = ctypes.WINFUNCTYPE(
+        _LRESULT,
+        wintypes.HWND,
+        wintypes.UINT,
+        wintypes.WPARAM,
+        wintypes.LPARAM,
+    )
+    _configure_user32()
 
 
 def _proc_pointer(proc) -> int:
