@@ -167,11 +167,16 @@ jobs:
           --product-version=${{ env.NUITKA_VERSION }}
           --include-data-files=src/runtime_secrets.py=runtime_secrets.py
           src/main.py
-      - run: codesign --force --deep --sign - "build/macos-arm64/main.app"
+      - run: codesign --force --deep --sign - "build/macos-arm64/ELG.app"
       - run: |
+          STAGING="build/macos-arm64/dmg-staging"
+          rm -rf "$STAGING"
+          mkdir -p "$STAGING"
+          cp -R "build/macos-arm64/ELG.app" "$STAGING/"
+          ln -s /Applications "$STAGING/Applications"
           mkdir -p dist-installers
-          hdiutil create -volname "ELG" -srcfolder "build/macos-arm64/main.app" \
-            -ov -format UDZO "dist-installers/ELG-app-${{ env.APP_VERSION }}-macos-arm64.dmg"
+          hdiutil create -volname "ELG" -srcfolder "$STAGING" \
+            -ov -format UDZO "dist-installers/ELG.dmg"
       - uses: actions/upload-artifact@v4
         with:
           name: ELG-app-macos-arm64

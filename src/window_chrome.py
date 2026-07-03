@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import os
-import sys
 import tkinter
 
 import customtkinter as ctk
+
+from platform_keys import IS_MACOS, IS_WINDOWS
 
 DWMWA_USE_IMMERSIVE_DARK_MODE = 20
 DWMWA_CAPTION_COLOR = 35
@@ -53,7 +54,7 @@ CAPTION_ICON_PATH = APP_ICON_PATH
 TASKBAR_ICON_PATH = APP_ICON_PATH
 
 def deactivate_ctk_title_bar_manipulation() -> None:
-    if sys.platform.startswith("win"):
+    if IS_WINDOWS:
         ctk.CTk._deactivate_windows_window_header_manipulation = True  # type: ignore[attr-defined]
 
 
@@ -90,7 +91,7 @@ def _hide_title_bar_icon_hwnd(hwnd: int) -> None:
 
 def hide_visible_caption_text(window: ctk.CTk, caption_color: int | None = None) -> None:
     """Keep wm/taskbar title; hide the caption label beside the icon."""
-    if not sys.platform.startswith("win"):
+    if not IS_WINDOWS:
         return
     if caption_color is None:
         caption_color = CAPTION_COLOR_BLACK_BGR
@@ -119,6 +120,8 @@ def configure_app_icon(
     taskbar_icon_path: str | None = None,
 ) -> None:
     """Install caption (16px) and taskbar icons before the window maps."""
+    if IS_MACOS:
+        return
     caption = caption_icon_path or CAPTION_ICON_PATH
     taskbar = taskbar_icon_path or TASKBAR_ICON_PATH
     taskbar_for_tk = taskbar if os.path.isfile(taskbar) else caption
@@ -130,7 +133,7 @@ def configure_app_icon(
         except tkinter.TclError:
             pass
         window.iconbitmap(taskbar_for_tk)
-    if sys.platform.startswith("win"):
+    if IS_WINDOWS:
         _set_window_icons(_hwnd(window), caption_icon_path=caption, taskbar_icon_path=taskbar)
 
 
@@ -174,7 +177,7 @@ def _set_window_icons(
 
 def hide_title_bar_icon(window: ctk.CTk) -> None:
     """Hide the caption icon only; taskbar / Alt+Tab keep the app icon."""
-    if not sys.platform.startswith("win"):
+    if not IS_WINDOWS:
         return
     try:
         _hide_title_bar_icon_hwnd(_hwnd(window))
@@ -188,7 +191,7 @@ def restore_title_bar_icon(
     caption_icon_path: str | None = None,
     taskbar_icon_path: str | None = None,
 ) -> None:
-    if not sys.platform.startswith("win"):
+    if not IS_WINDOWS:
         return
     caption = caption_icon_path or CAPTION_ICON_PATH
     taskbar = taskbar_icon_path or TASKBAR_ICON_PATH
@@ -206,7 +209,7 @@ def restore_title_bar_icon(
 
 def remove_minimize_maximize_buttons(window: ctk.CTk) -> None:
     """Remove minimize and maximize; keep close button and app icon."""
-    if not sys.platform.startswith("win"):
+    if not IS_WINDOWS:
         return
     try:
         from ctypes import windll
@@ -223,7 +226,7 @@ def remove_minimize_maximize_buttons(window: ctk.CTk) -> None:
 
 def restore_minimize_maximize_buttons(window: ctk.CTk) -> None:
     """Restore minimize and maximize buttons (full app mode)."""
-    if not sys.platform.startswith("win"):
+    if not IS_WINDOWS:
         return
     try:
         from ctypes import windll
@@ -239,14 +242,14 @@ def restore_minimize_maximize_buttons(window: ctk.CTk) -> None:
 
 
 def configure_window_title(window: ctk.CTk, title: str) -> None:
-    window.title(title)
+    window.title("" if IS_MACOS else title)
 
 
 def outer_size_for_client(
     window: ctk.CTk, client_width: int, client_height: int
 ) -> tuple[int, int]:
     """Total window size for a desired client (content) area."""
-    if not sys.platform.startswith("win"):
+    if not IS_WINDOWS:
         return client_width, client_height
     try:
         from ctypes import byref, windll, wintypes
@@ -269,6 +272,9 @@ def apply_app_title_bar_chrome(
     taskbar_icon_path: str | None = None,
 ) -> None:
     """Full app: icon, hidden title text, normal min/max/close."""
+    if IS_MACOS:
+        window.title("")
+        return
     restore_title_bar_icon(
         window,
         caption_icon_path=caption_icon_path,
@@ -280,6 +286,9 @@ def apply_app_title_bar_chrome(
 
 def apply_widget_title_bar_chrome(window: ctk.CTk) -> None:
     """Widget mode: no icon, hidden title text, close only."""
+    if IS_MACOS:
+        window.title("")
+        return
     hide_title_bar_icon(window)
     hide_visible_caption_text(window, CAPTION_COLOR_BLACK_BGR)
     remove_minimize_maximize_buttons(window)

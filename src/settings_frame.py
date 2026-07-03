@@ -11,6 +11,7 @@ from app_config import (
     write_config,
 )
 from app_preferences_ui import AppBehaviorPreferencesPanel
+from platform_keys import primary_modifier_label
 from session_guard import confirm_discard_session, has_unlogged_time
 
 
@@ -74,7 +75,7 @@ class SettingsFrame(ctk.CTkFrame):
         self._ctrl_r_reload_var = ctk.BooleanVar(value=False)
         ctk.CTkCheckBox(
             scroll,
-            text='Enable reload of current view with Ctrl+R',
+            text=f"Enable reload of current view with {primary_modifier_label()}+R",
             variable=self._ctrl_r_reload_var,
         ).grid(row=row, column=0, padx=12, pady=(0, 20), sticky="w")
         row += 1

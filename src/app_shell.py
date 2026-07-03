@@ -17,6 +17,14 @@ from shutdown_block import ShutdownBlocker
 from stats_viewer import StatsFrame
 from system_tray import SystemTray
 from Timetable import TimetableFrame
+from platform_keys import (
+    IS_WINDOWS,
+    alt_arrow_sequences,
+    bind_sequences,
+    primary_letter_sequences,
+    primary_modifier,
+    unbind_sequences,
+)
 from title_bar_pin import FLUENT_ICON_FONT, TitleBarButtonOverlay, WIDGET_ENTER_GLYPH
 from window_chrome import (
     CAPTION_ICON_PATH,
@@ -54,6 +62,9 @@ _NAV_ITEMS: tuple[tuple[str, str], ...] = (
     ("meeting", "Meeting App"),
     ("meeting_points", "Point Manager"),
 )
+
+_ALT_ARROW_UP = tuple(s for s in alt_arrow_sequences() if s.endswith("Up>"))
+_ALT_ARROW_DOWN = tuple(s for s in alt_arrow_sequences() if "Down" in s)
 
 _SHORTCUT_VIEWS: dict[str, str] = {
     "1": "timetable",
@@ -225,14 +236,13 @@ class AppShell(tk.Frame):
             timetable.discard_session()
 
     def _sync_ctrl_r_binding(self) -> None:
+        sequences = primary_letter_sequences("r")
         if self._app_prefs.get("enable_ctrl_r_reload"):
             if not self._ctrl_r_bound:
-                self._window.bind("<Control-r>", self._on_ctrl_r_reload, add="+")
-                self._window.bind("<Control-R>", self._on_ctrl_r_reload, add="+")
+                bind_sequences(self._window, sequences, self._on_ctrl_r_reload)
                 self._ctrl_r_bound = True
         elif self._ctrl_r_bound:
-            self._window.unbind("<Control-r>")
-            self._window.unbind("<Control-R>")
+            unbind_sequences(self._window, sequences)
             self._ctrl_r_bound = False
 
     def _on_ctrl_r_reload(self, _event=None) -> str | None:
@@ -480,15 +490,26 @@ class AppShell(tk.Frame):
             _paint_ctk_button(pin_btn, base_fg, base_text)
 
     def _bind_shortcuts(self) -> None:
-        self._window.bind("<Control-b>", self._on_toggle_sidebar, add="+")
-        self._window.bind("<Control-B>", self._on_toggle_sidebar, add="+")
+        mod = primary_modifier()
+        bind_sequences(
+            self._window,
+            primary_letter_sequences("b"),
+            self._on_toggle_sidebar,
+        )
         for key, view in _SHORTCUT_VIEWS.items():
-            self._window.bind(f"<Control-Key-{key}>", lambda _e, v=view: self.switch_view(v), add="+")
-            self._window.bind(f"<Control-{key}>", lambda _e, v=view: self.switch_view(v), add="+")
-        self._window.bind("<Control-comma>", lambda _e: self.switch_view("settings"), add="+")
-        self._window.bind("<Alt-Up>", self._on_alt_enter_widget, add="+")
-        self._window.bind("<Alt-Down>", self._on_alt_exit_widget, add="+")
-        self._window.bind("<Alt-Key-Down>", self._on_alt_exit_widget, add="+")
+            self._window.bind(
+                f"<{mod}-Key-{key}>",
+                lambda _e, v=view: self.switch_view(v),
+                add="+",
+            )
+            self._window.bind(
+                f"<{mod}-{key}>",
+                lambda _e, v=view: self.switch_view(v),
+                add="+",
+            )
+        self._window.bind(f"<{mod}-comma>", lambda _e: self.switch_view("settings"), add="+")
+        bind_sequences(self._window, _ALT_ARROW_UP, self._on_alt_enter_widget, bind_all=True)
+        bind_sequences(self._window, _ALT_ARROW_DOWN, self._on_alt_exit_widget, bind_all=True)
 
     def _on_toggle_sidebar(self, _event=None) -> None:
         self.toggle_sidebar()
@@ -556,12 +577,12 @@ class AppShell(tk.Frame):
     def _exit_widget_mode_from_pin(self) -> None:
         self._exit_widget_mode(restore_view=True)
 
-    def _ensure_title_bar_pin(self) -> TitleBarButtonOverlay:
+    def _ensure_title_bar_pin(self) -> TitleBarButtonOverlay | None:
+        if not IS_WINDOWS:
+            return None
         if self._title_bar_pin is not None and not self._title_bar_pin.winfo_exists():
             self._title_bar_pin = None
         if self._title_bar_pin is None:
-            if not sys.platform.startswith("win"):
-                raise OSError("Widget title pin requires Windows.")
             self._title_bar_pin = TitleBarButtonOverlay(
                 self._window,
                 command=self._exit_widget_mode_from_pin,
@@ -606,20 +627,11 @@ class AppShell(tk.Frame):
             if not self._widget_mode or widget_session != self._widget_session:
                 return
             self._apply_widget_geometry()
-            self._ensure_title_bar_pin().show()
+            pin = self._ensure_title_bar_pin()
+            if pin is not None:
+                pin.show()
 
         self._widget_resync_jobs.append(self._window.after(160, tick))
-
-    def _bind_widget_exit_shortcut(self) -> None:
-        self._window.bind_all("<Alt-Down>", self._on_alt_exit_widget, add="+")
-        self._window.bind_all("<Alt-Key-Down>", self._on_alt_exit_widget, add="+")
-
-    def _unbind_widget_exit_shortcut(self) -> None:
-        try:
-            self._window.unbind_all("<Alt-Down>")
-            self._window.unbind_all("<Alt-Key-Down>")
-        except tk.TclError:
-            pass
 
     def _forgot_inactive_view_hosts(self, active: str) -> None:
         for key, host in self._frames.items():
@@ -685,8 +697,9 @@ class AppShell(tk.Frame):
             if not self._widget_mode or widget_session != self._widget_session:
                 return
             self._focus_view("timetable")
-            self._bind_widget_exit_shortcut()
-            self._ensure_title_bar_pin().show()
+            pin = self._ensure_title_bar_pin()
+            if pin is not None:
+                pin.show()
             self._schedule_widget_pin_resync(widget_session)
         finally:
             self._entering_widget_mode = False
@@ -698,7 +711,6 @@ class AppShell(tk.Frame):
         self._widget_session += 1
         self._cancel_widget_resync()
         self._stop_widget_icon_upkeep()
-        self._unbind_widget_exit_shortcut()
 
         self._hide_title_bar_pin()
 

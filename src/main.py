@@ -22,6 +22,7 @@
 #    nuitka-project: --macos-create-app-bundle
 #    nuitka-project: --macos-app-icon=nuitka/icons/elg.icns
 #    nuitka-project: --macos-app-name=ELG
+#    nuitka-project: --output-filename=ELG
 """Single entry point for the ELG desktop app."""
 from __future__ import annotations
 
