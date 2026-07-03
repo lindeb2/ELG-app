@@ -167,16 +167,26 @@ jobs:
           --product-version=${{ env.NUITKA_VERSION }}
           --include-data-files=src/runtime_secrets.py=runtime_secrets.py
           src/main.py
+      - run: python scripts/build_dmg_background.py
+      - run: brew install create-dmg
       - run: codesign --force --deep --sign - "build/macos-arm64/ELG.app"
       - run: |
           STAGING="build/macos-arm64/dmg-staging"
           rm -rf "$STAGING"
-          mkdir -p "$STAGING"
+          mkdir -p "$STAGING" dist-installers
           cp -R "build/macos-arm64/ELG.app" "$STAGING/"
-          ln -s /Applications "$STAGING/Applications"
-          mkdir -p dist-installers
-          hdiutil create -volname "ELG" -srcfolder "$STAGING" \
-            -ov -format UDZO "dist-installers/ELG.dmg"
+          create-dmg \
+            --volname "ELG" \
+            --background "installer/macos/background.tiff" \
+            --window-size 512 320 \
+            --icon-size 128 \
+            --text-size 16 \
+            --icon "ELG.app" 100 175 \
+            --hide-extension "ELG.app" \
+            --app-drop-link 356 175 \
+            --no-internet-enable \
+            "dist-installers/ELG.dmg" \
+            "$STAGING/"
       - uses: actions/upload-artifact@v4
         with:
           name: ELG-app-macos-arm64
