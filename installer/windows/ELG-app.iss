@@ -8,15 +8,19 @@
 #endif
 #define MyAppPublisher "ELG Studio"
 #define MyAppURL "https://github.com/lindeb2/ELG-app"
+#define MyAppIcon "..\..\nuitka\icons\elg.ico"
 
 [Setup]
 AppId={{53D81F9E-327D-4B26-8DC5-24EBF9415B99}}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
+AppVerName={#MyAppName}
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
+SetupIconFile={#MyAppIcon}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
+UninstallDisplayIcon={app}\{#MyAppExeName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 OutputDir=..\..\dist-installers

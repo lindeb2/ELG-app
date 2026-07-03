@@ -7,15 +7,14 @@
 # nuitka-project: --nofollow-import-to=tkinter.test
 # nuitka-project: --company-name=ELG Studio
 # nuitka-project: --product-name=ELG
-# nuitka-project: --file-description=ELG time tracking and timetable
+# nuitka-project: --file-description=ELG
 # nuitka-project: --copyright=ELG Studio
 # nuitka-project-if: {OS} == "Windows":
 #    nuitka-project: --lto=no
 #    nuitka-project: --low-memory
 # nuitka-project-if: {OS} != "Windows":
 #    nuitka-project: --lto=yes
-# nuitka-project: --include-data-files=src/ELG Studio 0.1_16_clean_big.ico=ELG Studio 0.1_16_clean_big.ico
-# nuitka-project: --include-data-files=src/ELG Studio 0.1_256_128_64_48_32_24_clean_rounded.ico=ELG Studio 0.1_256_128_64_48_32_24_clean_rounded.ico
+# nuitka-project: --include-data-files=nuitka/icons/elg.ico=elg.ico
 # nuitka-project-if: {OS} == "Windows":
 #    nuitka-project: --windows-console-mode=disable
 #    nuitka-project: --windows-icon-from-ico=nuitka/icons/elg.ico

@@ -7,5 +7,5 @@
 --nofollow-import-to=tkinter.test
 --company-name=ELG Studio
 --product-name=ELG
---file-description=ELG time tracking and timetable
+--file-description=ELG
 --copyright=ELG Studio

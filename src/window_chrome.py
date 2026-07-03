@@ -34,11 +34,23 @@ SWP_NOACTIVATE = 0x0010
 _FRAME_CHANGED = SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE
 
 _ICON_DIR = os.path.dirname(os.path.abspath(__file__))
-CAPTION_ICON_PATH = os.path.join(_ICON_DIR, "ELG Studio 0.1_16_clean_big.ico")
-TASKBAR_ICON_PATH = os.path.join(
-    _ICON_DIR,
-    "ELG Studio 0.1_256_128_64_48_32_24_clean_rounded.ico",
-)
+
+
+def _resolve_app_icon_path() -> str:
+    """Single multi-size app icon: dist root when frozen, nuitka/icons in dev."""
+    candidates = (
+        os.path.join(_ICON_DIR, "elg.ico"),
+        os.path.join(os.path.dirname(_ICON_DIR), "nuitka", "icons", "elg.ico"),
+    )
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return candidate
+    return candidates[0]
+
+
+APP_ICON_PATH = _resolve_app_icon_path()
+CAPTION_ICON_PATH = APP_ICON_PATH
+TASKBAR_ICON_PATH = APP_ICON_PATH
 
 def deactivate_ctk_title_bar_manipulation() -> None:
     if sys.platform.startswith("win"):
