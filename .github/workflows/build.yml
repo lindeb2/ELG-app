@@ -167,6 +167,7 @@ jobs:
           --product-version=${{ env.NUITKA_VERSION }}
           --include-data-files=src/runtime_secrets.py=runtime_secrets.py
           src/main.py
+      - run: mv "build/macos-arm64/main.app" "build/macos-arm64/ELG.app"
       - run: python scripts/build_dmg_background.py
       - run: brew install create-dmg
       - run: codesign --force --deep --sign - "build/macos-arm64/ELG.app"
