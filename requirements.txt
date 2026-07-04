@@ -5,5 +5,4 @@ pystray
 Pillow
 platformdirs
 certifi
-tifffile
 tzdata

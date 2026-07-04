@@ -12,7 +12,7 @@ build/
 dist/
 dist-installers/
 .nuitka-cache/
-installer/macos/.DS_Store
+installer/macos/DS_Store.reference
 
 .venv/
 temp*

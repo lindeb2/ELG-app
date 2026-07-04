@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Build ELG.dmg with Finder styling via create-dmg (AppleScript on mounted volume).
+# Build ELG.dmg using committed installer assets + create-dmg (Finder layout).
 #
-# A copied .DS_Store is not enough: backgroundImageAlias stores volume-specific file
-# IDs. Finder only applies icon positions and backgrounds when that alias resolves
-# on the live mounted DMG. create-dmg mounts the image and runs AppleScript so
-# Finder writes a fresh .DS_Store for this volume.
+# Committed in installer/macos/:
+#   background.tiff  — DMG background (regenerate via scripts/dmg/build_background.py)
+#
+# .DS_Store is written by Finder during create-dmg (volume-specific aliases). A copied
+# .DS_Store cannot be reused across builds.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -13,7 +14,11 @@ STAGING="${RUNNER_TEMP:-/tmp}/elg-dmg-staging"
 DMG_OUT="$ROOT/dist-installers/ELG.dmg"
 BACKGROUND="$ROOT/installer/macos/background.tiff"
 
-python "$ROOT/scripts/build_dmg_background.py"
+if [[ ! -f "$BACKGROUND" ]]; then
+  echo "Missing committed background: $BACKGROUND" >&2
+  echo "Run: pip install -r scripts/dmg/requirements.txt && python scripts/dmg/build_background.py" >&2
+  exit 1
+fi
 
 if ! command -v create-dmg >/dev/null 2>&1; then
   echo "create-dmg not found; install with: brew install create-dmg" >&2

@@ -1,21 +1,26 @@
-"""Build the multi-page DMG background TIFF from the arrow PNG.
+"""Build a multi-page DMG background TIFF from an arrow PNG (manual / other apps).
 
-Matches Discord's background.tiff metadata:
-- page 0: 512x320 RGBA @ 72 DPI (+ sRGB ICC profile)
-- page 1: 1024x640 RGB @ 144 DPI
+ELG CI uses the committed installer/macos/background.tiff. Regenerate when the
+arrow asset changes:
+
+    pip install -r scripts/dmg/requirements.txt
+    python scripts/dmg/build_background.py
+
+Optional ICC: place a reference TIFF at installer/macos/icc_source.tiff.
 """
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import numpy as np
 import tifffile
 from PIL import Image
 
-ROOT = Path(__file__).resolve().parents[1]
-ARROW_SOURCE = ROOT / "src" / "ELG Studio .dmg background arrow.png"
-TIFF_DEST = ROOT / "installer" / "macos" / "background.tiff"
-ICC_SOURCE = ROOT / "Temp" / "Discord_background.tiff"
+ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_ARROW = ROOT / "installer" / "macos" / "arrow.png"
+DEFAULT_DEST = ROOT / "installer" / "macos" / "background.tiff"
+DEFAULT_ICC_SOURCE = ROOT / "installer" / "macos" / "icc_source.tiff"
 
 CANVAS_1X = (512, 320)
 CANVAS_2X = (1024, 640)
@@ -28,10 +33,10 @@ DPI_2X = (144.0, 144.0)
 ICC_TAG = 34675
 
 
-def _icc_profile() -> bytes | None:
-    if not ICC_SOURCE.is_file():
+def _icc_profile(source: Path | None) -> bytes | None:
+    if source is None or not source.is_file():
         return None
-    with Image.open(ICC_SOURCE) as ref:
+    with Image.open(source) as ref:
         ref.seek(0)
         return ref.info.get("icc_profile")
 
@@ -49,9 +54,14 @@ def _paste_centered_arrow(
     canvas.paste(arrow, (paste_x, paste_y), arrow)
 
 
-def build_background(arrow_source: Path = ARROW_SOURCE, dest: Path = TIFF_DEST) -> Path:
+def build_background(
+    arrow_source: Path,
+    dest: Path,
+    *,
+    icc_source: Path | None = DEFAULT_ICC_SOURCE,
+) -> Path:
     arrow = Image.open(arrow_source).convert("RGBA")
-    icc = _icc_profile()
+    icc = _icc_profile(icc_source)
 
     page_1x = Image.new("RGBA", CANVAS_1X, (255, 255, 255, 255))
     _paste_centered_arrow(page_1x, arrow, size=ARROW_SIZE_1X, center=ARROW_CENTER_1X)
@@ -87,9 +97,16 @@ def build_background(arrow_source: Path = ARROW_SOURCE, dest: Path = TIFF_DEST) 
 
 
 def main() -> None:
-    if not ARROW_SOURCE.is_file():
-        raise SystemExit(f"Missing arrow asset: {ARROW_SOURCE}")
-    path = build_background()
+    parser = argparse.ArgumentParser(description="Build DMG background TIFF from arrow PNG")
+    parser.add_argument("--arrow", type=Path, default=DEFAULT_ARROW)
+    parser.add_argument("--dest", type=Path, default=DEFAULT_DEST)
+    parser.add_argument("--icc-source", type=Path, default=DEFAULT_ICC_SOURCE)
+    args = parser.parse_args()
+
+    if not args.arrow.is_file():
+        raise SystemExit(f"Missing arrow asset: {args.arrow}")
+
+    path = build_background(args.arrow, args.dest, icc_source=args.icc_source)
     with Image.open(path) as im:
         for i in range(im.n_frames):
             im.seek(i)

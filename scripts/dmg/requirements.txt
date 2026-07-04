@@ -1,0 +1,4 @@
+# Dev-only deps for scripts/dmg/build_background.py (not used by ELG CI).
+numpy
+tifffile
+Pillow
