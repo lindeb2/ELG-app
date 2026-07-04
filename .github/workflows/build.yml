@@ -226,7 +226,7 @@ jobs:
       - run: |
           mkdir -p dist-installers
           tar -C build/linux-x64/main.dist -czf \
-            "dist-installers/ELG-app-${{ env.APP_VERSION }}-linux-x64.tar.gz" .
+            "dist-installers/ELG.tar.gz" .
       - uses: actions/upload-artifact@v4
         with:
           name: ELG-app-linux-x64

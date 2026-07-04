@@ -24,7 +24,11 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 OutputDir=..\..\dist-installers
-OutputBaseFilename=ELG-app-{#MyAppVersion}-win-{#MyAppArch}
+#if MyAppArch == "arm64"
+OutputBaseFilename=ELG-arm64
+#else
+OutputBaseFilename=ELG
+#endif
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
