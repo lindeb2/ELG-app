@@ -179,12 +179,13 @@ jobs:
           create-dmg \
             --volname "ELG" \
             --background "installer/macos/background.tiff" \
-            --window-size 512 320 \
-            --icon-size 128 \
-            --text-size 16 \
-            --icon "ELG.app" 100 132 \
+            --window-pos 100 100 \
+            --window-size 512 342 \
+            --icon-size 96 \
+            --text-size 12 \
+            --icon "ELG.app" 140 175 \
             --hide-extension "ELG.app" \
-            --app-drop-link 356 132 \
+            --app-drop-link 372 175 \
             --no-internet-enable \
             "dist-installers/ELG.dmg" \
             "$STAGING/"

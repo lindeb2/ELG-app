@@ -2,8 +2,7 @@
 
 Discord-style layout: white canvas, centered arrow only (no logo).
 Page 1 is 512x320 (1x), page 2 is 1024x640 (2x), both at 96 DPI.
-The arrow is drawn at native size per page (64px / 128px), aligned with
-the icon row used by create-dmg in the macOS CI workflow.
+Coordinates match the Discord .DS_Store layout used in CI.
 
 Run after changing the arrow asset:
 
@@ -19,13 +18,15 @@ ROOT = Path(__file__).resolve().parents[1]
 ARROW_SOURCE = ROOT / "src" / "ELG Studio .dmg background arrow.png"
 TIFF_DEST = ROOT / "installer" / "macos" / "background.tiff"
 
+# Discord background TIFF size (window client area; Finder window is 512x342).
 CANVAS_1X = (512, 320)
 CANVAS_2X = (1024, 640)
-ARROW_SIZE_1X = 64
-ARROW_SIZE_2X = 128
-# Matches create-dmg icon Y (132) + half of 128px icon size.
-ARROW_CENTER_1X = (256, 196)
-ARROW_CENTER_2X = (512, 392)
+ARROW_SIZE_1X = 32
+ARROW_SIZE_2X = 64
+# Midpoint between Discord icon anchors (140, 175) and (372, 175); y matches
+# Discord's arrow row on the 512x320 background image.
+ARROW_CENTER_1X = (256, 160)
+ARROW_CENTER_2X = (512, 320)
 DPI = (96, 96)
 
 
@@ -80,7 +81,7 @@ def main() -> None:
     print(
         f"Wrote {path} ({CANVAS_1X[0]}x{CANVAS_1X[1]} + "
         f"{CANVAS_2X[0]}x{CANVAS_2X[1]} @ {DPI[0]} DPI, "
-        f"arrow {ARROW_SIZE_1X}px/{ARROW_SIZE_2X}px)"
+        f"arrow {ARROW_SIZE_1X}px/{ARROW_SIZE_2X}px @ {ARROW_CENTER_1X})"
     )
 
 
