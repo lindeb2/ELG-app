@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# Build a styled ELG.dmg using Discord's Finder layout (.DS_Store template).
+# Build ELG.dmg with Finder styling via create-dmg (AppleScript on mounted volume).
+#
+# A copied .DS_Store is not enough: backgroundImageAlias stores volume-specific file
+# IDs. Finder only applies icon positions and backgrounds when that alias resolves
+# on the live mounted DMG. create-dmg mounts the image and runs AppleScript so
+# Finder writes a fresh .DS_Store for this volume.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -7,47 +12,33 @@ APP_PATH="${1:-$ROOT/build/macos-arm64/ELG.app}"
 STAGING="${RUNNER_TEMP:-/tmp}/elg-dmg-staging"
 DMG_OUT="$ROOT/dist-installers/ELG.dmg"
 BACKGROUND="$ROOT/installer/macos/background.tiff"
-DS_STORE="$ROOT/installer/macos/.DS_Store"
 
 python "$ROOT/scripts/build_dmg_background.py"
-python "$ROOT/scripts/patch_dmg_ds_store.py"
 
-rm -rf "$STAGING"
-mkdir -p "$STAGING/.background" "$ROOT/dist-installers"
-
-cp -R "$APP_PATH" "$STAGING/"
-ln -sf /Applications "$STAGING/Applications"
-cp "$BACKGROUND" "$STAGING/.background/background.tiff"
-cp "$DS_STORE" "$STAGING/.DS_Store"
-
-# Immutable flags on signed bundles break hdiutil on Sonoma+.
-if command -v chflags >/dev/null 2>&1; then
-  chflags -R nouchg "$STAGING" 2>/dev/null || true
+if ! command -v create-dmg >/dev/null 2>&1; then
+  echo "create-dmg not found; install with: brew install create-dmg" >&2
+  exit 1
 fi
 
-rm -f "$DMG_OUT"
+rm -rf "$STAGING"
+mkdir -p "$STAGING" "$ROOT/dist-installers"
+cp -R "$APP_PATH" "$STAGING/"
 
-create_dmg() {
-  # APFS is required on macOS 26 runners; HFS+ create/attach fails with
-  # "Operation not permitted" / "no mountable file systems".
-  hdiutil create \
-    -volname "ELG" \
-    -srcfolder "$STAGING" \
-    -ov \
-    -format UDZO \
-    -fs APFS \
-    -imagekey zlib-level=9 \
-    "$DMG_OUT"
-}
+create-dmg \
+  --volname "ELG" \
+  --background "$BACKGROUND" \
+  --window-pos 100 100 \
+  --window-size 512 342 \
+  --icon-size 128 \
+  --text-size 12 \
+  --icon "ELG.app" 140 160 \
+  --hide-extension "ELG.app" \
+  --app-drop-link 372 160 \
+  --filesystem APFS \
+  --format UDZO \
+  --no-internet-enable \
+  --overwrite \
+  "$DMG_OUT" \
+  "$STAGING/"
 
-for attempt in 1 2 3 4 5; do
-  if create_dmg; then
-    echo "Wrote $DMG_OUT"
-    exit 0
-  fi
-  echo "hdiutil create failed (attempt $attempt/5), retrying..." >&2
-  sleep $((attempt * 3))
-done
-
-echo "hdiutil create failed after 5 attempts" >&2
-exit 1
+echo "Wrote $DMG_OUT"

@@ -169,6 +169,7 @@ jobs:
           src/main.py
       - run: mv "build/macos-arm64/main.app" "build/macos-arm64/ELG.app"
       - run: codesign --force --deep --sign - "build/macos-arm64/ELG.app"
+      - run: brew install create-dmg
       - run: bash scripts/build_elg_dmg.sh "build/macos-arm64/ELG.app"
       - uses: actions/upload-artifact@v4
         with:
