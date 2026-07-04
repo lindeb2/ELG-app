@@ -168,27 +168,8 @@ jobs:
           --include-data-files=src/runtime_secrets.py=runtime_secrets.py
           src/main.py
       - run: mv "build/macos-arm64/main.app" "build/macos-arm64/ELG.app"
-      - run: python scripts/build_dmg_background.py
-      - run: brew install create-dmg
       - run: codesign --force --deep --sign - "build/macos-arm64/ELG.app"
-      - run: |
-          STAGING="build/macos-arm64/dmg-staging"
-          rm -rf "$STAGING"
-          mkdir -p "$STAGING" dist-installers
-          cp -R "build/macos-arm64/ELG.app" "$STAGING/"
-          create-dmg \
-            --volname "ELG" \
-            --background "installer/macos/background.tiff" \
-            --window-pos 100 100 \
-            --window-size 512 342 \
-            --icon-size 96 \
-            --text-size 12 \
-            --icon "ELG.app" 140 175 \
-            --hide-extension "ELG.app" \
-            --app-drop-link 372 175 \
-            --no-internet-enable \
-            "dist-installers/ELG.dmg" \
-            "$STAGING/"
+      - run: bash scripts/build_elg_dmg.sh "build/macos-arm64/ELG.app"
       - uses: actions/upload-artifact@v4
         with:
           name: ELG-app-macos-arm64

@@ -1,33 +1,39 @@
 """Build the multi-page DMG background TIFF from the arrow PNG.
 
-Discord-style layout: white canvas, centered arrow only (no logo).
-Page 1 is 512x320 (1x), page 2 is 1024x640 (2x), both at 96 DPI.
-Coordinates match the Discord .DS_Store layout used in CI.
-
-Run after changing the arrow asset:
-
-    python scripts/build_dmg_background.py
+Matches Discord's background.tiff metadata:
+- page 0: 512x320 RGBA @ 72 DPI (+ sRGB ICC profile)
+- page 1: 1024x640 RGB @ 144 DPI
 """
 from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
+import tifffile
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 ARROW_SOURCE = ROOT / "src" / "ELG Studio .dmg background arrow.png"
 TIFF_DEST = ROOT / "installer" / "macos" / "background.tiff"
+ICC_SOURCE = ROOT / "Temp" / "Discord_background.tiff"
 
-# Discord background TIFF size (window client area; Finder window is 512x342).
 CANVAS_1X = (512, 320)
 CANVAS_2X = (1024, 640)
 ARROW_SIZE_1X = 32
 ARROW_SIZE_2X = 64
-# Midpoint between Discord icon anchors (140, 175) and (372, 175); y matches
-# Discord's arrow row on the 512x320 background image.
 ARROW_CENTER_1X = (256, 160)
 ARROW_CENTER_2X = (512, 320)
-DPI = (96, 96)
+DPI_1X = (72.0, 72.0)
+DPI_2X = (144.0, 144.0)
+ICC_TAG = 34675
+
+
+def _icc_profile() -> bytes | None:
+    if not ICC_SOURCE.is_file():
+        return None
+    with Image.open(ICC_SOURCE) as ref:
+        ref.seek(0)
+        return ref.info.get("icc_profile")
 
 
 def _paste_centered_arrow(
@@ -45,32 +51,38 @@ def _paste_centered_arrow(
 
 def build_background(arrow_source: Path = ARROW_SOURCE, dest: Path = TIFF_DEST) -> Path:
     arrow = Image.open(arrow_source).convert("RGBA")
+    icc = _icc_profile()
 
-    canvas_1x = Image.new("RGB", CANVAS_1X, "white")
-    _paste_centered_arrow(
-        canvas_1x,
-        arrow,
-        size=ARROW_SIZE_1X,
-        center=ARROW_CENTER_1X,
-    )
+    page_1x = Image.new("RGBA", CANVAS_1X, (255, 255, 255, 255))
+    _paste_centered_arrow(page_1x, arrow, size=ARROW_SIZE_1X, center=ARROW_CENTER_1X)
 
-    canvas_2x = Image.new("RGB", CANVAS_2X, "white")
-    _paste_centered_arrow(
-        canvas_2x,
-        arrow,
-        size=ARROW_SIZE_2X,
-        center=ARROW_CENTER_2X,
-    )
+    page_2x = Image.new("RGB", CANVAS_2X, "white")
+    _paste_centered_arrow(page_2x, arrow, size=ARROW_SIZE_2X, center=ARROW_CENTER_2X)
 
     dest.parent.mkdir(parents=True, exist_ok=True)
-    canvas_1x.save(
-        dest,
-        format="TIFF",
-        save_all=True,
-        append_images=[canvas_2x],
-        compression="tiff_lzw",
-        dpi=DPI,
-    )
+
+    page0 = np.asarray(page_1x)
+    page1 = np.asarray(page_2x)
+    extratags = [(ICC_TAG, "B", None, icc, True)] if icc else None
+
+    with tifffile.TiffWriter(dest) as writer:
+        writer.write(
+            page0,
+            compression="zlib",
+            photometric="rgb",
+            extrasamples=[tifffile.EXTRASAMPLE.UNASSALPHA],
+            resolution=(DPI_1X[0], DPI_1X[1]),
+            resolutionunit="INCH",
+            extratags=extratags,
+        )
+        writer.write(
+            page1,
+            compression="zlib",
+            photometric="rgb",
+            resolution=(DPI_2X[0], DPI_2X[1]),
+            resolutionunit="INCH",
+        )
+
     return dest
 
 
@@ -78,11 +90,11 @@ def main() -> None:
     if not ARROW_SOURCE.is_file():
         raise SystemExit(f"Missing arrow asset: {ARROW_SOURCE}")
     path = build_background()
-    print(
-        f"Wrote {path} ({CANVAS_1X[0]}x{CANVAS_1X[1]} + "
-        f"{CANVAS_2X[0]}x{CANVAS_2X[1]} @ {DPI[0]} DPI, "
-        f"arrow {ARROW_SIZE_1X}px/{ARROW_SIZE_2X}px @ {ARROW_CENTER_1X})"
-    )
+    with Image.open(path) as im:
+        for i in range(im.n_frames):
+            im.seek(i)
+            print(f"page {i}: {im.size} {im.mode} dpi={im.info.get('dpi')}")
+    print(f"Wrote {path}")
 
 
 if __name__ == "__main__":
