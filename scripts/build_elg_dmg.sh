@@ -23,6 +23,7 @@ fi
 rm -rf "$STAGING"
 mkdir -p "$STAGING" "$ROOT/dist-installers"
 cp -R "$APP_PATH" "$STAGING/"
+rm -f "$DMG_OUT"
 
 create-dmg \
   --volname "ELG" \
@@ -37,7 +38,6 @@ create-dmg \
   --filesystem APFS \
   --format UDZO \
   --no-internet-enable \
-  --overwrite \
   "$DMG_OUT" \
   "$STAGING/"
 
