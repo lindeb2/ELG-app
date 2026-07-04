@@ -182,9 +182,9 @@ jobs:
             --window-size 512 320 \
             --icon-size 128 \
             --text-size 16 \
-            --icon "ELG.app" 100 175 \
+            --icon "ELG.app" 100 132 \
             --hide-extension "ELG.app" \
-            --app-drop-link 356 175 \
+            --app-drop-link 356 132 \
             --no-internet-enable \
             "dist-installers/ELG.dmg" \
             "$STAGING/"

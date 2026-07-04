@@ -4,6 +4,8 @@
 # nuitka-project: --include-package-data=customtkinter
 # nuitka-project: --include-package-data=tzdata
 # nuitka-project: --include-package-data=pystray
+# nuitka-project: --include-package-data=certifi
+# nuitka-project: --include-package=certifi
 # nuitka-project: --nofollow-import-to=tkinter.test
 # nuitka-project: --company-name=ELG Studio
 # nuitka-project: --product-name=ELG
