@@ -18,3 +18,4 @@ installer/macos/DS_Store.reference
 temp*
 config.json
 src/runtime_secrets.py
+src/_version.py

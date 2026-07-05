@@ -6,3 +6,4 @@ Pillow
 platformdirs
 certifi
 tzdata
+packaging

@@ -11,7 +11,10 @@ from app_config import (
     write_config,
 )
 from app_preferences_ui import AppBehaviorPreferencesPanel
+from app_update import format_last_checked, load_pending_update
+from app_version import current_version
 from platform_keys import primary_modifier_label
+from update_dialog import show_update_dialog
 from session_guard import confirm_discard_session, has_unlogged_time
 
 
@@ -95,6 +98,60 @@ class SettingsFrame(ctk.CTkFrame):
         self._discard_btn.grid(row=row, column=0, padx=12, pady=(0, 20), sticky="w")
         row += 1
 
+        ctk.CTkLabel(scroll, text="Updates", font=("Arial", 16, "bold"), anchor="w").grid(
+            row=row, column=0, padx=12, pady=(0, 8), sticky="ew"
+        )
+        row += 1
+
+        self._version_label = ctk.CTkLabel(
+            scroll,
+            text=f"Version: {current_version()}",
+            anchor="w",
+        )
+        self._version_label.grid(row=row, column=0, padx=12, pady=(0, 8), sticky="ew")
+        row += 1
+
+        self._include_prereleases_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            scroll,
+            text="Include pre-releases",
+            variable=self._include_prereleases_var,
+        ).grid(row=row, column=0, padx=12, pady=(0, 8), sticky="w")
+        row += 1
+
+        self._last_checked_label = ctk.CTkLabel(
+            scroll,
+            text="Last checked: Never",
+            anchor="w",
+            text_color="#B0B0B0",
+        )
+        self._last_checked_label.grid(row=row, column=0, padx=12, pady=(0, 8), sticky="ew")
+        row += 1
+
+        self._pending_label = ctk.CTkLabel(
+            scroll,
+            text="",
+            anchor="w",
+            text_color="#B0B0B0",
+        )
+        self._pending_label.grid(row=row, column=0, padx=12, pady=(0, 8), sticky="ew")
+        row += 1
+
+        self._install_update_btn = ctk.CTkButton(
+            scroll,
+            text="Install update",
+            command=self._install_pending_update,
+        )
+        self._install_update_btn.grid(row=row, column=0, padx=12, pady=(0, 8), sticky="w")
+        row += 1
+
+        ctk.CTkButton(
+            scroll,
+            text="Check for updates",
+            command=self._check_for_updates,
+        ).grid(row=row, column=0, padx=12, pady=(0, 20), sticky="w")
+        row += 1
+
         ctk.CTkButton(scroll, text="Save", command=self._save).grid(
             row=row, column=0, padx=12, pady=(0, 8), sticky="w"
         )
@@ -137,13 +194,68 @@ class SettingsFrame(ctk.CTkFrame):
         self._notifications_var.set(bool(config.get("notifications_enabled", True)))
         self._behavior_panel.load_from(app_prefs)
         self._ctrl_r_reload_var.set(bool(app_prefs.get("enable_ctrl_r_reload", False)))
+        self._include_prereleases_var.set(bool(app_prefs.get("include_prereleases", False)))
+        self._last_checked_label.configure(
+            text=f"Last checked: {format_last_checked(app_prefs.get('last_update_check_at'))}"
+        )
+        self._version_label.configure(text=f"Version: {current_version()}")
+        self.refresh_update_controls()
         self.refresh_session_controls()
+
+    def refresh_update_controls(self) -> None:
+        release = load_pending_update()
+        if release is None:
+            self._pending_label.configure(text="")
+            self._install_update_btn.grid_remove()
+            return
+        self._pending_label.configure(text=f"Update {release.version} is ready to install.")
+        self._install_update_btn.grid()
+        self._install_update_btn.configure(state="normal")
+
+    def _install_pending_update(self) -> None:
+        release = load_pending_update()
+        if release is None:
+            self.refresh_update_controls()
+            self._status_label.configure(text="No pending update.", text_color="#FF4444")
+            return
+        if self._shell is None:
+            return
+        show_update_dialog(
+            self.winfo_toplevel(),
+            release,
+            shell=self._shell,
+            instance_guard=getattr(self._shell, "_instance_guard", None),
+        )
+
+    def _check_for_updates(self) -> None:
+        if self._shell is None or self._shell._manual_update_check is None:
+            self._status_label.configure(
+                text="Update checks are unavailable.",
+                text_color="#FF4444",
+            )
+            return
+
+        self._status_label.configure(text="Checking for updates…", text_color="#B0B0B0")
+
+        def on_status(message: str, color: str) -> None:
+            self._status_label.configure(text=message, text_color=color)
+            config = read_config()
+            app_prefs = app_preferences_from_config(config)
+            self._last_checked_label.configure(
+                text=f"Last checked: {format_last_checked(app_prefs.get('last_update_check_at'))}"
+            )
+            self.refresh_update_controls()
+            if color == "#00AD00":
+                self.after(2500, lambda: self._status_label.configure(text=""))
+
+        self._shell._manual_update_check(on_status)
 
     def _save(self) -> None:
         config = read_config()
 
         app_prefs = self._behavior_panel.values()
         app_prefs["enable_ctrl_r_reload"] = bool(self._ctrl_r_reload_var.get())
+        app_prefs["include_prereleases"] = bool(self._include_prereleases_var.get())
 
         config["user"] = self._username_entry.get().strip()
         config["discordname"] = self._discord_entry.get().strip()

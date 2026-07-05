@@ -32,6 +32,8 @@ OutputBaseFilename=ELG
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
+AppMutex=Local\ELG_SingleInstance_v1
+CloseApplications=force
 #if MyAppArch == "arm64"
 ArchitecturesAllowed=arm64
 ArchitecturesInstallIn64BitMode=arm64

@@ -51,7 +51,7 @@
    - [X]  Disable OS to shut down
    - [X]  Minimize app to system tray on close?
    - [X]  Icon
-   - [ ]  Auto-update
+   - [X]  Auto-update
 - [ ]  Logic if new week
 - [ ]  Auto log and record during meetings
 - [ ]  Implement Color Themes

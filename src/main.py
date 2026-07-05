@@ -38,8 +38,10 @@ import customtkinter as ctk
 import timetable_db
 from app_config import app_preferences_from_config, read_config
 from app_shell import AppShell
+from app_update import schedule_automatic_checks
 from setup_window import SetupFrame
 from single_instance import SingleInstanceGuard
+from update_dialog import show_update_dialog
 from window_chrome import (
     apply_app_title_bar_chrome,
     configure_app_icon,
@@ -121,6 +123,43 @@ def _finish_setup(root: ctk.CTk, setup: SetupFrame, shell: AppShell) -> None:
     shell.mount_initial_view()
 
 
+def _start_update_scheduler(
+    root: ctk.CTk,
+    shell_holder: dict[str, AppShell | None],
+    instance_guard: SingleInstanceGuard,
+) -> None:
+    def show_update(release, *, force: bool = False) -> None:
+        shell = shell_holder.get("shell")
+        if shell is None:
+            return
+        show_update_dialog(
+            shell._window,
+            release,
+            shell=shell,
+            instance_guard=instance_guard,
+            force=force,
+        )
+
+    manual_check = schedule_automatic_checks(
+        root,
+        shell_holder=shell_holder,
+        instance_guard=instance_guard,
+        show_dialog=lambda release, force=False: show_update(release, force=force),
+        on_pending_changed=lambda: _refresh_pending_ui(shell_holder),
+    )
+    shell = shell_holder.get("shell")
+    if shell is not None:
+        shell.set_manual_update_check(manual_check)
+        shell.set_instance_guard(instance_guard)
+        shell.refresh_settings_update_controls()
+
+
+def _refresh_pending_ui(shell_holder: dict[str, AppShell | None]) -> None:
+    shell = shell_holder.get("shell")
+    if shell is not None:
+        shell.refresh_settings_update_controls()
+
+
 def main() -> None:
     args = _parse_args()
 
@@ -183,9 +222,13 @@ def main() -> None:
         shell.grid(row=0, column=0, sticky="nsew")
         shell_holder["shell"] = shell
 
+        def _on_setup_complete() -> None:
+            _finish_setup(root, setup, shell)
+            _start_update_scheduler(root, shell_holder, instance_guard)
+
         setup = SetupFrame(
             container,
-            on_complete=lambda: _finish_setup(root, setup, shell),
+            on_complete=_on_setup_complete,
         )
         setup.grid(row=0, column=0, sticky="nsew")
         setup.tkraise()
@@ -197,16 +240,17 @@ def main() -> None:
 
         root.after(0, _preload)
     else:
-        root.after(
-            0,
-            lambda: _mount_app_shell(
+        def _mount_and_schedule() -> None:
+            _mount_app_shell(
                 root,
                 container,
                 shell_holder,
                 initial_view=initial_view,
                 start_minimized_to_tray=start_minimized,
-            ),
-        )
+            )
+            _start_update_scheduler(root, shell_holder, instance_guard)
+
+        root.after(0, _mount_and_schedule)
 
     if sys.platform.startswith("win") and _map_on_start:
         root.after(0, lambda: (apply_app_title_bar_chrome(root), root.deiconify()))

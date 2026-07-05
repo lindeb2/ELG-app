@@ -141,6 +141,8 @@ class AppShell(tk.Frame):
             should_block=lambda: has_unlogged_time(self.get_timetable()),
         )
         self._ctrl_r_bound = False
+        self._manual_update_check: Callable | None = None
+        self._instance_guard = None
         self._sidebar_visible = True
         self._sidebar_before_fullscreen: bool | None = None
         self._widget_mode = False
@@ -217,6 +219,18 @@ class AppShell(tk.Frame):
     def set_app_preferences(self, app_prefs: dict) -> None:
         self._app_prefs = dict(app_prefs)
         self._sync_ctrl_r_binding()
+
+    def set_manual_update_check(self, callback: Callable | None) -> None:
+        self._manual_update_check = callback
+
+    def set_instance_guard(self, guard) -> None:
+        self._instance_guard = guard
+
+    def refresh_settings_update_controls(self) -> None:
+        settings_host = self._frames.get("settings")
+        settings = self._view_child(settings_host)
+        if settings is not None and hasattr(settings, "refresh_update_controls"):
+            settings.refresh_update_controls()
 
     def get_timetable(self) -> TimetableFrame | None:
         host = self._frames.get("timetable")
@@ -797,8 +811,11 @@ class AppShell(tk.Frame):
             self._set_stats_refresh_active(True)
         if name == "settings":
             settings = self._view_child(self._frames.get("settings"))
-            if settings is not None and hasattr(settings, "refresh_session_controls"):
-                settings.refresh_session_controls()
+            if settings is not None:
+                if hasattr(settings, "refresh_session_controls"):
+                    settings.refresh_session_controls()
+                if hasattr(settings, "refresh_update_controls"):
+                    settings.refresh_update_controls()
 
         if update_geometry:
             self._apply_window_geometry()

@@ -51,18 +51,33 @@ jobs:
           path = Path("src/runtime_secrets.py")
           path.write_text("\n".join(lines) + "\n", encoding="utf-8")
           print(f"Wrote {path} with {len(names)} secrets")
+      - name: Write app version
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          printf '__version__ = "%s"\n' "$VERSION" > src/_version.py
+          cat src/_version.py
       - run: pip install -r requirements.txt nuitka
       - run: >
           python -m nuitka --output-dir=build/win-x64 --msvc=latest
           --product-version=${{ env.NUITKA_VERSION }}
           --include-data-files=src/runtime_secrets.py=runtime_secrets.py
+          --include-data-files=src/_version.py=_version.py
           src/main.py
       - name: Compile Inno Setup installer
         run: iscc /DMyAppVersion=${{ env.APP_VERSION }} /DMyAppArch=x64 installer\windows\ELG-app.iss
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cd dist-installers
+          sha256sum *.exe > checksums.txt
+          cat checksums.txt
       - uses: actions/upload-artifact@v4
         with:
           name: ELG-app-win-x64
-          path: dist-installers/*.exe
+          path: |
+            dist-installers/*.exe
+            dist-installers/checksums.txt
 
   build-windows-arm64:
     runs-on: windows-11-arm
@@ -106,18 +121,33 @@ jobs:
           path = Path("src/runtime_secrets.py")
           path.write_text("\n".join(lines) + "\n", encoding="utf-8")
           print(f"Wrote {path} with {len(names)} secrets")
+      - name: Write app version
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          printf '__version__ = "%s"\n' "$VERSION" > src/_version.py
+          cat src/_version.py
       - run: pip install -r requirements.txt nuitka
       - run: >
           python -m nuitka --output-dir=build/win-arm64 --msvc=latest
           --product-version=${{ env.NUITKA_VERSION }}
           --include-data-files=src/runtime_secrets.py=runtime_secrets.py
+          --include-data-files=src/_version.py=_version.py
           src/main.py
       - name: Compile Inno Setup installer
         run: iscc /DMyAppVersion=${{ env.APP_VERSION }} /DMyAppArch=arm64 installer\windows\ELG-app.iss
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cd dist-installers
+          sha256sum *.exe > checksums.txt
+          cat checksums.txt
       - uses: actions/upload-artifact@v4
         with:
           name: ELG-app-win-arm64
-          path: dist-installers/*.exe
+          path: |
+            dist-installers/*.exe
+            dist-installers/checksums.txt
 
   build-macos-arm64:
     runs-on: macos-latest
@@ -161,20 +191,33 @@ jobs:
           path.write_text("\n".join(lines) + "\n", encoding="utf-8")
           print(f"Wrote {path} with {len(names)} secrets")
           PY
+      - name: Write app version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          printf '__version__ = "%s"\n' "$VERSION" > src/_version.py
+          cat src/_version.py
       - run: pip install -r requirements.txt nuitka
       - run: >
           python -m nuitka --output-dir=build/macos-arm64 --macos-target-arch=arm64
           --product-version=${{ env.NUITKA_VERSION }}
           --include-data-files=src/runtime_secrets.py=runtime_secrets.py
+          --include-data-files=src/_version.py=_version.py
           src/main.py
       - run: mv "build/macos-arm64/main.app" "build/macos-arm64/ELG.app"
       - run: codesign --force --deep --sign - "build/macos-arm64/ELG.app"
       - run: brew install create-dmg
       - run: bash scripts/build_elg_dmg.sh "build/macos-arm64/ELG.app"
+      - name: Generate checksums
+        run: |
+          cd dist-installers
+          shasum -a 256 *.dmg > checksums.txt
+          cat checksums.txt
       - uses: actions/upload-artifact@v4
         with:
           name: ELG-app-macos-arm64
-          path: dist-installers/*.dmg
+          path: |
+            dist-installers/*.dmg
+            dist-installers/checksums.txt
 
   build-linux-x64:
     runs-on: ubuntu-latest
@@ -217,20 +260,34 @@ jobs:
           path.write_text("\n".join(lines) + "\n", encoding="utf-8")
           print(f"Wrote {path} with {len(names)} secrets")
           PY
+      - name: Write app version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          printf '__version__ = "%s"\n' "$VERSION" > src/_version.py
+          cat src/_version.py
       - run: pip install -r requirements.txt nuitka
       - run: >
           python -m nuitka --output-dir=build/linux-x64
           --product-version=${{ env.NUITKA_VERSION }}
           --include-data-files=src/runtime_secrets.py=runtime_secrets.py
+          --include-data-files=src/_version.py=_version.py
+          --include-data-files=scripts/linux_apply_update.sh=linux_apply_update.sh
           src/main.py
       - run: |
           mkdir -p dist-installers
           tar -C build/linux-x64/main.dist -czf \
             "dist-installers/ELG.tar.gz" .
+      - name: Generate checksums
+        run: |
+          cd dist-installers
+          sha256sum *.tar.gz > checksums.txt
+          cat checksums.txt
       - uses: actions/upload-artifact@v4
         with:
           name: ELG-app-linux-x64
-          path: dist-installers/*.tar.gz
+          path: |
+            dist-installers/*.tar.gz
+            dist-installers/checksums.txt
 
   release:
     needs: [build-windows-x64, build-windows-arm64, build-macos-arm64, build-linux-x64]

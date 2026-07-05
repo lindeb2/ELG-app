@@ -16,6 +16,9 @@ DEFAULT_APP_PREFERENCES: dict = {
     "launch_minimized_to_tray": False,
     "startup_view": "timetable",
     "enable_ctrl_r_reload": False,
+    "include_prereleases": False,
+    "pending_update": None,
+    "last_update_check_at": None,
 }
 
 _STARTUP_REG_NAME = "ELG"
@@ -56,6 +59,17 @@ def normalize_app_preferences(app: dict | None) -> dict:
         merged["startup_view"] = startup_view
 
     merged["enable_ctrl_r_reload"] = bool(app.get("enable_ctrl_r_reload", False))
+
+    merged["include_prereleases"] = bool(app.get("include_prereleases", False))
+
+    pending = app.get("pending_update")
+    if isinstance(pending, dict) and pending.get("version"):
+        merged["pending_update"] = dict(pending)
+    else:
+        merged["pending_update"] = None
+
+    last_checked = app.get("last_update_check_at")
+    merged["last_update_check_at"] = str(last_checked) if last_checked else None
 
     if not merged["launch_at_startup"]:
         merged["launch_minimized_to_tray"] = False
