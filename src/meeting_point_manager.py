@@ -369,6 +369,16 @@ class MeetingPointManagerFrame(ctk.CTkFrame):
         else:
             self.add_button.configure(state="normal")
 
+    @staticmethod
+    def _click_targets_text_input(widget):
+        """True when the click is on an entry/segmented button (including inner tk widgets)."""
+        w = widget
+        while w is not None:
+            if isinstance(w, (ctk.CTkEntry, ctk.CTkSegmentedButton)):
+                return True
+            w = getattr(w, "master", None)
+        return False
+
     def _reset_focus_if_needed(self, event):
         if not self.winfo_ismapped():
             return
@@ -380,9 +390,7 @@ class MeetingPointManagerFrame(ctk.CTkFrame):
             w = getattr(w, "master", None)
         else:
             return
-        if ".!ctkentry" in str(widget):
-            return
-        if ".!ctksegmentedbutton" in str(widget):
+        if self._click_targets_text_input(widget):
             return
         self.focus_set()
         for attr_name in dir(self):
