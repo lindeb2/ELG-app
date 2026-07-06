@@ -21,6 +21,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError, NetworkTimeout, AutoReconnect
 
 from period_model import APP_TIMEZONE, format_highscore_date, to_local, utc_naive_after_calendar_days
+from format_time import format_time
 from timetable_db import (
     client,
     db,
@@ -60,21 +61,6 @@ STATUS_MEETING_WATCH_PIPELINE = [
                 "input": "$$field.k",
                 "regex": "^data\\.[^.]+\\.last_seen$",}}},}}},
             0,]},]}}},]
-
-def format_time(seconds):
-    """Converts seconds to MM:SS or HH:MM:SS."""
-    if not seconds:
-        return "00:00"
-    seconds = int(seconds)
-    hours = seconds // 3600
-    minutes = (seconds % 3600) // 60
-    seconds = seconds % 60
-    if hours >= 24:
-        return f"{hours} hours"
-    elif hours > 0:
-        return f"{hours}:{minutes:02d}:{seconds:02d}"
-    else:
-        return f"{minutes:02d}:{seconds:02d}"
 
 class MeetingFrame(ctk.CTkFrame):
     ### INIT ###

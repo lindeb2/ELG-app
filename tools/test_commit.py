@@ -9,7 +9,8 @@ from pathlib import Path
 
 import bson
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts" / "lib"))
+import _bootstrap  # noqa: F401, E402
 
 from commit_plan import (
     build_agg_update_ops,

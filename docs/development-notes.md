@@ -55,3 +55,4 @@
 - [X]  Logic if new week
 - [ ]  Auto log and record during meetings
 - [ ]  Implement Color Themes
+- [ ]  Notification settings

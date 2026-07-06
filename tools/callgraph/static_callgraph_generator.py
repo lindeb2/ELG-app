@@ -1,8 +1,12 @@
 import pyan
 import glob
 import os
+import sys
+from pathlib import Path
 
-PROJECT_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "scripts" / "lib"))
+import _bootstrap  # noqa: F401, E402
+PROJECT_PATH = str(Path(__file__).resolve().parents[2] / "src")
 
 # - "dot" = GraphViz format (kräver GraphViz för att visa)
 # - "svg" = SVG bild (kräver GraphViz installerat)

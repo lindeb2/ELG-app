@@ -4,17 +4,16 @@ import time
 from datetime import datetime, timedelta
 from commit_transaction import CommitTransactionManager, TXN_REFRESH_INTERVAL_MS
 from CTkStickyPlaceholderEntry import CTkStickyPlaceholderEntry
+from format_time import format_time
+from mongo_doc_lookup import week_bucket_from_agg, week_goals
 from notifications import (
     create_broken_records_notification,
     fetch_week_goal_context_at_start,
     format_end_message,
     format_start_message,
-    format_time,
     post_notification,
-    week_bucket_from_agg,
 )
 from period_model import to_local
-from stats_viewer import week_goals
 from timetable_db import aggregations, client, collection, db, get_user, status_meeting
 from utils import flash_error
 

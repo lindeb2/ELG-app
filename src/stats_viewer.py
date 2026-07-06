@@ -13,7 +13,9 @@ import customtkinter as ctk
 from zoneinfo import ZoneInfo
 
 from CtkSmartScrollableFrame import CtkSmartScrollableFrame
-from meeting_app import MeetingFrame, format_time
+from format_time import format_time
+from meeting_app import MeetingFrame
+from mongo_doc_lookup import _doc_lookup, week_bucket_from_agg, week_goals
 from period_model import (
     APP_TIMEZONE,
     PeriodKeys,
@@ -114,26 +116,6 @@ def fetch_highscores() -> dict | None:
     return aggregations.find_one({"_id": "Highscores"})
 
 
-def _doc_lookup(doc: dict, key: str | int):
-    """MongoDB subdocuments may use str or int keys."""
-    if not isinstance(doc, dict):
-        return None
-    candidates: list[str | int] = [key]
-    if isinstance(key, str) and key.isdigit():
-        ik = int(key)
-        candidates.extend([ik, key.zfill(2)])
-    elif isinstance(key, int):
-        candidates.extend([str(key), str(key).zfill(2)])
-    seen: set[str | int] = set()
-    for candidate in candidates:
-        if candidate in seen:
-            continue
-        seen.add(candidate)
-        if candidate in doc:
-            return doc[candidate]
-    return None
-
-
 def fetch_agg_doc(view: str, selected_user: str | None) -> dict | None:
     if view == VIEW_TEAM:
         doc_id = "Combined"
@@ -185,19 +167,6 @@ def lifetime_totals(agg: dict) -> dict:
     total_time = sum(int(y.get("time") or 0) for y in years.values())
     active_years = sum(1 for y in years.values() if int(y.get("time") or 0) > 0)
     return {"time": total_time, "active_years": active_years, "year_count": len(years)}
-
-
-def week_goals(goals_doc: dict, iso_year: str, iso_week: str) -> dict:
-    year_bucket = _doc_lookup(goals_doc, iso_year) or {}
-    result = _doc_lookup(year_bucket, iso_week)
-    return result if isinstance(result, dict) else {}
-
-
-def week_bucket_from_agg(agg: dict, iso_year: str, iso_week: str) -> dict:
-    year_bucket = _doc_lookup(agg.get("years") or {}, iso_year) or {}
-    weeks = year_bucket.get("weeks") if isinstance(year_bucket, dict) else {}
-    result = _doc_lookup(weeks or {}, iso_week)
-    return result if isinstance(result, dict) else {}
 
 
 def last_log_timestamp(for_user: str | None = None) -> datetime | None:

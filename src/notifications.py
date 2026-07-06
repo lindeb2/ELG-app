@@ -9,43 +9,12 @@ import requests
 
 from app_config import read_config
 from app_secrets import get_gae_url, get_notifications_secret
+from format_time import format_time
+from mongo_doc_lookup import week_bucket_from_agg, week_goals
 from period_model import add_calendar_days, as_utc, to_local
 from timetable_db import aggregations, collection, status_meeting
 
 NOTIFICATION_TYPES = frozenset({"session_start", "session_end", "records_broken"})
-
-
-def _doc_lookup(doc: dict, key: str | int):
-    if not isinstance(doc, dict):
-        return None
-    candidates: list[str | int] = [key]
-    if isinstance(key, str) and key.isdigit():
-        ik = int(key)
-        candidates.extend([ik, key.zfill(2)])
-    elif isinstance(key, int):
-        candidates.extend([str(key), str(key).zfill(2)])
-    seen: set[str | int] = set()
-    for candidate in candidates:
-        if candidate in seen:
-            continue
-        seen.add(candidate)
-        if candidate in doc:
-            return doc[candidate]
-    return None
-
-
-def week_goals(goals_doc: dict, iso_year: str, iso_week: str) -> dict:
-    year_bucket = _doc_lookup(goals_doc, iso_year) or {}
-    result = _doc_lookup(year_bucket, iso_week)
-    return result if isinstance(result, dict) else {}
-
-
-def week_bucket_from_agg(agg: dict, iso_year: str, iso_week: str) -> dict:
-    year_bucket = _doc_lookup(agg.get("years") or {}, iso_year) or {}
-    weeks = year_bucket.get("weeks") if isinstance(year_bucket, dict) else {}
-    result = _doc_lookup(weeks or {}, iso_week)
-    return result if isinstance(result, dict) else {}
-
 
 
 def load_notification_config() -> dict[str, Any]:
@@ -59,21 +28,6 @@ def load_notification_config() -> dict[str, Any]:
         "gae_url": get_gae_url(),
         "secret": get_notifications_secret(),
     }
-
-
-def format_time(seconds: int | float) -> str:
-    total = int(float(seconds or 0))
-    if total <= 0:
-        return "00:00"
-    hours = total // 3600
-    minutes = (total % 3600) // 60
-    secs = total % 60
-    if hours >= 24:
-        return f"{hours} hours"
-    if hours > 0:
-        return f"{hours}:{minutes:02d}:{secs:02d}"
-    return f"{minutes:02d}:{secs:02d}"
-
 
 
 def fetch_week_goal_context(username: str, iso_year: str, iso_week: str) -> dict[str, Any]:

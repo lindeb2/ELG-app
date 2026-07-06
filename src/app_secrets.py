@@ -4,17 +4,11 @@ from __future__ import annotations
 import importlib.util
 import os
 import sys
-from pathlib import Path
 from types import ModuleType
 
+from runtime_paths import _frozen_bundle_dir
+
 _rs: ModuleType | None = None
-
-
-def _frozen_bundle_dir() -> Path:
-    meipass = getattr(sys, "_MEIPASS", None)
-    if meipass:
-        return Path(meipass)
-    return Path(os.path.dirname(os.path.abspath(sys.executable)))
 
 
 def _load_runtime_secrets() -> ModuleType | None:

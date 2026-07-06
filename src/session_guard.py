@@ -6,7 +6,7 @@ from typing import Literal
 
 import customtkinter as ctk
 
-from notifications import format_time
+from format_time import format_time
 
 ExitChoice = Literal["cancel", "discard"]
 

@@ -3,7 +3,8 @@ import importlib
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "scripts" / "lib"))
+import _bootstrap  # noqa: F401, E402
 
 from pycallgraph2 import PyCallGraph, Config, GlobbingFilter
 from pycallgraph2.output import GraphvizOutput

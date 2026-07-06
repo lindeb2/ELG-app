@@ -21,6 +21,7 @@ from packaging.version import InvalidVersion, Version
 
 from app_config import app_preferences_from_config, merge_app_preferences, read_config, write_config
 from app_version import current_version, is_dev_build
+from runtime_paths import _frozen_bundle_dir
 from session_guard import has_unlogged_time, prompt_unlogged_exit
 
 GITHUB_REPO = "lindeb2/ELG-app"
@@ -54,13 +55,6 @@ class UpdateCheckResult:
     release: ReleaseInfo | None
     error: str | None = None
     up_to_date: bool = False
-
-
-def _frozen_bundle_dir() -> Path:
-    meipass = getattr(sys, "_MEIPASS", None)
-    if meipass:
-        return Path(meipass)
-    return Path(os.path.dirname(os.path.abspath(sys.executable)))
 
 
 def platform_asset_name() -> str:
