@@ -9,10 +9,12 @@ from app_secrets import get_mongodb_uri
 from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
 
+from runtime_paths import is_packaged_build
+
 
 def _mongodb_tls_ca_file() -> str:
     """Resolve CA bundle for TLS; Nuitka bundles certifi next to the executable."""
-    if getattr(sys, "frozen", False):
+    if is_packaged_build():
         bundled = Path(sys.executable).resolve().parent / "certifi" / "cacert.pem"
         if bundled.is_file():
             return str(bundled)

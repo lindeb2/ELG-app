@@ -21,7 +21,7 @@ from packaging.version import InvalidVersion, Version
 
 from app_config import app_preferences_from_config, merge_app_preferences, read_config, write_config
 from app_version import current_version, is_dev_build
-from runtime_paths import _frozen_bundle_dir
+from runtime_paths import bundle_dir, is_packaged_build
 from session_guard import has_unlogged_time, prompt_unlogged_exit
 
 GITHUB_REPO = "lindeb2/ELG-app"
@@ -343,7 +343,7 @@ def _apply_windows(installer_path: Path, *, instance_guard) -> None:
 
 
 def _linux_updater_script() -> Path:
-    bundled = _frozen_bundle_dir() / "linux_apply_update.sh"
+    bundled = bundle_dir() / "linux_apply_update.sh"
     if bundled.is_file():
         return bundled
 
@@ -403,7 +403,7 @@ def apply_update(
     shell=None,
     instance_guard=None,
 ) -> None:
-    if not getattr(sys, "frozen", False):
+    if not is_packaged_build():
         raise RuntimeError("Updates can only be applied from a packaged build.")
 
     if not confirm_update_allowed(shell):

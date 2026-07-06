@@ -5,6 +5,7 @@ import os
 import sys
 from typing import Literal
 
+from runtime_paths import is_packaged_build
 from storage import get_data_file, load_data, save_data
 
 CloseAction = Literal["tray", "exit"]
@@ -88,7 +89,7 @@ def merge_app_preferences(config: dict, app_prefs: dict) -> dict:
 
 
 def startup_command(*, minimized: bool) -> str:
-    if getattr(sys, "frozen", False):
+    if is_packaged_build():
         launch_target = f'"{sys.executable}"'
     else:
         python = sys.executable

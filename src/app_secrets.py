@@ -3,10 +3,9 @@ from __future__ import annotations
 
 import importlib.util
 import os
-import sys
 from types import ModuleType
 
-from runtime_paths import _frozen_bundle_dir
+from runtime_paths import bundle_dir, is_packaged_build
 
 _rs: ModuleType | None = None
 
@@ -25,8 +24,8 @@ def _load_runtime_secrets() -> ModuleType | None:
         _rs = runtime_secrets
         return _rs
 
-    if getattr(sys, "frozen", False):
-        path = _frozen_bundle_dir() / "runtime_secrets.py"
+    if is_packaged_build():
+        path = bundle_dir() / "runtime_secrets.py"
         if not path.is_file():
             return None
         spec = importlib.util.spec_from_file_location("runtime_secrets", path)

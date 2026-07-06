@@ -1,10 +1,10 @@
-"""Application release version (CI-baked in frozen builds)."""
+"""Application release version (CI-baked in packaged builds)."""
 from __future__ import annotations
 
 import importlib.util
 import sys
 
-from runtime_paths import _frozen_bundle_dir
+from runtime_paths import bundle_dir, is_packaged_build
 
 _DEV_VERSION = "0.0.0-dev"
 _version_cache: str | None = None
@@ -19,8 +19,8 @@ def _load_version_from_module() -> str | None:
     if _version is not None and hasattr(_version, "__version__"):
         return str(_version.__version__)
 
-    if getattr(sys, "frozen", False):
-        path = _frozen_bundle_dir() / "_version.py"
+    if is_packaged_build():
+        path = bundle_dir() / "_version.py"
         if path.is_file():
             spec = importlib.util.spec_from_file_location("_version", path)
             if spec is not None and spec.loader is not None:

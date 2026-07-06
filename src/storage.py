@@ -8,6 +8,8 @@ from pathlib import Path
 
 from platformdirs import user_data_dir
 
+from runtime_paths import is_packaged_build
+
 APP_NAME = "ELG-app"
 APP_AUTHOR = "ELG Studio"
 CURRENT_SCHEMA_VERSION = 1
@@ -48,7 +50,7 @@ def _legacy_config_paths() -> list[Path]:
     paths: list[Path] = []
     script_dir = Path(__file__).resolve().parent
     paths.append(script_dir.parent / "config.json")
-    if getattr(sys, "frozen", False):
+    if is_packaged_build():
         paths.append(Path(sys.executable).resolve().parent / "config.json")
     else:
         paths.append(Path.cwd() / "config.json")

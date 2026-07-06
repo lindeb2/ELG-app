@@ -38,7 +38,7 @@ _ICON_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def _resolve_app_icon_path() -> str:
-    """Single multi-size app icon: dist root when frozen, nuitka/icons in dev."""
+    """Single multi-size app icon: bundle dir when packaged, nuitka/icons in dev."""
     candidates = (
         os.path.join(_ICON_DIR, "elg.ico"),
         os.path.join(os.path.dirname(_ICON_DIR), "nuitka", "icons", "elg.ico"),
