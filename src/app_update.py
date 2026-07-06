@@ -330,7 +330,7 @@ def _apply_windows(installer_path: Path, *, instance_guard) -> None:
     subprocess.Popen(
         [
             str(installer_path),
-            "/VERYSILENT",
+            "/SILENT",
             "/SUPPRESSMSGBOXES",
             "/NORESTART",
             "/CLOSEAPPLICATIONS",

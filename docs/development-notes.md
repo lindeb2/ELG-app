@@ -21,6 +21,19 @@
 - [X]  S1 Highscore
 - [X]  Stats_viewer
 - [X]  Notification system
+- [X]  Logic if new week
+- [X]  Merge into one app
+   - [X]  Correct local data storage
+   - [X]  Integrate all parts
+   - [X]  Dry function calls between parts
+   - [X]  On close logic
+   - [X]  Windows topbar after maximized
+   - [X]  Sidebar gone at maximized
+   - [X]  Timetable widget
+   - [X]  Disable OS to shut down
+   - [X]  Minimize app to system tray on close?
+   - [X]  Icon
+   - [X]  Auto-update
 
 ## Moved to Issues
 - [ ]  `self.days_chart_data_row.bind("<Configure>", update_day_bars)`? (Moved to issue)
@@ -40,19 +53,6 @@
 ## To-Do
 - [ ]  DRY (Don't Repeat Yourself) / First runs
 - [ ]  Ponder: Args vs Instance variables
-- [ ]  Merge into one app
-   - [X]  Correct local data storage
-   - [X]  Integrate all parts
-   - [ ]  Dry function calls between parts
-   - [X]  On close logic
-   - [X]  Windows topbar after maximized
-   - [X]  Sidebar gone at maximized
-   - [X]  Timetable widget
-   - [X]  Disable OS to shut down
-   - [X]  Minimize app to system tray on close?
-   - [X]  Icon
-   - [X]  Auto-update
-- [X]  Logic if new week
 - [ ]  Auto log and record during meetings
 - [ ]  Implement Color Themes
 - [ ]  Notification settings
