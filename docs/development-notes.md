@@ -34,6 +34,8 @@
    - [X]  Minimize app to system tray on close?
    - [X]  Icon
    - [X]  Auto-update
+- [X]  Ponder: Args vs Instance variables
+- [X]  Notification settings
 
 ## Moved to Issues
 - [ ]  `self.days_chart_data_row.bind("<Configure>", update_day_bars)`? (Moved to issue)
@@ -51,8 +53,7 @@
    - [X]  Rework DB with ISODate instead of multiple fields
 
 ## To-Do
-- [ ]  DRY (Don't Repeat Yourself) / First runs
-- [ ]  Ponder: Args vs Instance variables
 - [ ]  Auto log and record during meetings
 - [ ]  Implement Color Themes
-- [ ]  Notification settings
+- [ ]  Improve settings
+- [ ]  Improve first-time wizard

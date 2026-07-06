@@ -13,6 +13,7 @@ from app_config import (
     write_config,
 )
 from app_preferences_ui import AppBehaviorPreferencesPanel
+from notification_preferences import NotificationPreferencesPanel, fetch_notification_prefs
 
 
 class SetupFrame(ctk.CTkFrame):
@@ -62,14 +63,19 @@ class SetupFrame(ctk.CTkFrame):
         self._discord_entry.insert(0, config.get("discordname") or "")
         row += 1
 
-        self._notifications_var = ctk.BooleanVar(
-            value=bool(config.get("notifications_enabled", True))
+        ctk.CTkLabel(scroll, text="Discord notifications", font=("Arial", 14, "bold"), anchor="w").grid(
+            row=row, column=0, padx=12, pady=(0, 8), sticky="ew"
         )
-        ctk.CTkCheckBox(
+        row += 1
+
+        username = config.get("user") or ""
+        self._notification_panel = NotificationPreferencesPanel(
             scroll,
-            text="Enable Discord notifications",
-            variable=self._notifications_var,
-        ).grid(row=row, column=0, padx=12, pady=(0, 20), sticky="w")
+            username=username,
+            prefs=fetch_notification_prefs(username),
+            compact=True,
+        )
+        self._notification_panel.grid(row=row, column=0, padx=12, pady=(0, 12), sticky="ew")
         row += 1
 
         ctk.CTkLabel(scroll, text="App behavior", font=("Arial", 16, "bold"), anchor="w").grid(
@@ -113,7 +119,6 @@ class SetupFrame(ctk.CTkFrame):
 
         config["user"] = username
         config["discordname"] = discordname
-        config["notifications_enabled"] = bool(self._notifications_var.get())
         app_prefs = self._behavior_panel.values()
         config = merge_app_preferences(config, app_prefs)
 
@@ -121,6 +126,13 @@ class SetupFrame(ctk.CTkFrame):
             write_config(config)
         except OSError as exc:
             self._error_label.configure(text=f"Could not save config: {exc}")
+            return
+
+        try:
+            self._notification_panel.username = username
+            self._notification_panel.save(username)
+        except Exception as exc:
+            self._error_label.configure(text=f"Could not save notification prefs: {exc}")
             return
 
         apply_startup_registration(

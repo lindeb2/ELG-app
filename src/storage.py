@@ -37,7 +37,6 @@ def _default_payload() -> dict:
     return {
         "user": "",
         "discordname": "",
-        "notifications_enabled": True,
         "app": dict(_DEFAULT_APP),
     }
 

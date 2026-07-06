@@ -15,6 +15,7 @@ from app_update import format_last_checked, load_pending_update
 from app_version import current_version
 from platform_keys import primary_modifier_label
 from update_dialog import show_update_dialog
+from notification_preferences import NotificationPreferencesPanel, fetch_notification_prefs
 from session_guard import confirm_discard_session, has_unlogged_time
 
 
@@ -58,12 +59,13 @@ class SettingsFrame(ctk.CTkFrame):
         self._discord_entry.grid(row=row, column=0, padx=12, pady=(0, 12), sticky="ew")
         row += 1
 
-        self._notifications_var = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(
-            scroll,
-            text="Enable Discord notifications",
-            variable=self._notifications_var,
-        ).grid(row=row, column=0, padx=12, pady=(0, 20), sticky="w")
+        ctk.CTkLabel(scroll, text="Discord notifications", font=("Arial", 16, "bold"), anchor="w").grid(
+            row=row, column=0, padx=12, pady=(0, 8), sticky="ew"
+        )
+        row += 1
+
+        self._notification_panel = NotificationPreferencesPanel(scroll, compact=True)
+        self._notification_panel.grid(row=row, column=0, padx=12, pady=(0, 20), sticky="ew")
         row += 1
 
         ctk.CTkLabel(scroll, text="App behavior", font=("Arial", 16, "bold"), anchor="w").grid(
@@ -191,7 +193,9 @@ class SettingsFrame(ctk.CTkFrame):
         self._discord_entry.delete(0, "end")
         self._discord_entry.insert(0, config.get("discordname") or "")
 
-        self._notifications_var.set(bool(config.get("notifications_enabled", True)))
+        username = config.get("user") or ""
+        self._notification_panel.username = username
+        self._notification_panel.load_from(fetch_notification_prefs(username))
         self._behavior_panel.load_from(app_prefs)
         self._ctrl_r_reload_var.set(bool(app_prefs.get("enable_ctrl_r_reload", False)))
         self._include_prereleases_var.set(bool(app_prefs.get("include_prereleases", False)))
@@ -257,9 +261,9 @@ class SettingsFrame(ctk.CTkFrame):
         app_prefs["enable_ctrl_r_reload"] = bool(self._ctrl_r_reload_var.get())
         app_prefs["include_prereleases"] = bool(self._include_prereleases_var.get())
 
-        config["user"] = self._username_entry.get().strip()
+        username = self._username_entry.get().strip()
+        config["user"] = username
         config["discordname"] = self._discord_entry.get().strip()
-        config["notifications_enabled"] = bool(self._notifications_var.get())
         config = merge_app_preferences(config, app_prefs)
 
         write_config(config)
@@ -270,6 +274,16 @@ class SettingsFrame(ctk.CTkFrame):
 
         if self._shell is not None:
             self._shell.set_app_preferences(app_prefs)
+
+        try:
+            self._notification_panel.username = username
+            self._notification_panel.save(username)
+        except Exception as exc:
+            self._status_label.configure(
+                text=f"Settings saved, but notification prefs failed: {exc}",
+                text_color="#FF4444",
+            )
+            return
 
         self._status_label.configure(text="Saved.", text_color="#00AD00")
         self.after(2500, lambda: self._status_label.configure(text=""))

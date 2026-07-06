@@ -19,14 +19,16 @@ NOTIFICATION_TYPES = frozenset({"session_start", "session_end", "records_broken"
 
 def load_notification_config() -> dict[str, Any]:
     try:
-        cfg = read_config()
+        read_config()
     except OSError:
-        return {"enabled": False, "gae_url": "", "secret": ""}
+        pass
 
+    gae_url = get_gae_url()
+    secret = get_notifications_secret()
     return {
-        "enabled": bool(cfg.get("notifications_enabled", True)),
-        "gae_url": get_gae_url(),
-        "secret": get_notifications_secret(),
+        "enabled": bool(gae_url and secret),
+        "gae_url": gae_url,
+        "secret": secret,
     }
 
 
@@ -266,7 +268,7 @@ def _post_notification_sync(
     print("===========================\n")
 
     if not config["enabled"]:
-        print("Notifications disabled (missing gae_url or secret in user data).")
+        print("Notifications unavailable (missing gae_url or secret).")
         return
 
     payload = {
