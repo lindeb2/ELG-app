@@ -47,13 +47,11 @@
    - [X]  On close logic
    - [X]  Windows topbar after maximized
    - [X]  Sidebar gone at maximized
-   - [X]  [Timetable widget](https://gemini.google.com/app/849f65b0762fd705)
+   - [X]  Timetable widget
    - [X]  Disable OS to shut down
    - [X]  Minimize app to system tray on close?
    - [X]  Icon
    - [X]  Auto-update
-- [ ]  Logic if new week
+- [X]  Logic if new week
 - [ ]  Auto log and record during meetings
 - [ ]  Implement Color Themes
-
-https://claude.ai/share/8466402d-f266-4cf3-b2e7-020d1bc208fa

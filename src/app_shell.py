@@ -271,10 +271,20 @@ class AppShell(tk.Frame):
         self.reload_current_view()
         return "break"
 
-    def reload_current_view(self) -> None:
-        name = self._active_view
-        if not name or name == "settings":
+    def reload_view(self, name: str) -> None:
+        """Destroy a view's frame. Rebuilds immediately if it's the active view;
+        otherwise just clears it so it rebuilds lazily on next navigation there."""
+        if name == "settings":
             return
+
+        if name != self._active_view:
+            host = self._frames.get(name)
+            if host is not None:
+                for child in list(host.winfo_children()):
+                    child.destroy()
+                self._frames[name] = None
+            return
+
         if self._widget_mode:
             self._exit_widget_mode(restore_view=False)
         host = self._frames.get(name)
@@ -283,6 +293,10 @@ class AppShell(tk.Frame):
                 child.destroy()
             self._frames[name] = None
         self._activate_view(name)
+
+    def reload_current_view(self) -> None:
+        if self._active_view:
+            self.reload_view(self._active_view)
 
     def _minimize_to_tray(self) -> None:
         self._tray.ensure_started()
@@ -889,6 +903,7 @@ class AppShell(tk.Frame):
             return self._square_host(
                 MeetingPointManagerFrame,
                 navigate_back=lambda: self.switch_view("timetable"),
+                shell=self,
             )
         raise ValueError(f"Unknown view: {name}")
 

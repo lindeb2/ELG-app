@@ -81,6 +81,8 @@ class MeetingFrame(ctk.CTkFrame):
         super().__init__(parent)
         self._window = self.winfo_toplevel()
         self._shell = shell
+        self._closed = threading.Event()
+        self.bind("<Destroy>", self._on_destroy, add="+")
 
         self.fullscreen = False
         self._init_complete = False
@@ -178,6 +180,16 @@ class MeetingFrame(ctk.CTkFrame):
     def _is_active(self) -> bool:
         return self.winfo_ismapped()
 
+    def _on_destroy(self, event):
+        if event.widget is not self:
+            return
+        self._closed.set()
+        for sequence, funcid in getattr(self, "_nav_key_bindings", []):
+            try:
+                self._window.unbind(sequence, funcid)
+            except Exception:
+                pass
+
     def _bind_navigation_keys(self) -> None:
         bindings = (
             ("<F11>", self.toggle_fullscreen),
@@ -188,8 +200,10 @@ class MeetingFrame(ctk.CTkFrame):
             ("<Up>", self._handle_up),
             ("<Down>", self._handle_down),
         )
-        for sequence, handler in bindings:
-            self._window.bind(sequence, self._wrap_keybind(handler), add="+")
+        self._nav_key_bindings = [
+            (sequence, self._window.bind(sequence, self._wrap_keybind(handler), add="+"))
+            for sequence, handler in bindings
+        ]
 
     def _wrap_keybind(self, handler):
         def wrapped(event):
@@ -278,7 +292,7 @@ class MeetingFrame(ctk.CTkFrame):
     def _run_watcher(self, collection, pipeline, callback, **watch_kwargs):
         resume_token = None
         ready_signalled = False
-        while True:
+        while not self._closed.is_set():
             # noinspection PyBroadException
             try:
                 with collection.watch(pipeline, resume_after=resume_token, **watch_kwargs) as stream:
@@ -289,9 +303,13 @@ class MeetingFrame(ctk.CTkFrame):
                                 self._watchers_ready_event.set()
                         ready_signalled = True
                     for change in stream:
+                        if self._closed.is_set():
+                            return
                         resume_token = stream.resume_token
                         callback(change)
             except Exception:
+                if self._closed.is_set():
+                    return
                 time.sleep(1)
 
     def status_meeting_watcher(self):
@@ -321,13 +339,13 @@ class MeetingFrame(ctk.CTkFrame):
         self._run_watcher(main_collection, pipeline, handle_timetable_change, full_document='updateLookup')
 
     def week_check(self):
-        while True:
+        while not self._closed.is_set():
             try:
                 if time.time() >= self.local_target_timestamp:
                     status_meeting_collection.update_one({"_id": "State"}, WEEK_PIPELINE)
             except Exception:
                 pass
-            time.sleep(1)
+            self._closed.wait(1)
 
     def _complete_initialization(self):
         with self._sync_lock:
@@ -424,10 +442,11 @@ class MeetingFrame(ctk.CTkFrame):
             self._shell.exit_meeting_fullscreen()
 
     def update_db(self):
-        while True:
+        while not self._closed.is_set():
+            if not self._update_event.wait(timeout=1.0):
+                continue
+            self._update_event.clear()
             try:
-                self._update_event.wait()
-                self._update_event.clear()
                 with self._lock:
                     current_buffer = self.update_buffer
                     self.update_buffer = {"slide": None, "goals": defaultdict(dict)}
@@ -615,9 +634,11 @@ class MeetingFrame(ctk.CTkFrame):
         self.after(0, getattr(self, f"_handle_{name}_change"), change)
 
     def update_presence(self):
-        while True:
+        while not self._closed.is_set():
             self._presence_update_event.wait(timeout=1.0)
             self._presence_update_event.clear()
+            if self._closed.is_set():
+                return
             slide_map = getattr(self, "slide_map", None)
             if slide_map and self.current_slide == slide_map.index(4) and getattr(self, "s4_in_input", False):
                 sel_user = self.s4_selected_user_var.get()  # type: ignore[attr-defined]
@@ -664,6 +685,9 @@ class MeetingFrame(ctk.CTkFrame):
                 self.show_slide(old_slide)
         if "week" in updated_fields:
             if self._update_if_changed('current_week_start', updated_fields["week"]):
+                if self._shell is not None:
+                    self._shell.reload_view("meeting")
+                    return
                 local_now = time.time()
                 server_time = change["clusterTime"].as_datetime().replace(tzinfo=None)
                 week_anchor = updated_fields["week"]
@@ -672,7 +696,6 @@ class MeetingFrame(ctk.CTkFrame):
                     utc_naive_after_calendar_days(next_week_start, 3) - server_time
                 ).total_seconds()
                 self.current_year, self.current_week, self.next_year, self.next_week = self._calculate_week_info()
-                # TODO: logic if new week
 
     def _handle_goals_change(self, _change):
         if not self._update_if_changed('_cached_next_week_goals', self.s4_fetch_goals(self.next_year, self.next_week)):

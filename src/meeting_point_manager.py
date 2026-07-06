@@ -48,9 +48,12 @@ class MeetingPointManagerFrame(ctk.CTkFrame):
             options.append((str(year), str(week)))
         return options
 
-    def __init__(self, parent, navigate_back):
+    def __init__(self, parent, navigate_back, shell=None):
         super().__init__(parent, fg_color=COLOR_BACKGROUND)
         self.navigate_back = navigate_back
+        self._shell = shell
+        self._closed = threading.Event()
+        self.bind("<Destroy>", self._on_destroy, add="+")
 
         # State variables
         self.in_edit_screen = False
@@ -97,23 +100,9 @@ class MeetingPointManagerFrame(ctk.CTkFrame):
         self.edit_screen.columnconfigure(0, weight=1)
 
         # --- Weeks in Editscreen ---
-        self.week_list_frames = []
-        def create_week_list_frame(year, week):
-            frame = CtkSmartScrollableFrame(self.edit_screen, corner_radius=0, fg_color=COLOR_BACKGROUND, scrollbar_button_color=COLOR_PRIMARY, scrollbar_button_hover_color=COLOR_HOVER)
-            frame.grid(row=0, column=0, sticky="nsew", padx=3, pady=2)
-            doc = status_meeting.find_one({"_id": "Discussion Points"})
-            points = doc.get(year, {}).get(week, []) if doc else []
-            # Only using place in a smartframe does not seem to work. Why? Who knows??? Anyway, this is a workaround.
-            frame.bug_fix_frame = ctk.CTkFrame(frame, height=len(points)*40, corner_radius=0, fg_color=COLOR_BACKGROUND, bg_color=COLOR_BACKGROUND)
-            frame.bug_fix_frame.pack()
-            frame.point_frames = []
-            for point in points:
-                self.create_point_label(frame, point) # type: ignore
-            self.week_list_frames.append(frame)
-            return frame
-
-        for year, week in self.week_options:
-            create_week_list_frame(year, week)
+        self.week_list_frames = [
+            self._build_week_list_frame(year, week) for year, week in self.week_options
+        ]
         self.week_list_frames[1].lift()
 
         # --- EditPointScreen ---
@@ -149,27 +138,87 @@ class MeetingPointManagerFrame(ctk.CTkFrame):
 
         threading.Thread(target=self.week_check, name="WeekSync", daemon=True).start()
 
+    def _build_week_list_frame(self, year, week):
+        frame = CtkSmartScrollableFrame(
+            self.edit_screen, corner_radius=0, fg_color=COLOR_BACKGROUND,
+            scrollbar_button_color=COLOR_PRIMARY, scrollbar_button_hover_color=COLOR_HOVER,
+        )
+        frame.grid(row=0, column=0, sticky="nsew", padx=3, pady=2)
+        doc = status_meeting.find_one({"_id": "Discussion Points"})
+        points = doc.get(year, {}).get(week, []) if doc else []
+        # Only using place in a smartframe does not seem to work. Why? Who knows??? Anyway, this is a workaround.
+        frame.bug_fix_frame = ctk.CTkFrame(
+            frame, height=len(points) * 40, corner_radius=0,
+            fg_color=COLOR_BACKGROUND, bg_color=COLOR_BACKGROUND,
+        )
+        frame.bug_fix_frame.pack()
+        frame.point_frames = []
+        for point in points:
+            self.create_point_label(frame, point) # type: ignore
+        return frame
+
+    def _on_destroy(self, event):
+        if event.widget is not self:
+            return
+        self._closed.set()
+        try:
+            self._app_root.unbind_all("<Button-1>")
+        except Exception:
+            pass
+
     def week_check(self):
-        while True:
+        while not self._closed.is_set():
             try:
                 if time.time() >= self.local_target_timestamp:
                     self._on_week_rollover_due()
             except Exception:
                 pass
-            time.sleep(1)
+            self._closed.wait(1)
 
     def _on_week_rollover_due(self):
+        """Runs on the background WeekSync thread — data only, no widget access."""
         try:
             server_time = self._fetch_server_time()
-            local_now = time.time()
-            current_week_anchor, next_week_start = self._week_bounds_from_server_time(server_time)
-            self.local_target_timestamp = local_now + (next_week_start - server_time).total_seconds()
-            if current_week_anchor != self.current_week_start:
-                self.current_week_start = current_week_anchor
-                self.next_week_start = next_week_start
-                # TODO: logic if new week
         except Exception:
-            pass
+            return
+        local_now = time.time()
+        current_week_anchor, next_week_start = self._week_bounds_from_server_time(server_time)
+        new_target = local_now + (next_week_start - server_time).total_seconds()
+
+        if current_week_anchor == self.current_week_start:
+            self.local_target_timestamp = new_target
+            return
+
+        self.after(0, self._apply_week_rollover, current_week_anchor, next_week_start, new_target)
+
+    def _apply_week_rollover(self, current_week_anchor, next_week_start, new_target):
+        """Runs on the Tk main thread."""
+        self.local_target_timestamp = new_target
+
+        expected_next_week = utc_naive_after_calendar_days(self.current_week_start, 7)
+        if self.selected_week_index == 0 or current_week_anchor != expected_next_week:
+            if self._shell is not None:
+                self._shell.reload_view("meeting_points")
+            return
+
+        self.current_week_start = current_week_anchor
+        self.next_week_start = next_week_start
+        self._rotate_week_slots(current_week_anchor)
+
+    def _rotate_week_slots(self, current_week_anchor):
+        new_options = self._week_options_from_anchor(current_week_anchor)
+
+        self.week_list_frames[0].destroy()
+
+        new_plus_one_year, new_plus_one_week = new_options[2]
+        fresh_frame = self._build_week_list_frame(new_plus_one_year, new_plus_one_week)
+
+        self.week_list_frames = [self.week_list_frames[1], self.week_list_frames[2], fresh_frame]
+        self.week_options = new_options
+        self.selected_week_index -= 1
+        self.selected_year_week = self.week_options[self.selected_week_index]
+        self.week_offset.set(["-1", "0", "+1"][self.selected_week_index])
+        self.week_list_frames[self.selected_week_index].lift()
 
     def show_edit_screen(self):
         self.edit_screen.lift()
