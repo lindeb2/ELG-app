@@ -10,7 +10,6 @@ import sys
 import tarfile
 import tempfile
 import threading
-import webbrowser
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -390,10 +389,8 @@ def _apply_linux(archive_path: Path, *, instance_guard) -> None:
     os._exit(0)
 
 
-def _apply_macos(release: ReleaseInfo) -> None:
-    asset_name = platform_asset_name()
-    url = release.assets.get(asset_name) or release.html_url
-    webbrowser.open(url)
+def _apply_macos(dmg_path: Path) -> None:
+    subprocess.Popen(["open", str(dmg_path)], start_new_session=True, close_fds=True)
 
 
 def apply_update(
@@ -414,7 +411,7 @@ def apply_update(
     elif sys.platform.startswith("linux"):
         _apply_linux(downloaded, instance_guard=instance_guard)
     elif sys.platform == "darwin":
-        _apply_macos(release)
+        _apply_macos(downloaded)
     else:
         raise RuntimeError(f"Unsupported platform: {sys.platform}")
 

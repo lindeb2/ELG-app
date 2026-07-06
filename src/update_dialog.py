@@ -70,7 +70,7 @@ class UpdateDialog(ctk.CTkToplevel):
         if sys.platform == "darwin":
             ctk.CTkLabel(
                 self,
-                text="Update now opens the .dmg download. Replace ELG.app in Applications after download.",
+                text="Update now downloads and opens the .dmg. Drag ELG.app into Applications to finish.",
                 font=("Arial", 12),
                 text_color="#B0B0B0",
                 justify="left",
@@ -128,17 +128,6 @@ class UpdateDialog(ctk.CTkToplevel):
         if self._busy:
             return
 
-        if sys.platform == "darwin":
-            self._set_busy(True, "Opening download…")
-            try:
-                apply_update(self._release, Path(), shell=self._shell, instance_guard=self._instance_guard)
-            except Exception as exc:  # noqa: BLE001
-                self._set_busy(False)
-                self._status_label.configure(text=str(exc), text_color="#FF4444")
-                return
-            self.destroy()
-            return
-
         self._set_busy(True, "Downloading update…")
 
         def worker() -> None:
@@ -155,7 +144,8 @@ class UpdateDialog(ctk.CTkToplevel):
                     self._set_busy(False)
                     self._status_label.configure(text=error, text_color="#FF4444")
                     return
-                self._set_busy(True, "Applying update…")
+                apply_message = "Opening update…" if sys.platform == "darwin" else "Applying update…"
+                self._set_busy(True, apply_message)
                 try:
                     apply_update(
                         self._release,
@@ -166,6 +156,9 @@ class UpdateDialog(ctk.CTkToplevel):
                 except Exception as exc:  # noqa: BLE001
                     self._set_busy(False)
                     self._status_label.configure(text=str(exc), text_color="#FF4444")
+                    return
+                if sys.platform == "darwin":
+                    self.destroy()
 
             self.after(0, ui)
 
