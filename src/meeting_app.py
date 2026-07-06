@@ -12,6 +12,7 @@ from CtkSmartScrollableFrame import CtkSmartScrollableFrame
 from CTkPieChart import CTkPieChart
 from CTkFlexToolTip import *
 from utils import flash_error
+from user_dropdown import UserDropdown
 import random
 import requests
 from collections import defaultdict
@@ -673,7 +674,7 @@ class MeetingFrame(ctk.CTkFrame):
         if users_changed:
             self.users_count_label.configure(text=f"Participants ({len(self.online_users)})")
             self.update_users_list()
-            self.s4_update_selectable_users()
+            self.s4_dropdown.refresh_options()
         if users_changed or input_mode_changed:
             self.s4_update_display_ui()
 
@@ -698,7 +699,7 @@ class MeetingFrame(ctk.CTkFrame):
                 self.current_year, self.current_week, self.next_year, self.next_week = self._calculate_week_info()
 
     def _handle_goals_change(self, _change):
-        if not self._update_if_changed('_cached_next_week_goals', self.s4_fetch_goals(self.next_year, self.next_week)):
+        if not self._update_if_changed('_next_week_goals', self.s4_fetch_goals(self.next_year, self.next_week)):
             return
         self.s4_update_display_ui()
         self.s4_update_input_ui(False)
@@ -713,7 +714,7 @@ class MeetingFrame(ctk.CTkFrame):
             self.s1_update_hours_graph()
             self.s1_update_days_charts()
             self.s1_update_team_hours_bar()
-            self.s2_update_selectable_users()
+            self.s2_dropdown.refresh_options()
             if change.get("operationType") == "insert" and self.s2_selected_user_var.get() == full_doc.get("user"):
                 self.s2_create_log_widget(full_doc)
             else:
@@ -1749,15 +1750,29 @@ class MeetingFrame(ctk.CTkFrame):
         self.s2_selected_user_label._label.configure(cursor="hand2")
         self.s2_selected_user_label._canvas.configure(cursor="hand2")
         self.s2_selected_user_label.pack(ipadx=6, anchor="w", padx=6, pady=(6, 0))
-        self.s2_selected_user_label.bind("<Enter>", self.s2_selected_user_enter)
-        self.s2_selected_user_label.bind("<Leave>", self.s2_selected_user_leave)
-        self.s2_selected_user_label.bind("<Button-1>", self.s2_show_dropdown)
+        self.s2_selected_user_label.bind("<Enter>", lambda _event: self.s2_selected_user_label.configure(fg_color="gray20"))
         self.s2_user_list_frame = ctk.CTkFrame(
             self.logs_user_container,
             fg_color='gray20',
             corner_radius=0
         )
-        self.s2_create_selectable_users()
+        self.s2_dropdown = UserDropdown(
+            self,
+            label=self.s2_selected_user_label,
+            list_frame=self.s2_user_list_frame,
+            get_users=lambda: sorted({log.get("user") for log in self.logs}),
+            on_select=lambda _user: self.s2_create_user_log_widgets(),
+        )
+        self.s2_dropdown.create_options()
+        self.s2_selected_user_label.bind(
+            "<Leave>",
+            lambda _event: (
+                self.s2_selected_user_label.configure(fg_color="transparent")
+                if not self.s2_user_list_frame.winfo_ismapped()
+                else None
+            ),
+        )
+        self.s2_selected_user_label.bind("<Button-1>", self.s2_dropdown.show)
         # Scrollable Frame
         self.logs_scrollable_frame = CtkSmartScrollableFrame(
             self.logs_frame,
@@ -1771,84 +1786,6 @@ class MeetingFrame(ctk.CTkFrame):
         self.selected_log_index = -1
 
         self.s2_set_logs_by_user()
-        self.s2_create_user_log_widgets()
-
-    def s2_create_selectable_users(self):
-        """Create the dropdown list of users for logs (slide 2)."""
-        # Create list
-        self.s2_selectable_users = sorted({log.get("user") for log in self.logs})
-        # Update selected if invalid
-        if self.s2_selected_user_var.get() not in self.s2_selectable_users:
-            self.s2_selected_user_var.set(self.s2_selectable_users[0])
-        # Create UI
-        for user in self.s2_selectable_users:
-            user_frame = ctk.CTkFrame(
-                self.s2_user_list_frame,
-                fg_color="transparent",
-                height=30
-            )
-            user_frame.pack(fill="x", padx=5)
-            user_label = ctk.CTkLabel(
-                user_frame,
-                text=user,
-                font=("Arial", 16),
-                text_color="white",
-                anchor="w",
-                fg_color="transparent"
-            )
-            user_label._label.configure(cursor="hand2")
-            user_label._canvas.configure(cursor="hand2")
-            user_label.pack(fill="both", expand=True)
-            for widget in (user_frame, user_label):
-                widget.bind("<Enter>", lambda e: self.s2_dropdown_enter(e))
-                widget.bind("<Leave>", self.s2_dropdown_leave)
-                widget.bind("<Button-1>", lambda e, u=user: self.s2_dropdown_select(e, u))
-
-    def s2_destroy_selectable_users(self):
-        """Destroy all dropdown user items for logs (slide 2)."""
-        for item in self.s2_user_list_frame.winfo_children():
-            item.destroy()
-
-    def s2_update_selectable_users(self):
-        """Refresh the dropdown user list for logs (slide 2)."""
-        self.s2_destroy_selectable_users()
-        self.s2_create_selectable_users()
-
-    def s2_selected_user_enter(self, _event):
-        """Handle hover enter on logs user label"""
-        self.s2_selected_user_label.configure(fg_color="gray20")
-
-    def s2_selected_user_leave(self, _event):
-        """Handle hover leave on logs user label"""
-        if not self.s2_user_list_frame.winfo_ismapped():
-            self.s2_selected_user_label.configure(fg_color="transparent")
-
-    def s2_show_dropdown(self, _event):
-        """Show dropdown for logs user selection"""
-        self.s2_user_list_frame.place(x=6, y=52, anchor="nw")  # 52=6+38+8
-        self.bind("<Button-1>", self.s2_hide_dropdown)
-
-    def s2_hide_dropdown(self, event=None):
-        """Hide the logs user dropdown"""
-        self.s2_user_list_frame.place_forget()
-        self.unbind("<Button-1>")
-        if event and self.winfo_containing(event.x_root, event.y_root).master != self.s2_selected_user_label:
-            self.s2_selected_user_label.configure(fg_color="transparent")
-
-    @staticmethod
-    def s2_dropdown_enter(event):
-        """Handle hover on dropdown item"""
-        event.widget.master.configure(fg_color="#2C2C2C")
-
-    @staticmethod
-    def s2_dropdown_leave(event):
-        """Handle stop hover on dropdown item"""
-        event.widget.master.configure(fg_color="transparent")
-
-    def s2_dropdown_select(self, _event, user):
-        """Handle selection of a user from logs dropdown"""
-        self.s2_selected_user_var.set(user)
-        self.s2_hide_dropdown()
         self.s2_create_user_log_widgets()
 
     def s2_set_logs_by_user(self):
@@ -2152,15 +2089,37 @@ class MeetingFrame(ctk.CTkFrame):
                 self.s4_selected_user_label._canvas.configure(cursor="hand2")
                 self.s4_selected_user_label._label.configure(cursor="hand2")
                 self.s4_selected_user_label.pack(ipadx=6, anchor="w", padx=6, pady=(6, 0))
-                self.s4_selected_user_label.bind("<Enter>", self.s4_selected_user_enter)
-                self.s4_selected_user_label.bind("<Leave>", self.s4_selected_user_leave)
-                self.s4_selected_user_label.bind("<Button-1>", self.s4_show_dropdown)
+                self.s4_selected_user_label.bind("<Enter>", lambda _event: self.s4_selected_user_label.configure(fg_color="gray20"))
                 self.s4_user_list_frame = ctk.CTkFrame(
                     self.goals_input_screen,
                     fg_color='gray20',
                     corner_radius=0
                 )
-                self.s4_create_selectable_users()
+                self.s4_dropdown = UserDropdown(
+                    self,
+                    label=self.s4_selected_user_label,
+                    list_frame=self.s4_user_list_frame,
+                    get_users=lambda: sorted(
+                        self.online_users
+                        | self._current_week_goals.keys()
+                        | self._next_week_goals.keys()
+                        | {self.user_name}
+                    ),
+                    on_select=lambda user: (
+                        self.s4_selected_user_var.set(user),
+                        self.s4_update_input_ui(),
+                    ),
+                )
+                self.s4_dropdown.create_options()
+                self.s4_selected_user_label.bind(
+                    "<Leave>",
+                    lambda _event: (
+                        self.s4_selected_user_label.configure(fg_color="transparent")
+                        if not self.s4_user_list_frame.winfo_ismapped()
+                        else None
+                    ),
+                )
+                self.s4_selected_user_label.bind("<Button-1>", self.s4_dropdown.show)
 
             _create_days()
             _create_hours()
@@ -2267,81 +2226,6 @@ class MeetingFrame(ctk.CTkFrame):
 
         _s4_create_display_screen()
         _s4_create_input_screen()
-
-    def s4_create_selectable_users(self):
-        self.s4_selectable_users = sorted(
-            self.online_users | self._current_week_goals.keys() | self._next_week_goals.keys() | {self.user_name})
-        # Update selected if invalid
-        if self.s4_selected_user_var.get() not in self.s4_selectable_users: # type: ignore[attr-defined]
-            self.s4_selected_user_var.set(self.s4_selectable_users[0]) # type: ignore[attr-defined]
-        # Create UI
-        for user in self.s4_selectable_users:
-            user_frame = ctk.CTkFrame(
-                self.s4_user_list_frame, # type: ignore[attr-defined]
-                fg_color="transparent",
-                height=30
-            )
-            user_frame.pack(fill="x", padx=5)
-            user_label = ctk.CTkLabel(
-                user_frame,
-                text=user,
-                font=("Arial", 16),
-                text_color="white",
-                anchor="w",
-                fg_color="transparent"
-            )
-            user_label._label.configure(cursor="hand2")
-            user_label._canvas.configure(cursor="hand2")
-            user_label.pack(fill="both", expand=True)
-            for widget in (user_frame, user_label):
-                widget.bind("<Enter>", lambda e: self.s4_dropdown_enter(e))
-                widget.bind("<Leave>", self.s4_dropdown_leave)
-                widget.bind("<Button-1>", lambda e, u=user: self.s4_dropdown_select(e, u))
-
-    def s4_destroy_selectable_users(self):
-        for item in self.s4_user_list_frame.winfo_children(): # type: ignore[attr-defined]
-            item.destroy()
-
-    def s4_update_selectable_users(self):
-        self.s4_destroy_selectable_users()
-        self.s4_create_selectable_users()
-
-    def s4_selected_user_enter(self, _event):
-        """Handle hover enter on user label"""
-        self.s4_selected_user_label.configure(fg_color="gray20") # type: ignore[attr-defined]
-
-    def s4_selected_user_leave(self, _event):
-        """Handle hover leave on user label"""
-        if not self.s4_user_list_frame.winfo_ismapped(): # type: ignore[attr-defined]
-            self.s4_selected_user_label.configure(fg_color="transparent") # type: ignore[attr-defined]
-
-    def s4_show_dropdown(self, _event):
-        """Show dropdown"""
-        self.s4_user_list_frame.place(x=6, y=52, anchor="nw") # type: ignore[attr-defined] 52=6+38+8
-        self.bind("<Button-1>", self.s4_hide_dropdown)
-
-    def s4_hide_dropdown(self, event=None):
-        """Hide dropdown"""
-        self.s4_user_list_frame.place_forget() # type: ignore[attr-defined]
-        self.unbind("<Button-1>")
-        if event and self.winfo_containing(event.x_root, event.y_root).master != self.s4_selected_user_label: # type: ignore[attr-defined]
-            self.s4_selected_user_label.configure(fg_color="transparent") # type: ignore[attr-defined]
-
-    @staticmethod
-    def s4_dropdown_enter(event):
-        """Handle hover on dropdown item"""
-        event.widget.master.configure(fg_color="#2C2C2C")
-
-    @staticmethod
-    def s4_dropdown_leave(event):
-        """Handle stop hover on dropdown item"""
-        event.widget.master.configure(fg_color="transparent")
-
-    def s4_dropdown_select(self, _event, user):
-        """Handle selection of a user from dropdown"""
-        self.s4_selected_user_var.set(user) # type: ignore[attr-defined]
-        self.s4_hide_dropdown()
-        self.s4_update_input_ui()
 
     @staticmethod
     def s4_fetch_goals(year, week):
