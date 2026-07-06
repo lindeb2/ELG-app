@@ -1,0 +1,20 @@
+name: Set release version
+description: Derive APP_VERSION / NUITKA_VERSION and write src/_version.py
+inputs:
+  ref-name:
+    description: Git ref name or manual version (e.g. v1.2.3 or 1.2.3)
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Set version env and write _version.py
+      shell: bash
+      run: |
+        VERSION="${{ inputs.ref-name }}"
+        VERSION="${VERSION#v}"
+        echo "APP_VERSION=${VERSION}" >> "$GITHUB_ENV"
+        NUITKA_VERSION="$(echo "$VERSION" | sed -nE 's/^([0-9]+\.[0-9]+\.[0-9]+).*/\1/p')"
+        if [ -z "$NUITKA_VERSION" ]; then NUITKA_VERSION="0.0.0"; fi
+        echo "NUITKA_VERSION=${NUITKA_VERSION}" >> "$GITHUB_ENV"
+        printf '__version__ = "%s"\n' "$VERSION" > src/_version.py
+        cat src/_version.py

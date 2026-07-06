@@ -1,0 +1,40 @@
+name: Write runtime secrets
+description: Bake CI secrets into src/runtime_secrets.py for Nuitka bundling
+inputs:
+  mongodb_uri:
+    description: MongoDB connection URI
+    required: true
+  gh_models_token:
+    description: GitHub Models API token
+    required: true
+  gae_url:
+    description: GAE notifications endpoint URL
+    required: true
+  notifications_secret:
+    description: Notifications shared secret
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Write src/runtime_secrets.py
+      shell: python
+      env:
+        MONGODB_URI: ${{ inputs.mongodb_uri }}
+        GH_MODELS_TOKEN: ${{ inputs.gh_models_token }}
+        GAE_URL: ${{ inputs.gae_url }}
+        NOTIFICATIONS_SECRET: ${{ inputs.notifications_secret }}
+      run: |
+        import os
+        from pathlib import Path
+
+        names = ("MONGODB_URI", "GH_MODELS_TOKEN", "GAE_URL", "NOTIFICATIONS_SECRET")
+        lines = []
+        for name in names:
+            value = os.environ.get(name, "")
+            if not value:
+                raise SystemExit(f"Missing GitHub Actions secret: {name}")
+            lines.append(f"{name} = {value!r}")
+
+        path = Path("src/runtime_secrets.py")
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        print(f"Wrote {path} with {len(names)} secrets")

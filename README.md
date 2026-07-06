@@ -182,6 +182,10 @@ Or set `PYTHONPATH=src` (Windows: `set PYTHONPATH=src`) if you prefer running mo
 
 Tagged commits (`v*`) trigger a GitHub Actions workflow that builds four release artifacts (Windows x64 installer, Windows ARM64 installer, macOS ARM64 `.dmg`, Linux x64 `.tar.gz`) and attaches them to a GitHub Release.
 
+To validate CI changes without publishing a release, run the **Build and Release** workflow manually (`workflow_dispatch`) with a test version (e.g. `0.0.0-ci`). That builds all artifacts but skips the release job.
+
+Nuitka options are defined as `# nuitka-project:` comments in `src/main.py` (see `nuitka/README.md`).
+
 ### Local Windows build (before relying on CI)
 
 ```powershell
