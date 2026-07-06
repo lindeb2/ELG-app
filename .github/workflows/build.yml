@@ -70,14 +70,14 @@ jobs:
         shell: bash
         run: |
           cd dist-installers
-          sha256sum *.exe > checksums.txt
-          cat checksums.txt
+          sha256sum *.exe > checksums-win-x64.txt
+          cat checksums-win-x64.txt
       - uses: actions/upload-artifact@v4
         with:
           name: ELG-app-win-x64
           path: |
             dist-installers/*.exe
-            dist-installers/checksums.txt
+            dist-installers/checksums-win-x64.txt
 
   build-windows-arm64:
     runs-on: windows-11-arm
@@ -140,14 +140,14 @@ jobs:
         shell: bash
         run: |
           cd dist-installers
-          sha256sum *.exe > checksums.txt
-          cat checksums.txt
+          sha256sum *.exe > checksums-win-arm64.txt
+          cat checksums-win-arm64.txt
       - uses: actions/upload-artifact@v4
         with:
           name: ELG-app-win-arm64
           path: |
             dist-installers/*.exe
-            dist-installers/checksums.txt
+            dist-installers/checksums-win-arm64.txt
 
   build-macos-arm64:
     runs-on: macos-latest
@@ -210,14 +210,14 @@ jobs:
       - name: Generate checksums
         run: |
           cd dist-installers
-          shasum -a 256 *.dmg > checksums.txt
-          cat checksums.txt
+          shasum -a 256 *.dmg > checksums-macos-arm64.txt
+          cat checksums-macos-arm64.txt
       - uses: actions/upload-artifact@v4
         with:
           name: ELG-app-macos-arm64
           path: |
             dist-installers/*.dmg
-            dist-installers/checksums.txt
+            dist-installers/checksums-macos-arm64.txt
 
   build-linux-x64:
     runs-on: ubuntu-latest
@@ -280,14 +280,14 @@ jobs:
       - name: Generate checksums
         run: |
           cd dist-installers
-          sha256sum *.tar.gz > checksums.txt
-          cat checksums.txt
+          sha256sum *.tar.gz > checksums-linux-x64.txt
+          cat checksums-linux-x64.txt
       - uses: actions/upload-artifact@v4
         with:
           name: ELG-app-linux-x64
           path: |
             dist-installers/*.tar.gz
-            dist-installers/checksums.txt
+            dist-installers/checksums-linux-x64.txt
 
   release:
     needs: [build-windows-x64, build-windows-arm64, build-macos-arm64, build-linux-x64]
