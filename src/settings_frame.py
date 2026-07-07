@@ -19,23 +19,29 @@ from notification_preferences import (
     save_notification_prefs,
 )
 from platform_keys import primary_modifier_label
-from session_guard import confirm_discard_session, has_unlogged_time
+from session_guard import has_unlogged_time
 from settings_ui import (
     ACCENT,
+    BOX_GAP,
+    DISCARD_BORDER,
+    DISCARD_TEXT,
     ROW_PADX,
+    ROW_PADY,
+    CHILD_ROW_PADY,
     SettingsAccountFieldRow,
-    SettingsCard,
     SettingsDropdownRow,
-    SettingsExpandableRow,
-    SettingsSectionHeader,
+    SettingsExpandableGroup,
+    SettingsGroup,
     SettingsSwitchRow,
     TEXT_MUTED,
     FONT_MUTED,
     FONT_ROW,
     _apply_nested_checkbox_style,
+    _make_outlined_action_button,
     _make_switch,
 )
 from update_dialog import show_update_dialog
+from utils import flash_error
 
 _STARTUP_VIEW_LABELS = {"timetable": "Timetable", "statistics": "Statistics"}
 _STARTUP_VIEW_VALUES = {label: key for key, label in _STARTUP_VIEW_LABELS.items()}
@@ -47,51 +53,52 @@ class SettingsFrame(ctk.CTkFrame):
         self._shell = shell
         self._save_after_id: str | None = None
         self._loading = False
-        self._version_title_label: ctk.CTkLabel | None = None
+        self._updates_group: SettingsExpandableGroup | None = None
+        self._current_version_label: ctk.CTkLabel | None = None
+        self._update_status_row: ctk.CTkFrame | None = None
+        self._update_status_persist = False
+        self._update_status_message = ""
+        self._update_status_color = TEXT_MUTED
+        self._update_status_show_install = False
 
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(0, weight=1)
 
-        ctk.CTkLabel(self, text="Settings", font=("Segoe UI", 28, "bold")).grid(
-            row=0, column=0, padx=24, pady=(24, 16), sticky="w"
+        scroll = CtkSmartScrollableFrame(
+            self,
+            fg_color="transparent",
+            bg_color="#000000",
+            reserve_scrollbar_space=True,
         )
-
-        scroll = CtkSmartScrollableFrame(self, fg_color="transparent")
-        scroll.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 12))
+        scroll.grid(row=0, column=0, sticky="nsew", padx=(12, 1), pady=(12,6))
         scroll.grid_columnconfigure(0, weight=1)
 
         row = 0
 
-        SettingsSectionHeader(scroll, text="Account").grid(
-            row=row, column=0, padx=4, pady=(0, 6), sticky="w"
-        )
-        row += 1
+        username_group = SettingsGroup(scroll)
+        self._username_row = SettingsAccountFieldRow(username_group.surface, "Username", editable=False)
+        username_group.add_row(self._username_row)
+        row = self._place_box(scroll, row, username_group)
 
-        account_card = SettingsCard(scroll)
-        account_card.grid(row=row, column=0, sticky="ew", pady=(0, 20))
-        row += 1
-
-        self._username_row = SettingsAccountFieldRow(account_card, "Username", editable=False)
-        account_card.add_row(self._username_row)
-        account_card.add_separator()
-
+        discord_group = SettingsGroup(scroll)
         self._discord_row = SettingsAccountFieldRow(
-            account_card,
+            discord_group.surface,
             "Discord",
             editable=True,
             placeholder="Linked via /link in Discord",
         )
-        account_card.add_row(self._discord_row)
-        account_card.add_separator()
+        discord_group.add_row(self._discord_row)
+        row = self._place_box(scroll, row, discord_group)
 
         self._notifications_enabled_var = ctk.BooleanVar(value=True)
-        self._notifications_expand = SettingsExpandableRow(
-            account_card,
+        self._notifications_group = SettingsExpandableGroup(
+            scroll,
             "Notifications",
             toggle_var=self._notifications_enabled_var,
             on_toggle=self._sync_notification_children,
+            on_expand=self._sync_notification_children,
         )
-        account_card.add_row(self._notifications_expand)
+        row = self._place_box(scroll, row, self._notifications_group)
 
         self._notify_vars = {
             "notify_others_start": ctk.BooleanVar(value=True),
@@ -100,114 +107,86 @@ class SettingsFrame(ctk.CTkFrame):
             "notify_own_end": ctk.BooleanVar(value=False),
         }
         self._notify_checkboxes: dict[str, ctk.CTkCheckBox] = {}
-        self._notifications_expand.build_body(self._build_notification_body)
-
-        SettingsSectionHeader(scroll, text="App").grid(
-            row=row, column=0, padx=4, pady=(0, 6), sticky="w"
-        )
-        row += 1
-
-        app_card = SettingsCard(scroll)
-        app_card.grid(row=row, column=0, sticky="ew", pady=(0, 20))
-        row += 1
+        self._notifications_group.build_body(self._build_notification_body)
 
         self._startup_enabled_var = ctk.BooleanVar(value=False)
-        self._startup_expand = SettingsExpandableRow(
-            app_card,
+        self._startup_group = SettingsExpandableGroup(
+            scroll,
             "Startup",
             toggle_var=self._startup_enabled_var,
             on_toggle=self._sync_startup_children,
+            on_expand=self._sync_startup_children,
         )
-        app_card.add_row(self._startup_expand)
-        app_card.add_separator()
+        row = self._place_box(scroll, row, self._startup_group)
 
         self._launch_minimized_var = ctk.BooleanVar(value=False)
         self._launch_minimized_cb: ctk.CTkCheckBox | None = None
-        self._startup_expand.build_body(self._build_startup_body)
+        self._startup_group.build_body(self._build_startup_body)
 
         self._startup_view_var = ctk.StringVar(value="Timetable")
+        startup_view_group = SettingsGroup(scroll)
         self._startup_view_row = SettingsDropdownRow(
-            app_card,
+            startup_view_group.surface,
             "Start view",
             self._startup_view_var,
             list(_STARTUP_VIEW_LABELS.values()),
         )
-        app_card.add_row(self._startup_view_row)
-        app_card.add_separator()
+        startup_view_group.add_row(self._startup_view_row)
+        row = self._place_box(scroll, row, startup_view_group)
 
         self._ctrl_r_reload_var = ctk.BooleanVar(value=False)
+        reload_group = SettingsGroup(scroll)
         self._ctrl_r_row = SettingsSwitchRow(
-            app_card,
+            reload_group.surface,
             f"Reload with {primary_modifier_label()} + R",
             self._ctrl_r_reload_var,
             command=self._schedule_save,
         )
-        app_card.add_row(self._ctrl_r_row)
+        reload_group.add_row(self._ctrl_r_row)
+        row = self._place_box(scroll, row, reload_group)
 
-        SettingsSectionHeader(scroll, text="Updates").grid(
-            row=row, column=0, padx=4, pady=(0, 6), sticky="w"
-        )
-        row += 1
-
-        self._pending_card = SettingsCard(scroll)
-        self._pending_card.grid(row=row, column=0, sticky="ew", pady=(0, 8))
-        row += 1
-
-        pending_row = ctk.CTkFrame(self._pending_card, fg_color="transparent")
-        pending_row.grid_columnconfigure(0, weight=1)
-        self._pending_label = ctk.CTkLabel(
-            pending_row,
-            text="",
-            font=FONT_ROW,
-            anchor="w",
-        )
-        self._pending_label.grid(row=0, column=0, sticky="w", padx=ROW_PADX, pady=10)
-        self._install_update_btn = ctk.CTkButton(
-            pending_row,
-            text="Install update",
-            width=120,
-            command=self._install_pending_update,
-        )
-        self._install_update_btn.grid(row=0, column=1, padx=(0, ROW_PADX), pady=10)
-        self._pending_card.add_row(pending_row)
-        self._pending_card.grid_remove()
-
-        updates_card = SettingsCard(scroll)
-        updates_card.grid(row=row, column=0, sticky="ew", pady=(0, 20))
-        row += 1
-
-        self._version_expand = SettingsExpandableRow(
-            updates_card,
-            current_version(),
+        self._updates_group = SettingsExpandableGroup(
+            scroll,
+            "Updates",
             start_expanded=False,
+            on_expand=self._on_updates_expand,
+            on_collapse=self._on_updates_collapse,
         )
-        updates_card.add_row(self._version_expand)
-        self._version_title_label = self._version_expand.title_label
+        row = self._place_box(scroll, row, self._updates_group)
 
         self._include_prereleases_var = ctk.BooleanVar(value=False)
         self._last_checked_label: ctk.CTkLabel | None = None
         self._check_updates_btn: ctk.CTkButton | None = None
-        self._version_expand.build_body(self._build_updates_body)
+        self._updates_group.build_body(self._build_updates_body)
 
-        self._discard_btn = ctk.CTkButton(
-            scroll,
-            text="Discard current session",
-            width=170,
-            fg_color="#5A1A1A",
-            hover_color="#7A2020",
+        discard_group = SettingsGroup(scroll, border_color=DISCARD_BORDER, border_width=2)
+        discard_row = ctk.CTkFrame(discard_group.surface, fg_color="transparent")
+        ctk.CTkLabel(
+            discard_row,
+            text="Discard session",
+            font=FONT_ROW,
+            anchor="w",
+        ).pack(side="left", anchor="w", padx=(ROW_PADX, 0), pady=ROW_PADY)
+        self._discard_btn = _make_outlined_action_button(
+            discard_row,
+            "Discard",
+            text_color=DISCARD_TEXT,
+            text_color_disabled=TEXT_MUTED,
             command=self._discard_session,
         )
-        self._discard_btn.grid(row=row, column=0, padx=4, pady=(0, 8))
-        row += 1
-
-        self._status_label = ctk.CTkLabel(scroll, text="", font=FONT_MUTED, text_color=TEXT_MUTED)
-        self._status_label.grid(row=row, column=0, padx=4, pady=(0, 12), sticky="w")
+        self._discard_btn.pack(side="right", padx=(0, ROW_PADX), pady=ROW_PADY)
+        discard_group.add_row(discard_row)
+        row = self._place_box(scroll, row, discard_group)
 
         self._load_config()
         self._bind_auto_save()
         self._bind_click_away_focus(self)
 
-    def _build_notification_body(self, parent: ctk.CTkFrame) -> list[ctk.CTkBaseClass]:
+    def _place_box(self, scroll: ctk.CTkBaseClass, row: int, widget: ctk.CTkBaseClass) -> int:
+        widget.grid(row=row, column=0, sticky="ew", pady=(0, BOX_GAP))
+        return row + 1
+
+    def _build_notification_body(self, group: SettingsExpandableGroup) -> list[ctk.CTkBaseClass]:
         labels = {
             "notify_others_start": "Team member clocking in",
             "notify_others_end": "Team member clocking out",
@@ -216,8 +195,9 @@ class SettingsFrame(ctk.CTkFrame):
         }
         widgets: list[ctk.CTkBaseClass] = []
         for key, label in labels.items():
+            row = ctk.CTkFrame(group.surface, fg_color="transparent")
             cb = ctk.CTkCheckBox(
-                parent,
+                row,
                 text=label,
                 variable=self._notify_vars[key],
                 font=FONT_ROW,
@@ -227,14 +207,16 @@ class SettingsFrame(ctk.CTkFrame):
                 checkmark_color="#1E1E1E",
                 command=self._schedule_save,
             )
-            cb.pack(anchor="w", padx=(ROW_PADX + 12, ROW_PADX), pady=4)
+            cb.pack(anchor="w", padx=(ROW_PADX + 12, ROW_PADX), pady=CHILD_ROW_PADY)
+            group.add_child_row(row)
             self._notify_checkboxes[key] = cb
-            widgets.append(cb)
+            widgets.append(row)
         return widgets
 
-    def _build_startup_body(self, parent: ctk.CTkFrame) -> list[ctk.CTkBaseClass]:
+    def _build_startup_body(self, group: SettingsExpandableGroup) -> list[ctk.CTkBaseClass]:
+        row = ctk.CTkFrame(group.surface, fg_color="transparent")
         self._launch_minimized_cb = ctk.CTkCheckBox(
-            parent,
+            row,
             text="Launch app minimized to system tray",
             variable=self._launch_minimized_var,
             font=FONT_ROW,
@@ -244,51 +226,146 @@ class SettingsFrame(ctk.CTkFrame):
             checkmark_color="#1E1E1E",
             command=self._schedule_save,
         )
-        self._launch_minimized_cb.pack(anchor="w", padx=(ROW_PADX + 12, ROW_PADX), pady=4)
-        return [self._launch_minimized_cb]
+        self._launch_minimized_cb.pack(anchor="w", padx=(ROW_PADX + 12, ROW_PADX), pady=CHILD_ROW_PADY)
+        group.add_child_row(row)
+        return [row]
 
-    def _build_updates_body(self, parent: ctk.CTkFrame) -> list[ctk.CTkBaseClass]:
+    def _build_updates_body(self, group: SettingsExpandableGroup) -> list[ctk.CTkBaseClass]:
         widgets: list[ctk.CTkBaseClass] = []
 
-        prereq_row = ctk.CTkFrame(parent, fg_color="transparent")
-        prereq_row.pack(fill="x", padx=ROW_PADX, pady=(4, 0))
-        ctk.CTkLabel(prereq_row, text="Include pre-releases", font=FONT_ROW, anchor="w").pack(
-            side="left", anchor="w"
+        version_row = ctk.CTkFrame(group.surface, fg_color="transparent")
+        ctk.CTkLabel(
+            version_row,
+            text="Current version",
+            font=FONT_ROW,
+            anchor="w",
+        ).pack(side="left", anchor="w", padx=(ROW_PADX + 12, 0), pady=CHILD_ROW_PADY)
+        self._current_version_label = ctk.CTkLabel(
+            version_row,
+            text=current_version(),
+            font=FONT_ROW,
+            anchor="e",
+            text_color=TEXT_MUTED,
         )
-        prereq_switch = _make_switch(
+        self._current_version_label.pack(side="right", padx=(0, ROW_PADX), pady=CHILD_ROW_PADY)
+        group.add_child_row(version_row)
+        widgets.append(version_row)
+
+        prereq_row = ctk.CTkFrame(group.surface, fg_color="transparent")
+        ctk.CTkLabel(prereq_row, text="Include pre-releases", font=FONT_ROW, anchor="w").pack(
+            side="left", anchor="w", padx=(ROW_PADX + 12, 0), pady=CHILD_ROW_PADY
+        )
+        _make_switch(
             prereq_row,
             self._include_prereleases_var,
             command=self._schedule_save,
-        )
-        prereq_switch.pack(side="right")
-        widgets.extend((prereq_row, prereq_switch))
+        ).pack(side="right", padx=(0, ROW_PADX), pady=CHILD_ROW_PADY)
+        group.add_child_row(prereq_row)
+        widgets.append(prereq_row)
 
-        last_row = ctk.CTkFrame(parent, fg_color="transparent")
-        last_row.pack(fill="x", padx=ROW_PADX, pady=(8, 8))
+        last_row = ctk.CTkFrame(group.surface, fg_color="transparent")
         self._last_checked_label = ctk.CTkLabel(
             last_row,
-            text="Last checked: Never",
+            text=self._last_checked_text(),
             font=FONT_MUTED,
             text_color=TEXT_MUTED,
             anchor="w",
         )
-        self._last_checked_label.pack(side="left", anchor="w")
+        self._last_checked_label.pack(side="left", anchor="w", padx=(ROW_PADX + 12, 0), pady=CHILD_ROW_PADY)
 
-        self._check_updates_btn = ctk.CTkButton(
+        self._check_updates_btn = _make_outlined_action_button(
             last_row,
-            text="Check for updates",
-            width=140,
-            height=28,
-            fg_color="transparent",
-            hover_color="#3A3A3A",
-            border_width=1,
-            border_color="#555555",
-            text_color="#FFFFFF",
+            "Check for updates",
             command=self._check_for_updates,
         )
-        self._check_updates_btn.pack(side="right", anchor="e")
-        widgets.extend((last_row, self._check_updates_btn))
+        self._check_updates_btn.pack(side="right", padx=(0, ROW_PADX), pady=CHILD_ROW_PADY)
+        group.add_child_row(last_row)
+        widgets.append(last_row)
         return widgets
+
+    def _last_checked_text(self) -> str:
+        app_prefs = app_preferences_from_config(read_config())
+        return f"Last checked: {format_last_checked(app_prefs.get('last_update_check_at'))}"
+
+    def _refresh_last_checked_label(self) -> None:
+        if self._last_checked_label is not None:
+            self._last_checked_label.configure(text=self._last_checked_text())
+
+    def _on_updates_expand(self) -> None:
+        self._refresh_last_checked_label()
+        if self._update_status_persist and self._update_status_message:
+            self._render_update_status_row()
+
+    def _on_updates_collapse(self) -> None:
+        self._remove_update_status_row()
+        if not self._update_status_persist:
+            self._update_status_message = ""
+            self._update_status_show_install = False
+
+    def on_leave_view(self) -> None:
+        if not self._update_status_persist:
+            self._update_status_message = ""
+            self._update_status_show_install = False
+        self._remove_update_status_row()
+
+    def _set_update_status(
+        self,
+        message: str,
+        color: str,
+        *,
+        persist: bool = False,
+        show_install: bool = False,
+    ) -> None:
+        self._update_status_message = message
+        self._update_status_color = color
+        self._update_status_persist = persist
+        self._update_status_show_install = show_install
+        if self._updates_group is not None and self._updates_group.is_expanded:
+            self._render_update_status_row()
+
+    def _render_update_status_row(self) -> None:
+        if self._updates_group is None or not self._updates_group.is_expanded:
+            return
+        if self._update_status_row is not None:
+            self._updates_group.remove_child_row(self._update_status_row)
+            self._update_status_row = None
+        if not self._update_status_message:
+            return
+
+        row = ctk.CTkFrame(self._updates_group.surface, fg_color="transparent")
+        ctk.CTkLabel(
+            row,
+            text=self._update_status_message,
+            font=FONT_ROW,
+            text_color=self._update_status_color,
+            anchor="w",
+        ).pack(side="left", anchor="w", padx=(ROW_PADX + 12, 0), pady=CHILD_ROW_PADY)
+        if self._update_status_show_install:
+            _make_outlined_action_button(
+                row,
+                "Install update",
+                command=self._install_pending_update,
+            ).pack(side="right", padx=(0, ROW_PADX), pady=CHILD_ROW_PADY)
+        self._updates_group.append_child_row(row)
+        self._update_status_row = row
+
+    def _remove_update_status_row(self) -> None:
+        if self._update_status_row is None or self._updates_group is None:
+            self._update_status_row = None
+            return
+        try:
+            if self._update_status_row.winfo_exists():
+                self._updates_group.remove_child_row(self._update_status_row)
+        except Exception:
+            pass
+        self._update_status_row = None
+
+    def _clear_transient_update_status(self) -> None:
+        if self._update_status_persist:
+            return
+        self._update_status_message = ""
+        self._update_status_show_install = False
+        self._remove_update_status_row()
 
     def _bind_auto_save(self) -> None:
         for var in (
@@ -352,11 +429,8 @@ class SettingsFrame(ctk.CTkFrame):
         timetable = self._shell.get_timetable()
         if not has_unlogged_time(timetable):
             return
-        if not confirm_discard_session(self.winfo_toplevel(), timetable):
-            return
         self._shell.discard_timetable_session()
         self.refresh_session_controls()
-        self._show_status("Session discarded.")
 
     def _load_config(self) -> None:
         self._loading = True
@@ -384,13 +458,10 @@ class SettingsFrame(ctk.CTkFrame):
             self._ctrl_r_reload_var.set(bool(app_prefs.get("enable_ctrl_r_reload", False)))
             self._include_prereleases_var.set(bool(app_prefs.get("include_prereleases", False)))
 
-            if self._last_checked_label is not None:
-                self._last_checked_label.configure(
-                    text=f"Last checked: {format_last_checked(app_prefs.get('last_update_check_at'))}"
-                )
+            self._refresh_last_checked_label()
 
-            if self._version_title_label is not None:
-                self._version_title_label.configure(text=current_version())
+            if self._current_version_label is not None:
+                self._current_version_label.configure(text=current_version())
 
             self._sync_notification_children()
             self._sync_startup_children()
@@ -401,17 +472,40 @@ class SettingsFrame(ctk.CTkFrame):
 
     def refresh_update_controls(self) -> None:
         release = load_pending_update()
-        if release is None:
-            self._pending_card.grid_remove()
+        if release is not None:
+            self._set_update_status(
+                f"Update {release.version} is ready to install.",
+                TEXT_MUTED,
+                persist=True,
+                show_install=True,
+            )
             return
-        self._pending_label.configure(text=f"Update {release.version} is ready to install.")
-        self._pending_card.grid()
+        if not self._update_status_show_install:
+            self._restore_persistent_update_status()
+            return
+        self._update_status_show_install = False
+        if "ready to install" not in self._update_status_message.lower():
+            self._restore_persistent_update_status()
+            return
+        self._update_status_persist = False
+        self._update_status_message = ""
+        self._remove_update_status_row()
+        self._restore_persistent_update_status()
+
+    def _restore_persistent_update_status(self) -> None:
+        if (
+            self._update_status_persist
+            and self._update_status_message
+            and self._updates_group is not None
+            and self._updates_group.is_expanded
+        ):
+            self._render_update_status_row()
 
     def _install_pending_update(self) -> None:
         release = load_pending_update()
         if release is None:
             self.refresh_update_controls()
-            self._show_status("No pending update.", error=True)
+            self._set_update_status("No pending update.", "#FF4444", persist=False)
             return
         if self._shell is None:
             return
@@ -424,22 +518,18 @@ class SettingsFrame(ctk.CTkFrame):
 
     def _check_for_updates(self) -> None:
         if self._shell is None or self._shell._manual_update_check is None:
-            self._show_status("Update checks are unavailable.", error=True)
+            self._set_update_status("Update checks are unavailable.", "#FF4444", persist=False)
             return
 
-        self._show_status("Checking for updates…")
+        self._set_update_status("Checking for updates…", TEXT_MUTED, persist=False)
 
         def on_status(message: str, color: str) -> None:
-            if color == "#FF4444":
-                self._show_status(message, error=True)
-            else:
-                self._show_status(message)
-            config = read_config()
-            app_prefs = app_preferences_from_config(config)
-            if self._last_checked_label is not None:
-                self._last_checked_label.configure(
-                    text=f"Last checked: {format_last_checked(app_prefs.get('last_update_check_at'))}"
-                )
+            message_lower = message.lower()
+            is_error = color == "#FF4444"
+            is_up_to_date = "up to date" in message_lower
+            persist = not is_error and not is_up_to_date
+            self._set_update_status(message, color, persist=persist, show_install=False)
+            self._refresh_last_checked_label()
             self.refresh_update_controls()
 
         self._shell._manual_update_check(on_status)
@@ -485,13 +575,6 @@ class SettingsFrame(ctk.CTkFrame):
                 discord_user_id=self._discord_row.entry.get().strip() or None,
             )
         except Exception as exc:
-            self._show_status(f"Could not save notification settings: {exc}", error=True)
+            print(f"Could not save notification settings: {exc}")
+            flash_error(self._discord_row.entry)
             return
-
-        self._status_label.configure(text="")
-
-    def _show_status(self, message: str, *, error: bool = False) -> None:
-        color = "#FF6B6B" if error else TEXT_MUTED
-        self._status_label.configure(text=message, text_color=color)
-        if not error:
-            self.after(2500, lambda: self._status_label.configure(text=""))

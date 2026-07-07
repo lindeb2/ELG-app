@@ -53,7 +53,7 @@ _VIEW_SIZES: dict[str, tuple[int, int]] = {
     "statistics": (1420, 800),
     "meeting": (1360, 820),
     "meeting_points": _SMALL_VIEW,
-    "settings": (520, 720),
+    "settings": (462, 462),
 }
 
 _NAV_ITEMS: tuple[tuple[str, str], ...] = (
@@ -806,6 +806,10 @@ class AppShell(tk.Frame):
             self._leave_meeting_fullscreen()
 
         previous = self._active_view
+        if previous == "settings" and name != "settings":
+            settings = self._view_child(self._frames.get("settings"))
+            if settings is not None and hasattr(settings, "on_leave_view"):
+                settings.on_leave_view()
         if previous == "statistics" and name != "statistics":
             self._set_stats_refresh_active(False)
 

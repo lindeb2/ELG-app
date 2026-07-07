@@ -441,13 +441,15 @@ def run_check_in_background(
     on_pending_changed: Callable[[], None] | None = None,
 ) -> None:
     def worker() -> None:
+        result: UpdateCheckResult
         try:
             result = check_for_update(include_prerelease=include_prerelease)
-            record_update_check_timestamp()
             if result.error is None:
                 _apply_check_result(result, on_pending_changed=on_pending_changed)
         except Exception as exc:  # noqa: BLE001 — surface to UI
             result = UpdateCheckResult(release=None, error=str(exc))
+        finally:
+            record_update_check_timestamp()
         on_complete(result)
 
     threading.Thread(target=worker, daemon=True).start()

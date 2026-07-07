@@ -49,9 +49,12 @@ class CtkSmartScrollableFrame(tkinter.Frame, CTkAppearanceModeBaseClass, CTkScal
                  label_text: str = "",
                  label_font: Optional[Union[tuple, CTkFont]] = None,
                  label_anchor: str = "center",
-                 orientation: Literal["vertical", "horizontal"] = "vertical"):
+                 orientation: Literal["vertical", "horizontal"] = "vertical",
+                 reserve_scrollbar_space: bool = False):
 
         self._orientation = orientation
+        self._reserve_scrollbar_space = reserve_scrollbar_space
+        self._scrollbar_reserved_pixels: int | None = None
 
         # dimensions independent of scaling
         self._desired_width = width  # _desired_width and _desired_height, represent desired size set by width and height
@@ -116,6 +119,43 @@ class CtkSmartScrollableFrame(tkinter.Frame, CTkAppearanceModeBaseClass, CTkScal
         self._parent_frame.bind("<Configure>", self._schedule_content_refresh, add="+")
 
         self.after_idle(self._refresh_content_geometry)
+        if self._reserve_scrollbar_space:
+            self.after_idle(self._cache_scrollbar_reserved_size)
+
+    def _get_scrollbar_reserved_pixels(self) -> int:
+        if self._scrollbar_reserved_pixels is not None:
+            return self._scrollbar_reserved_pixels
+        return int(self._apply_widget_scaling(16))
+
+    def _cache_scrollbar_reserved_size(self) -> None:
+        if not self.winfo_exists():
+            return
+        was_visible = self._scrollbar_visible
+        self._scrollbar.grid()
+        self.update_idletasks()
+        if self._orientation == "vertical":
+            measured = max(self._scrollbar.winfo_reqwidth(), 1)
+        else:
+            measured = max(self._scrollbar.winfo_reqheight(), 1)
+        self._scrollbar_reserved_pixels = measured
+        if not was_visible:
+            self._scrollbar.grid_remove()
+        self._apply_reserved_scrollbar_space(bool(was_visible))
+
+    def _apply_reserved_scrollbar_space(self, scrollbar_visible: bool) -> None:
+        if not self._reserve_scrollbar_space:
+            if self._orientation == "vertical":
+                self._parent_frame.grid_columnconfigure(1, minsize=0)
+            else:
+                self._parent_frame.grid_rowconfigure(2, minsize=0)
+            return
+
+        reserved = self._get_scrollbar_reserved_pixels()
+        minsize = 0 if scrollbar_visible else reserved
+        if self._orientation == "vertical":
+            self._parent_frame.grid_columnconfigure(1, minsize=minsize)
+        else:
+            self._parent_frame.grid_rowconfigure(2, minsize=minsize)
 
     def _layout_is_ready(self) -> bool:
         if not self._parent_frame.winfo_ismapped():
@@ -322,6 +362,8 @@ class CtkSmartScrollableFrame(tkinter.Frame, CTkAppearanceModeBaseClass, CTkScal
             self._scrollbar.grid()
         else:
             self._scrollbar.grid_remove()
+        self._apply_reserved_scrollbar_space(should_show)
+        self._schedule_content_refresh()
 
     def _update_scrollbar_visibility(self, event=None):
         if self._scrollbar_vis_job is not None:
@@ -464,6 +506,12 @@ class CtkSmartScrollableFrame(tkinter.Frame, CTkAppearanceModeBaseClass, CTkScal
         if "label_anchor" in kwargs:
             self._label.configure(anchor=kwargs.pop("label_anchor"))
 
+        if "reserve_scrollbar_space" in kwargs:
+            self._reserve_scrollbar_space = bool(kwargs.pop("reserve_scrollbar_space"))
+            if self._reserve_scrollbar_space and self._scrollbar_reserved_pixels is None:
+                self.after_idle(self._cache_scrollbar_reserved_size)
+            self._apply_scrollbar_visibility()
+
         self._parent_frame.configure(**kwargs)
 
     def cget(self, attribute_name: str):
@@ -482,6 +530,8 @@ class CtkSmartScrollableFrame(tkinter.Frame, CTkAppearanceModeBaseClass, CTkScal
             return self._label.cget("fg_color")
         elif attribute_name == "label_anchor":
             return self._label.cget("anchor")
+        elif attribute_name == "reserve_scrollbar_space":
+            return self._reserve_scrollbar_space
 
         elif attribute_name.startswith("scrollbar_fg_color"):
             return self._scrollbar.cget("fg_color")
