@@ -54,13 +54,15 @@ class SetupFrame(ctk.CTkFrame):
         self._username_entry.insert(0, config.get("user") or "")
         row += 1
 
-        ctk.CTkLabel(scroll, text="Discord name", anchor="w").grid(
+        ctk.CTkLabel(scroll, text="Discord account", anchor="w").grid(
             row=row, column=0, padx=12, pady=(0, 4), sticky="ew"
         )
         row += 1
-        self._discord_entry = ctk.CTkEntry(scroll)
+        self._discord_entry = ctk.CTkEntry(
+            scroll,
+            placeholder_text="Linked automatically via /link",
+        )
         self._discord_entry.grid(row=row, column=0, padx=12, pady=(0, 12), sticky="ew")
-        self._discord_entry.insert(0, config.get("discordname") or "")
         row += 1
 
         ctk.CTkLabel(scroll, text="Discord notifications", font=("Arial", 14, "bold"), anchor="w").grid(
@@ -69,11 +71,14 @@ class SetupFrame(ctk.CTkFrame):
         row += 1
 
         username = config.get("user") or ""
+        prefs = fetch_notification_prefs(username)
+        self._discord_entry.insert(0, str(prefs.get("discord_user_id") or ""))
         self._notification_panel = NotificationPreferencesPanel(
             scroll,
             username=username,
-            prefs=fetch_notification_prefs(username),
+            prefs=prefs,
             compact=True,
+            include_discord_account=False,
         )
         self._notification_panel.grid(row=row, column=0, padx=12, pady=(0, 12), sticky="ew")
         row += 1
@@ -95,20 +100,15 @@ class SetupFrame(ctk.CTkFrame):
         self._continue_btn = ctk.CTkButton(scroll, text="Continue", command=self._submit)
         self._continue_btn.grid(row=row, column=0, padx=12, pady=(0, 16), sticky="ew")
 
-        for entry in (self._username_entry, self._discord_entry):
-            entry.bind("<Return>", lambda _event: self._submit())
+        self._username_entry.bind("<Return>", lambda _event: self._submit())
 
     def set_continue_enabled(self, enabled: bool) -> None:
         self._continue_btn.configure(state="normal" if enabled else "disabled")
 
     def _submit(self) -> None:
         username = self._username_entry.get().strip()
-        discordname = self._discord_entry.get().strip()
         if not username:
             self._error_label.configure(text="Username is required.")
-            return
-        if not discordname:
-            self._error_label.configure(text="Discord name is required.")
             return
 
         try:
@@ -118,7 +118,6 @@ class SetupFrame(ctk.CTkFrame):
             return
 
         config["user"] = username
-        config["discordname"] = discordname
         app_prefs = self._behavior_panel.values()
         config = merge_app_preferences(config, app_prefs)
 
@@ -130,7 +129,10 @@ class SetupFrame(ctk.CTkFrame):
 
         try:
             self._notification_panel.username = username
-            self._notification_panel.save(username)
+            self._notification_panel.save(
+                username,
+                discord_user_id=self._discord_entry.get().strip() or None,
+            )
         except Exception as exc:
             self._error_label.configure(text=f"Could not save notification prefs: {exc}")
             return

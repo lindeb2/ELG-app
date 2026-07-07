@@ -51,11 +51,14 @@ class SettingsFrame(ctk.CTkFrame):
         self._username_entry.grid(row=row, column=0, padx=12, pady=(0, 12), sticky="ew")
         row += 1
 
-        ctk.CTkLabel(scroll, text="Discord name", anchor="w").grid(
+        ctk.CTkLabel(scroll, text="Discord account", anchor="w").grid(
             row=row, column=0, padx=12, pady=(0, 4), sticky="ew"
         )
         row += 1
-        self._discord_entry = ctk.CTkEntry(scroll)
+        self._discord_entry = ctk.CTkEntry(
+            scroll,
+            placeholder_text="Linked automatically via /link",
+        )
         self._discord_entry.grid(row=row, column=0, padx=12, pady=(0, 12), sticky="ew")
         row += 1
 
@@ -64,7 +67,11 @@ class SettingsFrame(ctk.CTkFrame):
         )
         row += 1
 
-        self._notification_panel = NotificationPreferencesPanel(scroll, compact=True)
+        self._notification_panel = NotificationPreferencesPanel(
+            scroll,
+            compact=True,
+            include_discord_account=False,
+        )
         self._notification_panel.grid(row=row, column=0, padx=12, pady=(0, 20), sticky="ew")
         row += 1
 
@@ -190,12 +197,13 @@ class SettingsFrame(ctk.CTkFrame):
         self._username_entry.delete(0, "end")
         self._username_entry.insert(0, config.get("user") or "")
 
-        self._discord_entry.delete(0, "end")
-        self._discord_entry.insert(0, config.get("discordname") or "")
-
         username = config.get("user") or ""
+        prefs = fetch_notification_prefs(username)
         self._notification_panel.username = username
-        self._notification_panel.load_from(fetch_notification_prefs(username))
+        self._notification_panel.load_from(prefs)
+        self._discord_entry.delete(0, "end")
+        if prefs.get("discord_user_id"):
+            self._discord_entry.insert(0, str(prefs["discord_user_id"]))
         self._behavior_panel.load_from(app_prefs)
         self._ctrl_r_reload_var.set(bool(app_prefs.get("enable_ctrl_r_reload", False)))
         self._include_prereleases_var.set(bool(app_prefs.get("include_prereleases", False)))
@@ -263,7 +271,6 @@ class SettingsFrame(ctk.CTkFrame):
 
         username = self._username_entry.get().strip()
         config["user"] = username
-        config["discordname"] = self._discord_entry.get().strip()
         config = merge_app_preferences(config, app_prefs)
 
         write_config(config)
@@ -277,7 +284,10 @@ class SettingsFrame(ctk.CTkFrame):
 
         try:
             self._notification_panel.username = username
-            self._notification_panel.save(username)
+            self._notification_panel.save(
+                username,
+                discord_user_id=self._discord_entry.get().strip() or None,
+            )
         except Exception as exc:
             self._status_label.configure(
                 text=f"Settings saved, but notification prefs failed: {exc}",

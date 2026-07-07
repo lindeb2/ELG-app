@@ -14,6 +14,8 @@ DEFAULT_NOTIFICATION_PREFS = {
     "notify_own_end": False,
 }
 
+_UNSET = object()
+
 
 def fetch_notification_prefs(username: str) -> dict:
     doc = status_meeting.find_one(
@@ -71,6 +73,7 @@ class NotificationPreferencesPanel(ctk.CTkFrame):
         *,
         compact: bool = False,
         standalone: bool = False,
+        include_discord_account: bool = True,
         **kwargs,
     ):
         fg_color = "#181C20" if standalone else "transparent"
@@ -99,16 +102,6 @@ class NotificationPreferencesPanel(ctk.CTkFrame):
                 text_color="white",
             ).grid(row=row, column=0, sticky="w", padx=padx, pady=(24, 8))
             row += 1
-
-        ctk.CTkLabel(
-            self,
-            text="Choose which session events send you a Discord DM.",
-            font=hint_font,
-            text_color="#B0B0B0",
-            wraplength=560,
-            justify="left",
-        ).grid(row=row, column=0, sticky="w", padx=padx, pady=(0, 12 if compact else 16))
-        row += 1
 
         ctk.CTkCheckBox(
             self,
@@ -142,38 +135,22 @@ class NotificationPreferencesPanel(ctk.CTkFrame):
         ).grid(row=row, column=0, sticky="w", padx=padx, pady=4)
         row += 1
 
-        ctk.CTkLabel(
-            self,
-            text="Discord user ID",
-            font=label_font,
-            anchor="w",
-        ).grid(row=row, column=0, sticky="w", padx=padx, pady=(12, 4))
-        row += 1
+        if include_discord_account:
+            ctk.CTkLabel(
+                self,
+                text="Discord account",
+                font=label_font,
+                anchor="w",
+            ).grid(row=row, column=0, sticky="w", padx=padx, pady=(12, 4))
+            row += 1
 
-        ctk.CTkLabel(
-            self,
-            text="Run /link in Discord to link automatically, or paste your user ID here. "
-            "Clear this field and save to unlink.",
-            font=hint_font,
-            text_color="#B0B0B0",
-            wraplength=560,
-            justify="left",
-        ).grid(row=row, column=0, sticky="w", padx=padx, pady=(0, 6))
-        row += 1
-
-        self._discord_id_entry = ctk.CTkEntry(self, font=hint_font)
-        self._discord_id_entry.grid(row=row, column=0, sticky="ew", padx=padx, pady=(0, 8))
-        row += 1
-
-        ctk.CTkLabel(
-            self,
-            text="New records are always posted to the team records channel.",
-            font=hint_font,
-            text_color="#B0B0B0",
-            wraplength=560,
-            justify="left",
-        ).grid(row=row, column=0, sticky="w", padx=padx, pady=(0, 8))
-        row += 1
+            self._discord_id_entry = ctk.CTkEntry(
+                self,
+                font=hint_font,
+                placeholder_text="Linked automatically via /link",
+            )
+            self._discord_id_entry.grid(row=row, column=0, sticky="ew", padx=padx, pady=(0, 8))
+            row += 1
 
         if standalone:
             self._save_button = ctk.CTkButton(
@@ -209,12 +186,17 @@ class NotificationPreferencesPanel(ctk.CTkFrame):
         self._own_end_var.set(
             bool(prefs.get("notify_own_end", DEFAULT_NOTIFICATION_PREFS["notify_own_end"]))
         )
-        self._discord_id_entry.delete(0, "end")
-        if prefs.get("discord_user_id"):
-            self._discord_id_entry.insert(0, str(prefs["discord_user_id"]))
+        if hasattr(self, "_discord_id_entry"):
+            self._discord_id_entry.delete(0, "end")
+            if prefs.get("discord_user_id"):
+                self._discord_id_entry.insert(0, str(prefs["discord_user_id"]))
 
-    def values(self) -> dict:
-        discord_user_id = self._discord_id_entry.get().strip() or None
+    def values(self, *, discord_user_id: str | None | object = _UNSET) -> dict:
+        if discord_user_id is _UNSET:
+            if hasattr(self, "_discord_id_entry"):
+                discord_user_id = self._discord_id_entry.get().strip() or None
+            else:
+                discord_user_id = self._prefs.get("discord_user_id")
         return {
             "notify_others_start": bool(self._others_start_var.get()),
             "notify_others_end": bool(self._others_end_var.get()),
@@ -223,8 +205,8 @@ class NotificationPreferencesPanel(ctk.CTkFrame):
             "discord_user_id": discord_user_id,
         }
 
-    def save(self, username: str) -> dict:
-        values = self.values()
+    def save(self, username: str, *, discord_user_id: str | None | object = _UNSET) -> dict:
+        values = self.values(discord_user_id=discord_user_id)
         saved = save_notification_prefs(
             username,
             notify_others_start=values["notify_others_start"],

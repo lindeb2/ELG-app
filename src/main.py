@@ -197,7 +197,7 @@ def main() -> None:
     initial_view = _resolve_startup_view(app_prefs)
     start_minimized = _should_start_minimized(app_prefs, args)
 
-    needs_setup = not (config.get("discordname") or "").strip()
+    needs_setup = not (config.get("user") or "").strip()
     _map_on_start = not needs_setup and not start_minimized
     if sys.platform.startswith("win") and _map_on_start:
         root.withdraw()
