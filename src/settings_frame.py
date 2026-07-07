@@ -19,7 +19,7 @@ from notification_preferences import (
     save_notification_prefs,
 )
 from platform_keys import primary_modifier_label
-from session_guard import has_unlogged_time
+from session_guard import confirm_discard_session, has_unlogged_time
 from settings_ui import (
     ACCENT,
     BOX_GAP,
@@ -428,6 +428,8 @@ class SettingsFrame(ctk.CTkFrame):
             return
         timetable = self._shell.get_timetable()
         if not has_unlogged_time(timetable):
+            return
+        if not confirm_discard_session(self, timetable):
             return
         self._shell.discard_timetable_session()
         self.refresh_session_controls()
