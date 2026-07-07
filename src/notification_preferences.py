@@ -8,6 +8,7 @@ from timetable_db import status_meeting
 NOTIFICATION_PREFS_DOC_ID = "Notification Preferences"
 
 DEFAULT_NOTIFICATION_PREFS = {
+    "notifications_enabled": True,
     "notify_others_start": True,
     "notify_others_end": True,
     "notify_own_start": False,
@@ -28,6 +29,7 @@ def fetch_notification_prefs(username: str) -> dict:
 def save_notification_prefs(
     username: str,
     *,
+    notifications_enabled: bool = True,
     notify_others_start: bool,
     notify_others_end: bool,
     notify_own_start: bool,
@@ -35,6 +37,7 @@ def save_notification_prefs(
     discord_user_id: str | None = None,
 ) -> dict:
     update_fields = {
+        f"data.{username}.notifications_enabled": notifications_enabled,
         f"data.{username}.notify_others_start": notify_others_start,
         f"data.{username}.notify_others_end": notify_others_end,
         f"data.{username}.notify_own_start": notify_own_start,
@@ -52,6 +55,7 @@ def save_notification_prefs(
         upsert=True,
     )
     saved = {
+        "notifications_enabled": notifications_enabled,
         "notify_others_start": notify_others_start,
         "notify_others_end": notify_others_end,
         "notify_own_start": notify_own_start,
@@ -198,6 +202,9 @@ class NotificationPreferencesPanel(ctk.CTkFrame):
             else:
                 discord_user_id = self._prefs.get("discord_user_id")
         return {
+            "notifications_enabled": bool(
+                self._prefs.get("notifications_enabled", DEFAULT_NOTIFICATION_PREFS["notifications_enabled"])
+            ),
             "notify_others_start": bool(self._others_start_var.get()),
             "notify_others_end": bool(self._others_end_var.get()),
             "notify_own_start": bool(self._own_start_var.get()),
@@ -209,6 +216,7 @@ class NotificationPreferencesPanel(ctk.CTkFrame):
         values = self.values(discord_user_id=discord_user_id)
         saved = save_notification_prefs(
             username,
+            notifications_enabled=values["notifications_enabled"],
             notify_others_start=values["notify_others_start"],
             notify_others_end=values["notify_others_end"],
             notify_own_start=values["notify_own_start"],

@@ -220,5 +220,6 @@ python scripts/recalculate_all.py
 
 ```bash
 python tools/test_commit.py
+python tools/test_ctk_smart_scrollable_frame.py
 python tools/callgraph/static_callgraph_generator.py
 ```

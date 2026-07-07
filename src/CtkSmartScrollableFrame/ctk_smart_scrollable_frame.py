@@ -80,13 +80,20 @@ class CtkSmartScrollableFrame(tkinter.Frame, CTkAppearanceModeBaseClass, CTkScal
         CTkAppearanceModeBaseClass.__init__(self)
         CTkScalingBaseClass.__init__(self, scaling_type="widget")
 
+        self._scrollbar_vis_job: str | None = None
+        self._content_refresh_job: str | None = None
+        self._scrollbar_visible: bool | None = None
+        self._tracked_widgets: set[str] = set()
+        self._watched_child_count = -1
+        self._child_watch_running = False
+        self._refreshing_content = False
+
         self._create_grid()
 
         self._parent_canvas.configure(width=self._apply_widget_scaling(self._desired_width),
                                       height=self._apply_widget_scaling(self._desired_height))
+        self._schedule_content_refresh()
 
-        self.bind("<Configure>", lambda e: self._parent_canvas.configure(scrollregion=self._parent_canvas.bbox("all")))
-        self._parent_canvas.bind("<Configure>", self._fit_frame_dimensions_to_canvas)
         self.bind_all("<MouseWheel>", self._mouse_wheel_all, add="+")
         self.bind_all("<KeyPress-Shift_L>", self._keyboard_shift_press_all, add="+")
         self.bind_all("<KeyPress-Shift_R>", self._keyboard_shift_press_all, add="+")
@@ -103,44 +110,226 @@ class CtkSmartScrollableFrame(tkinter.Frame, CTkAppearanceModeBaseClass, CTkScal
 
         self._shift_pressed = False
 
-        self._scrollbar_vis_job: str | None = None
+        self.bind("<Configure>", self._schedule_content_refresh, add="+")
+        self._parent_canvas.bind("<Configure>", self._on_canvas_configure, add="+")
+        self._parent_frame.bind("<Map>", self._on_parent_mapped, add="+")
+        self._parent_frame.bind("<Configure>", self._schedule_content_refresh, add="+")
 
-        # Smart scrollbar logic - bind to update scrollbar visibility
-        self._parent_canvas.bind('<Configure>', self._update_scrollbar_visibility, add="+")
-        self.bind('<Configure>', self._update_scrollbar_visibility, add="+")
+        self.after_idle(self._refresh_content_geometry)
 
-        # Fix for childs expanding into scrollbar area after initialization
-        self.after(500, lambda: self._parent_canvas.configure(scrollregion=self._parent_canvas.bbox("all")))
+    def _layout_is_ready(self) -> bool:
+        if not self._parent_frame.winfo_ismapped():
+            return False
+        if self._orientation == "vertical":
+            return self._parent_canvas.winfo_height() > 1
+        return self._parent_canvas.winfo_width() > 1
+
+    def _on_parent_mapped(self, event=None):
+        self._schedule_content_refresh()
+        self._start_child_watch()
+        # Canvas size often settles a few frames after the first map (e.g. settings grid).
+        for delay in (0, 50, 150, 350):
+            self.after(delay, self._schedule_content_refresh)
+
+    def _start_child_watch(self) -> None:
+        if self._child_watch_running:
+            return
+        self._child_watch_running = True
+        self._watch_children(stable_polls=0)
+
+    def _watch_children(self, stable_polls: int = 0) -> None:
+        if not self.winfo_exists() or not self._parent_frame.winfo_ismapped():
+            self._child_watch_running = False
+            return
+
+        child_count = len(self.winfo_children())
+        if child_count != self._watched_child_count:
+            self._watched_child_count = child_count
+            self._ensure_content_tracking()
+            self._schedule_content_refresh()
+            stable_polls = 0
+        else:
+            stable_polls += 1
+
+        if stable_polls < 5:
+            self.after(50, lambda: self._watch_children(stable_polls))
+        else:
+            self._child_watch_running = False
+
+    def _scan_for_new_children(self, attempts: int = 0) -> None:
+        if not self.winfo_exists() or attempts > 25:
+            return
+        if self._ensure_content_tracking():
+            self._schedule_content_refresh()
+        if any(str(child) not in self._tracked_widgets for child in self.winfo_children()):
+            self.after(20, lambda: self._scan_for_new_children(attempts + 1))
+        else:
+            self._start_child_watch()
 
     def _smart_scrollbar_set(self, first, last):
         self._scrollbar.set(first, last)
         self._update_scrollbar_visibility()
 
+    def _on_canvas_configure(self, event=None):
+        self._fit_frame_dimensions_to_canvas(event)
+        if not self._refreshing_content:
+            self._schedule_content_refresh()
+
+    def _schedule_content_refresh(self, event=None):
+        if not self.winfo_exists() or self._refreshing_content:
+            return
+        if any(str(child) not in self._tracked_widgets for child in self.winfo_children()):
+            self._ensure_content_tracking()
+            self._start_child_watch()
+        if self._content_refresh_job is not None:
+            return
+
+        def apply() -> None:
+            self._content_refresh_job = None
+            if self.winfo_exists():
+                self._refresh_content_geometry()
+
+        self._content_refresh_job = self.after_idle(apply)
+
+    def _ensure_content_tracking(self) -> bool:
+        changed = False
+
+        def track(widget: tkinter.Misc) -> None:
+            nonlocal changed
+            if widget is self._parent_canvas:
+                return
+            path = str(widget)
+            if path in self._tracked_widgets:
+                return
+            self._tracked_widgets.add(path)
+            changed = True
+            widget.bind("<Configure>", self._schedule_content_refresh, add="+")
+            widget.bind("<Destroy>", self._on_descendant_destroy, add="+")
+            for child in widget.winfo_children():
+                track(child)
+
+        track(self)
+        for child in self.winfo_children():
+            track(child)
+        return changed
+
+    def _on_descendant_destroy(self, event) -> None:
+        if event.widget is self:
+            return
+        self._tracked_widgets.discard(str(event.widget))
+        self._schedule_content_refresh()
+
+    def _measure_content_bounds(self) -> tuple[int, int]:
+        self.update_idletasks()
+        max_right = 0
+        max_bottom = 0
+
+        def measure(widget: tkinter.Misc) -> None:
+            nonlocal max_right, max_bottom
+            if widget is self:
+                for child in widget.winfo_children():
+                    measure(child)
+                return
+            try:
+                widget.update_idletasks()
+                right = widget.winfo_x() + widget.winfo_width()
+                bottom = widget.winfo_y() + widget.winfo_height()
+                max_right = max(max_right, right)
+                max_bottom = max(max_bottom, bottom)
+            except tkinter.TclError:
+                return
+            for child in widget.winfo_children():
+                measure(child)
+
+        measure(self)
+        if max_right <= 0 and max_bottom <= 0:
+            if not self.winfo_children():
+                return 1, 1
+            return max(self.winfo_reqwidth(), 1), max(self.winfo_reqheight(), 1)
+        return max(max_right, 1), max(max_bottom, 1)
+
+    def _sync_inner_frame_size(self) -> None:
+        content_width, content_height = self._measure_content_bounds()
+        canvas_width = max(self._parent_canvas.winfo_width(), 1)
+        canvas_height = max(self._parent_canvas.winfo_height(), 1)
+
+        if self._orientation == "vertical":
+            target_width = canvas_width
+            target_height = max(content_height, 1)
+        else:
+            target_width = max(content_width, 1)
+            target_height = canvas_height
+
+        if self.winfo_width() != target_width or self.winfo_height() != target_height:
+            tkinter.Frame.configure(self, width=target_width, height=target_height)
+
+    def _refresh_content_geometry(self) -> None:
+        if self._refreshing_content:
+            return
+        self._refreshing_content = True
+        try:
+            self._ensure_content_tracking()
+            self.update_idletasks()
+            self._sync_inner_frame_size()
+            self.update_idletasks()
+
+            bbox = self._parent_canvas.bbox("all")
+            if bbox:
+                new_region = bbox
+            else:
+                new_region = (0, 0, 0, 0)
+
+            current_region = self._parent_canvas.cget("scrollregion")
+            formatted_region = " ".join(str(int(part)) for part in new_region)
+            if current_region != formatted_region:
+                self._parent_canvas.configure(scrollregion=new_region)
+
+            self._apply_scrollbar_visibility()
+        finally:
+            self._refreshing_content = False
+
     def _scrollbar_should_show(self) -> bool:
-        scrollregion = self._parent_canvas.bbox("all")
+        if not self._layout_is_ready():
+            return False
+
+        scrollregion = self._parent_canvas.cget("scrollregion")
+        if scrollregion:
+            x0, y0, x1, y1 = (float(part) for part in scrollregion.split())
+            content_width = x1 - x0
+            content_height = y1 - y0
+        else:
+            bbox = self._parent_canvas.bbox("all")
+            if not bbox:
+                return False
+            content_width = bbox[2] - bbox[0]
+            content_height = bbox[3] - bbox[1]
+
         if self._orientation == "vertical":
             canvas_height = self._parent_canvas.winfo_height()
-            content_height = (scrollregion[3] - scrollregion[1]) if scrollregion else 0
             return content_height > canvas_height + 2
         canvas_width = self._parent_canvas.winfo_width()
-        content_width = (scrollregion[2] - scrollregion[0]) if scrollregion else 0
         return content_width > canvas_width + 2
 
     def _apply_scrollbar_visibility(self) -> None:
-        if self._scrollbar_should_show():
+        if not self._layout_is_ready():
+            should_show = False
+        else:
+            should_show = self._scrollbar_should_show()
+        if should_show == self._scrollbar_visible:
+            return
+        self._scrollbar_visible = should_show
+        if should_show:
             self._scrollbar.grid()
         else:
             self._scrollbar.grid_remove()
 
     def _update_scrollbar_visibility(self, event=None):
-        if not self.winfo_ismapped():
-            return
         if self._scrollbar_vis_job is not None:
             return
 
         def apply() -> None:
             self._scrollbar_vis_job = None
-            if self.winfo_ismapped():
+            if self.winfo_exists():
                 self._apply_scrollbar_visibility()
 
         self._scrollbar_vis_job = self.after_idle(apply)
@@ -149,6 +338,14 @@ class CtkSmartScrollableFrame(tkinter.Frame, CTkAppearanceModeBaseClass, CTkScal
         if self._scrollbar_vis_job is not None:
             self.after_cancel(self._scrollbar_vis_job)
             self._scrollbar_vis_job = None
+        if self._content_refresh_job is not None:
+            self.after_cancel(self._content_refresh_job)
+            self._content_refresh_job = None
+        self.unbind_all("<MouseWheel>")
+        self.unbind_all("<KeyPress-Shift_L>")
+        self.unbind_all("<KeyPress-Shift_R>")
+        self.unbind_all("<KeyRelease-Shift_L>")
+        self.unbind_all("<KeyRelease-Shift_R>")
         tkinter.Frame.destroy(self)
         CTkAppearanceModeBaseClass.destroy(self)
         CTkScalingBaseClass.destroy(self)
@@ -179,6 +376,8 @@ class CtkSmartScrollableFrame(tkinter.Frame, CTkAppearanceModeBaseClass, CTkScal
                 self._label.grid_forget()
         
         self._scrollbar.grid_remove()
+        self._scrollbar_visible = False
+        self._schedule_content_refresh()
 
     def _set_appearance_mode(self, mode_string):
         super()._set_appearance_mode(mode_string)
@@ -195,6 +394,7 @@ class CtkSmartScrollableFrame(tkinter.Frame, CTkAppearanceModeBaseClass, CTkScal
 
         self._parent_canvas.configure(width=self._apply_widget_scaling(self._desired_width),
                                       height=self._apply_widget_scaling(self._desired_height))
+        self._schedule_content_refresh()
 
     def _set_dimensions(self, width=None, height=None):
         if width is not None:
@@ -204,6 +404,7 @@ class CtkSmartScrollableFrame(tkinter.Frame, CTkAppearanceModeBaseClass, CTkScal
 
         self._parent_canvas.configure(width=self._apply_widget_scaling(self._desired_width),
                                       height=self._apply_widget_scaling(self._desired_height))
+        self._schedule_content_refresh()
 
     def configure(self, **kwargs):
         if "width" in kwargs:
@@ -344,12 +545,15 @@ class CtkSmartScrollableFrame(tkinter.Frame, CTkAppearanceModeBaseClass, CTkScal
 
     def pack(self, **kwargs):
         self._parent_frame.pack(**kwargs)
+        self._schedule_content_refresh()
 
     def place(self, **kwargs):
         self._parent_frame.place(**kwargs)
+        self._schedule_content_refresh()
 
     def grid(self, **kwargs):
         self._parent_frame.grid(**kwargs)
+        self._schedule_content_refresh()
 
     def pack_forget(self):
         self._parent_frame.pack_forget()
