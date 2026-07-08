@@ -145,6 +145,7 @@ class AppShell(tk.Frame):
         self._sidebar_before_fullscreen: bool | None = None
         self._widget_mode = False
         self._view_before_widget: str | None = None
+        self._view_before_settings: str | None = None
         self._sidebar_before_widget = True
         self._title_bar_pin: TitleBarButtonOverlay | None = None
         self._widget_icon_upkeep_job: str | None = None
@@ -527,12 +528,18 @@ class AppShell(tk.Frame):
                 lambda _e, v=view: self.switch_view(v),
                 add="+",
             )
-        self._window.bind(f"<{mod}-comma>", lambda _e: self.switch_view("settings"), add="+")
+        self._window.bind(f"<{mod}-comma>", self._on_toggle_settings, add="+")
         bind_sequences(self._window, _ALT_ARROW_UP, self._on_alt_enter_widget, bind_all=True)
         bind_sequences(self._window, _ALT_ARROW_DOWN, self._on_alt_exit_widget, bind_all=True)
 
     def _on_toggle_sidebar(self, _event=None) -> None:
         self.toggle_sidebar()
+
+    def _on_toggle_settings(self, _event=None) -> None:
+        if self._active_view == "settings":
+            self.switch_view(self._view_before_settings or "timetable")
+        else:
+            self.switch_view("settings")
 
     def toggle_sidebar(self) -> None:
         if self._widget_mode:
@@ -774,6 +781,8 @@ class AppShell(tk.Frame):
             self._leave_meeting_fullscreen()
 
         previous = self._active_view
+        if name == "settings" and previous not in (None, "settings"):
+            self._view_before_settings = previous
         if previous == "settings" and name != "settings":
             settings = self._view_child(self._frames.get("settings"))
             if settings is not None and hasattr(settings, "on_leave_view"):
