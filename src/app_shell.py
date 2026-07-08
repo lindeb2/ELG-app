@@ -47,10 +47,10 @@ _WIDGET_WIDTH = 200
 _WIDGET_HEIGHT = 170
 
 _VIEW_SIZES: dict[str, tuple[int, int]] = {
-    "timetable": (300, 177),
+    "timetable": (300, 170),
     "statistics": (1420, 800),
     "meeting": (1360, 820),
-    "meeting_points": (300, 177),
+    "meeting_points": (300, 170),
     "settings": (462, 462),
 }
 
