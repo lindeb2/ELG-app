@@ -30,6 +30,7 @@ from settings_ui_constants import (
     FONT_MUTED,
     FONT_ROW,
     OUTLINED_BTN_CHROME,
+    SETTINGS_DROPDOWN_WIDTH,
     ROW_PADX,
     ROW_PADY,
     ACCOUNT_ROW_PADY,
@@ -259,7 +260,15 @@ class SettingsAccountFieldRow(ctk.CTkFrame):
 
 
 class SettingsDropdownRow(SettingsRow):
-    def __init__(self, parent, label: str, variable: ctk.StringVar, values: list[str], *, width: int = 160):
+    def __init__(
+        self,
+        parent,
+        label: str,
+        variable: ctk.StringVar,
+        values: list[str],
+        *,
+        width: int = SETTINGS_DROPDOWN_WIDTH,
+    ):
         super().__init__(parent, label)
         self.menu = ctk.CTkOptionMenu(
             self.trailing,

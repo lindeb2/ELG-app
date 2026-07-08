@@ -19,6 +19,9 @@ _UNSET = object()
 
 
 def fetch_notification_prefs(username: str) -> dict:
+    username = (username or "").strip()
+    if not username:
+        return {}
     doc = status_meeting.find_one(
         {"_id": NOTIFICATION_PREFS_DOC_ID},
         projection={f"data.{username}": 1},

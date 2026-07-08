@@ -45,6 +45,8 @@ from utils import flash_error
 
 _STARTUP_VIEW_LABELS = {"timetable": "Timetable", "statistics": "Statistics"}
 _STARTUP_VIEW_VALUES = {label: key for key, label in _STARTUP_VIEW_LABELS.items()}
+_CLOSE_ACTION_LABELS = {"tray": "Minimize to system tray", "exit": "Exit app Completely"}
+_CLOSE_ACTION_VALUES = {label: key for key, label in _CLOSE_ACTION_LABELS.items()}
 
 
 class SettingsFrame(ctk.CTkFrame):
@@ -133,6 +135,17 @@ class SettingsFrame(ctk.CTkFrame):
         )
         startup_view_group.add_row(self._startup_view_row)
         row = self._place_box(scroll, row, startup_view_group)
+
+        self._close_action_var = ctk.StringVar(value=_CLOSE_ACTION_LABELS["tray"])
+        on_close_group = SettingsGroup(scroll)
+        self._close_action_row = SettingsDropdownRow(
+            on_close_group.surface,
+            "On close",
+            self._close_action_var,
+            list(_CLOSE_ACTION_LABELS.values()),
+        )
+        on_close_group.add_row(self._close_action_row)
+        row = self._place_box(scroll, row, on_close_group)
 
         self._ctrl_r_reload_var = ctk.BooleanVar(value=False)
         reload_group = SettingsGroup(scroll)
@@ -379,6 +392,7 @@ class SettingsFrame(ctk.CTkFrame):
             var.trace_add("write", lambda *_args: self._schedule_save())
 
         self._startup_view_var.trace_add("write", lambda *_args: self._schedule_save())
+        self._close_action_var.trace_add("write", lambda *_args: self._schedule_save())
         self._discord_row.entry.bind("<FocusOut>", lambda _event: self._schedule_save())
         self._discord_row.entry.bind("<Return>", self._on_discord_return)
 
@@ -457,6 +471,8 @@ class SettingsFrame(ctk.CTkFrame):
             self._launch_minimized_var.set(bool(app_prefs.get("launch_minimized_to_tray", False)))
             view_key = app_prefs.get("startup_view", "timetable")
             self._startup_view_var.set(_STARTUP_VIEW_LABELS.get(view_key, "Timetable"))
+            close_key = app_prefs.get("close_action", "tray")
+            self._close_action_var.set(_CLOSE_ACTION_LABELS.get(close_key, _CLOSE_ACTION_LABELS["tray"]))
             self._ctrl_r_reload_var.set(bool(app_prefs.get("enable_ctrl_r_reload", False)))
             self._include_prereleases_var.set(bool(app_prefs.get("include_prereleases", False)))
 
@@ -545,11 +561,15 @@ class SettingsFrame(ctk.CTkFrame):
 
         existing_prefs = app_preferences_from_config(config)
         startup_view = _STARTUP_VIEW_VALUES.get(self._startup_view_var.get(), "timetable")
+        close_action = _CLOSE_ACTION_VALUES.get(
+            self._close_action_var.get(),
+            existing_prefs["close_action"],
+        )
         launch_at_startup = bool(self._startup_enabled_var.get())
         launch_minimized = bool(self._launch_minimized_var.get()) if launch_at_startup else False
 
         app_prefs = {
-            "close_action": existing_prefs["close_action"],
+            "close_action": close_action,
             "launch_at_startup": launch_at_startup,
             "launch_minimized_to_tray": launch_minimized,
             "startup_view": startup_view,

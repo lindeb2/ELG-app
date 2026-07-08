@@ -51,7 +51,7 @@ _VIEW_SIZES: dict[str, tuple[int, int]] = {
     "statistics": (1420, 800),
     "meeting": (1360, 820),
     "meeting_points": (300, 170),
-    "settings": (462, 462),
+    "settings": (462, 516),
 }
 
 _NAV_ITEMS: tuple[tuple[str, str], ...] = (
