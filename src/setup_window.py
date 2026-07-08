@@ -7,6 +7,7 @@ import customtkinter as ctk
 
 from app_config import apply_startup_registration, app_preferences_from_config, read_config, write_config
 from notification_preferences import save_notification_prefs
+from settings_ui_constants import ACCENT
 from utils import flash_error
 
 _PADX = 8
@@ -26,6 +27,10 @@ _ENTRY = {
     "justify": "center"
 }
 _BTN = {"height": 24, "font": _FONT_BODY, "corner_radius": 6}
+_BTN_NAV_WIDTH = 78
+_BTN_NAV_GAP = 7
+_BTN_WELCOME_WIDTH = 96
+_BTN_GRAY = {"fg_color": "#2A2A2A", "hover_color": "#333333"}
 
 # Layout colors.
 _DEBUG_ROOT = "#000000"
@@ -100,26 +105,22 @@ class SetupFrame(ctk.CTkFrame):
         self._build_discord_step()
         self._build_notifications_step()
 
-        btn_kwargs = {**_BTN, "width": 96}
+        btn_kwargs = {**_BTN, "width": _BTN_NAV_WIDTH, **_BTN_GRAY}
         self._back = ctk.CTkButton(
             self._actions,
             text="Back",
             command=self._on_back,
-            fg_color="#2A2A2A",
-            hover_color="#333333",
             **btn_kwargs,
         )
-        self._back.grid(row=0, column=0, padx=(0, 3), sticky="e")
+        self._back.grid(row=0, column=0, padx=(0, _BTN_NAV_GAP), sticky="e")
 
         self._next = ctk.CTkButton(
             self._actions,
             text="",
             command=self._on_next,
-            fg_color="#4C6EF5",
-            hover_color="#5C7CFA",
             **btn_kwargs,
         )
-        self._next.grid(row=0, column=1, padx=(0, 0), sticky="w")
+        self._next.grid(row=0, column=1, padx=(_BTN_NAV_GAP, 0), sticky="w")
 
         self._show_step()
 
@@ -164,10 +165,9 @@ class SetupFrame(ctk.CTkFrame):
             self._welcome_screen,
             text="Let's go!",
             command=self._advance_from_welcome,
-            fg_color="#4C6EF5",
-            hover_color="#5C7CFA",
-            width=150,
-            height=34,
+            **_BTN_GRAY,
+            width=_BTN_WELCOME_WIDTH,
+            height=30,
             font=("Arial", 18, "bold"),
             corner_radius=8,
         )
@@ -276,6 +276,10 @@ class SetupFrame(ctk.CTkFrame):
                 height=18,
                 checkbox_width=14,
                 checkbox_height=14,
+                fg_color=ACCENT,
+                hover_color=ACCENT,
+                border_color=ACCENT,
+                checkmark_color="#1E1E1E",
             )
             cb.pack(anchor="w")
             self._notify_cbs.append(cb)
