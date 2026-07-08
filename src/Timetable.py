@@ -14,6 +14,7 @@ from notifications import (
     post_notification,
 )
 from period_model import to_local
+from settings_ui_constants import ACCENT
 from timetable_db import aggregations, client, collection, db, get_user, status_meeting
 from utils import flash_error
 
@@ -40,6 +41,8 @@ _OVERLAY_PAD_ROWS = (0, 2, 4, 6)
 _OVERLAY_ROW_NAME = 1
 _OVERLAY_ROW_DESC = 3
 _OVERLAY_ROW_BUTTONS = 5
+
+_FOCUS_HIGHLIGHT_WIDTH = 1
 
 
 def _configure_padded_grid(
@@ -82,6 +85,8 @@ class TimetableFrame(ctk.CTkFrame):
         self._plan_refresh_job = None
         self._prepare_retry_job = None
         self._start_notified = False
+        self._keyboard_focus_indicators_active = False
+        self._focus_highlight_defaults = {}
 
         self._user = get_user()
         self._commit_txn = CommitTransactionManager(collection, aggregations, client, self._user)
@@ -126,15 +131,130 @@ class TimetableFrame(ctk.CTkFrame):
         self.desc_entry.grid(row=_OVERLAY_ROW_DESC, column=_COL_LEFT, sticky="nsew", columnspan=_COL_FULL_SPAN)
         self.desc_entry.bind("<KeyPress>", lambda event: self.after_idle(self.validate_inputs))
 
-        ctk.CTkButton(self.overlay_canvas, text="Continue", fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER,
-                      command=self.continue_timer, text_color=COLOR_TEXT, font=_ACTION_BTN_FONT, corner_radius=8
-        ).grid(row=_OVERLAY_ROW_BUTTONS, column=_COL_LEFT, sticky="nsew")
+        self.continue_button = ctk.CTkButton(self.overlay_canvas, text="Continue", fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER,
+                      command=self.continue_timer, text_color=COLOR_TEXT, font=_ACTION_BTN_FONT, corner_radius=8)
+        self.continue_button.grid(row=_OVERLAY_ROW_BUTTONS, column=_COL_LEFT, sticky="nsew")
 
         self.log_button = ctk.CTkButton(self.overlay_canvas, text="Log Entry", fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER,
                                    command=self.submit_entry, text_color=COLOR_TEXT, text_color_disabled=COLOR_DISABLED_TEXT, font=_ACTION_BTN_FONT, corner_radius=8, state="disabled")
         self.log_button.grid(row=_OVERLAY_ROW_BUTTONS, column=_COL_RIGHT, sticky="nsew")
 
+        self._setup_keyboard_navigation()
+
         self.sync_top_padding()
+        self.after_idle(self.toggle_run_button.focus_set)
+
+    # --- Keyboard navigation ---
+    #
+    # Three screens, each with its own fixed set of focusable controls:
+    #   1. Idle/running   -> [toggle_run_button]                                  (Start / Pause)
+    #   2. Paused         -> [toggle_run_button, done_button]                     (Continue / Done)
+    #   3. Entry overlay  -> [name_entry, desc_entry, continue_button, log_button]
+    #
+    # Tab/Shift+Tab cycle within the current screen's controls. Space activates a
+    # focused button. Enter in either text box submits the log entry. Whenever a
+    # screen becomes active, focus is set explicitly (see hide_done_button,
+    # toggle_button, and show_entry_overlay) so Tab/Space always have somewhere to
+    # start from rather than relying on whatever last had focus.
+    #
+    # Accent focus borders appear after the user has pressed Tab at least once—not on
+    # text fields. The lone Start/Pause button is never highlighted; when Continue
+    # and Done are shown together, both can be highlighted.
+
+    def _focusable_buttons(self):
+        return (self.toggle_run_button, self.done_button, self.continue_button, self.log_button)
+
+    def _focusable_entries(self):
+        return (self.name_entry, self.desc_entry)
+
+    def _all_focusable_widgets(self):
+        return self._focusable_buttons() + self._focusable_entries()
+
+    def _visible_focus_order(self):
+        """The ordered, enabled controls for whichever screen is currently showing."""
+        if self.overlay_canvas.winfo_ismapped():
+            widgets = (self.name_entry, self.desc_entry, self.continue_button, self.log_button)
+        elif self.done_button.winfo_ismapped():
+            widgets = (self.toggle_run_button, self.done_button)
+        else:
+            widgets = (self.toggle_run_button,)
+        return [w for w in widgets if self._widget_enabled(w)]
+
+    @staticmethod
+    def _widget_enabled(widget) -> bool:
+        try:
+            return widget.cget("state") != "disabled"
+        except Exception:
+            return True
+
+    def _should_show_focus_highlight(self, widget) -> bool:
+        if not self._keyboard_focus_indicators_active:
+            return False
+        if widget in self._focusable_entries():
+            return False
+        if widget is self.toggle_run_button:
+            return self.done_button.winfo_ismapped()
+        return True
+
+    def _focus_step(self, current, direction):
+        """Move focus to the next/previous control in the current screen; wraps around."""
+        self._keyboard_focus_indicators_active = True
+        order = self._visible_focus_order()
+        if not order:
+            return "break"
+        idx = order.index(current) if current in order else (0 if direction > 0 else -1)
+        order[(idx + direction) % len(order)].focus_set()
+        return "break"
+
+    def _submit_via_return(self, _event=None):
+        """Enter (not Shift+Enter) in either text box submits the log entry."""
+        if self.log_button.cget("state") == "normal":
+            self.submit_entry()
+        else:
+            flash_error(self.log_button)
+        return "break"
+
+    def _install_focus_highlight(self, widget) -> None:
+        """Draw a thin accent-colored border around focused controls when appropriate."""
+        default_border_color = widget.cget("border_color")
+        default_border_width = widget.cget("border_width")
+        self._focus_highlight_defaults[widget] = (default_border_width, default_border_color)
+
+        def on_focus_in(_event=None):
+            if not self._should_show_focus_highlight(widget):
+                return
+            widget.configure(border_width=_FOCUS_HIGHLIGHT_WIDTH, border_color=ACCENT)
+
+        def on_focus_out(_event=None):
+            self._clear_focus_highlight(widget)
+
+        widget.bind("<FocusIn>", on_focus_in, add="+")
+        widget.bind("<FocusOut>", on_focus_out, add="+")
+
+    def _clear_focus_highlight(self, widget) -> None:
+        default = self._focus_highlight_defaults.get(widget)
+        if default is None:
+            return
+        default_border_width, default_border_color = default
+        widget.configure(border_width=default_border_width, border_color=default_border_color)
+
+
+    def _setup_keyboard_navigation(self) -> None:
+        for widget in self._all_focusable_widgets():
+            widget.bind("<Tab>", lambda event, w=widget: self._focus_step(w, 1))
+            widget.bind("<Shift-Tab>", lambda event, w=widget: self._focus_step(w, -1))
+            widget.bind("<ISO_Left_Tab>", lambda event, w=widget: self._focus_step(w, -1))
+            widget.bind("<Shift-ISO_Left_Tab>", lambda event, w=widget: self._focus_step(w, -1))
+
+        for button in self._focusable_buttons():
+            self._install_focus_highlight(button)
+
+        for button in self._focusable_buttons():
+            button.bind("<space>", lambda event, b=button: b.invoke())
+
+        for entry in self._focusable_entries():
+            entry.bind("<Return>", self._submit_via_return, add="+")
+            entry.bind("<Shift-Return>", lambda event: None, add="+")
 
     def sync_top_padding(self) -> None:
         shell = self._shell
@@ -187,6 +307,7 @@ class TimetableFrame(ctk.CTkFrame):
             self.time_label.configure(text=format_time(self.elapsed_time))
             self.done_button.grid(row=_ROW_BUTTONS, column=_COL_RIGHT, sticky="nsew")
             self.toggle_run_button.grid_configure(column=_COL_LEFT, columnspan=1)
+            self.toggle_run_button.focus_set()
         self._notify_session_changed()
 
     def get_log_db_timestamp(self):
@@ -241,6 +362,8 @@ class TimetableFrame(ctk.CTkFrame):
         self.toggle_run_button.configure(text=text, font=_PRIMARY_BTN_FONT)
         self.toggle_run_button.grid_configure(column=_COL_LEFT, columnspan=_COL_FULL_SPAN)
         self.done_button.grid_forget()
+        self._clear_focus_highlight(self.toggle_run_button)
+        self.toggle_run_button.focus_set()
 
     def update_timer(self):
         if self.running:
@@ -474,3 +597,4 @@ class TimetableFrame(ctk.CTkFrame):
         if self.desc_entry.get() == "":
             self.desc_entry._activate_placeholder()
         self._start_prepare_commit()
+        self.name_entry.focus_set()
