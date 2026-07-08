@@ -18,7 +18,7 @@ from notification_preferences import (
     fetch_notification_prefs,
     save_notification_prefs,
 )
-from platform_keys import primary_modifier_label
+from platform_keys import alt_modifier_label, primary_modifier_label
 from session_guard import confirm_discard_session, has_unlogged_time
 from settings_ui import (
     ACCENT,
@@ -32,7 +32,6 @@ from settings_ui import (
     SettingsDropdownRow,
     SettingsExpandableGroup,
     SettingsGroup,
-    SettingsSwitchRow,
     TEXT_MUTED,
     FONT_MUTED,
     FONT_ROW,
@@ -147,16 +146,13 @@ class SettingsFrame(ctk.CTkFrame):
         on_close_group.add_row(self._close_action_row)
         row = self._place_box(scroll, row, on_close_group)
 
-        self._ctrl_r_reload_var = ctk.BooleanVar(value=False)
-        reload_group = SettingsGroup(scroll)
-        self._ctrl_r_row = SettingsSwitchRow(
-            reload_group.surface,
-            f"Reload with {primary_modifier_label()} + R",
-            self._ctrl_r_reload_var,
-            command=self._schedule_save,
+        self._shortcuts_group = SettingsExpandableGroup(
+            scroll,
+            "Keyboard shortcuts",
+            start_expanded=False,
         )
-        reload_group.add_row(self._ctrl_r_row)
-        row = self._place_box(scroll, row, reload_group)
+        row = self._place_box(scroll, row, self._shortcuts_group)
+        self._shortcuts_group.build_body(self._build_shortcuts_body)
 
         self._updates_group = SettingsExpandableGroup(
             scroll,
@@ -296,6 +292,38 @@ class SettingsFrame(ctk.CTkFrame):
         widgets.append(last_row)
         return widgets
 
+    def _build_shortcuts_body(self, group: SettingsExpandableGroup) -> list[ctk.CTkBaseClass]:
+        mod = primary_modifier_label()
+        alt = alt_modifier_label()
+        shortcuts = [
+            ("Toggle sidebar", f"{mod} + B"),
+            ("Switch view", f"{mod} + 1-4"),
+            ("Settings", f"{mod} + ,"),
+            ("Reload active view", f"{mod} + R"),
+            ("Enter timetable widget mode", f"{alt} + Up"),
+            ("Exit timetable widget mode", f"{alt} + Down"),
+        ]
+        widgets: list[ctk.CTkBaseClass] = []
+        for name, combo in shortcuts:
+            shortcut_row = ctk.CTkFrame(group.surface, fg_color="transparent")
+            shortcut_row.grid_columnconfigure(0, weight=1)
+            ctk.CTkLabel(
+                shortcut_row,
+                text=name,
+                font=FONT_ROW,
+                anchor="w",
+            ).pack(side="left", anchor="w", padx=(ROW_PADX + 12, 0), pady=CHILD_ROW_PADY)
+            ctk.CTkLabel(
+                shortcut_row,
+                text=combo,
+                font=FONT_ROW,
+                anchor="e",
+                text_color=TEXT_MUTED,
+            ).pack(side="right", padx=(0, ROW_PADX), pady=CHILD_ROW_PADY)
+            group.add_child_row(shortcut_row)
+            widgets.append(shortcut_row)
+        return widgets
+
     def _last_checked_text(self) -> str:
         app_prefs = app_preferences_from_config(read_config())
         return f"Last checked: {format_last_checked(app_prefs.get('last_update_check_at'))}"
@@ -385,7 +413,6 @@ class SettingsFrame(ctk.CTkFrame):
             self._notifications_enabled_var,
             self._startup_enabled_var,
             self._launch_minimized_var,
-            self._ctrl_r_reload_var,
             self._include_prereleases_var,
             *self._notify_vars.values(),
         ):
@@ -473,7 +500,6 @@ class SettingsFrame(ctk.CTkFrame):
             self._startup_view_var.set(_STARTUP_VIEW_LABELS.get(view_key, "Timetable"))
             close_key = app_prefs.get("close_action", "tray")
             self._close_action_var.set(_CLOSE_ACTION_LABELS.get(close_key, _CLOSE_ACTION_LABELS["tray"]))
-            self._ctrl_r_reload_var.set(bool(app_prefs.get("enable_ctrl_r_reload", False)))
             self._include_prereleases_var.set(bool(app_prefs.get("include_prereleases", False)))
 
             self._refresh_last_checked_label()
@@ -573,7 +599,6 @@ class SettingsFrame(ctk.CTkFrame):
             "launch_at_startup": launch_at_startup,
             "launch_minimized_to_tray": launch_minimized,
             "startup_view": startup_view,
-            "enable_ctrl_r_reload": bool(self._ctrl_r_reload_var.get()),
             "include_prereleases": bool(self._include_prereleases_var.get()),
             "pending_update": existing_prefs.get("pending_update"),
             "last_update_check_at": existing_prefs.get("last_update_check_at"),
@@ -600,3 +625,4 @@ class SettingsFrame(ctk.CTkFrame):
             print(f"Could not save notification settings: {exc}")
             flash_error(self._discord_row.entry)
             return
+

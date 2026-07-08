@@ -211,7 +211,6 @@ def main() -> None:
 
     if needs_setup:
         root.title("ELG Setup")
-        root.geometry("460x760")
 
         shell = AppShell(
             root,
@@ -235,7 +234,7 @@ def main() -> None:
         setup.set_continue_enabled(False)
 
         def _preload() -> None:
-            shell.switch_view("timetable", update_geometry=False)
+            shell.switch_view("timetable", update_geometry=True)
             setup.set_continue_enabled(True)
 
         root.after(0, _preload)

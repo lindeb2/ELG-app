@@ -23,7 +23,6 @@ from platform_keys import (
     bind_sequences,
     primary_letter_sequences,
     primary_modifier,
-    unbind_sequences,
 )
 from title_bar_pin import FLUENT_ICON_FONT, TitleBarButtonOverlay, WIDGET_ENTER_GLYPH
 from window_chrome import (
@@ -138,7 +137,6 @@ class AppShell(tk.Frame):
             window,
             should_block=lambda: has_unlogged_time(self.get_timetable()),
         )
-        self._ctrl_r_bound = False
         self._manual_update_check: Callable | None = None
         self._instance_guard = None
         self._sidebar_visible = True
@@ -208,7 +206,6 @@ class AppShell(tk.Frame):
 
         window.protocol("WM_DELETE_WINDOW", self._on_close)
         self._bind_shortcuts()
-        self._sync_ctrl_r_binding()
         self._shutdown_blocker.install()
         if sys.platform.startswith("win"):
             self._window.bind("<FocusIn>", self._on_widget_window_focus, add="+")
@@ -217,7 +214,6 @@ class AppShell(tk.Frame):
 
     def set_app_preferences(self, app_prefs: dict) -> None:
         self._app_prefs = dict(app_prefs)
-        self._sync_ctrl_r_binding()
 
     def set_manual_update_check(self, callback: Callable | None) -> None:
         self._manual_update_check = callback
@@ -248,19 +244,7 @@ class AppShell(tk.Frame):
         if timetable is not None:
             timetable.discard_session()
 
-    def _sync_ctrl_r_binding(self) -> None:
-        sequences = primary_letter_sequences("r")
-        if self._app_prefs.get("enable_ctrl_r_reload"):
-            if not self._ctrl_r_bound:
-                bind_sequences(self._window, sequences, self._on_ctrl_r_reload)
-                self._ctrl_r_bound = True
-        elif self._ctrl_r_bound:
-            unbind_sequences(self._window, sequences)
-            self._ctrl_r_bound = False
-
     def _on_ctrl_r_reload(self, _event=None) -> str | None:
-        if not self._app_prefs.get("enable_ctrl_r_reload"):
-            return None
         if self._active_view in (None, "settings"):
             return "break"
         timetable = self.get_timetable()
@@ -516,6 +500,11 @@ class AppShell(tk.Frame):
             self._window,
             primary_letter_sequences("b"),
             self._on_toggle_sidebar,
+        )
+        bind_sequences(
+            self._window,
+            primary_letter_sequences("r"),
+            self._on_ctrl_r_reload,
         )
         for key, view in _SHORTCUT_VIEWS.items():
             self._window.bind(

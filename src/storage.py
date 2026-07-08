@@ -16,10 +16,9 @@ CURRENT_SCHEMA_VERSION = 1
 
 _DEFAULT_APP = {
     "close_action": "tray",
-    "launch_at_startup": False,
-    "launch_minimized_to_tray": False,
+    "launch_at_startup": True,
+    "launch_minimized_to_tray": True,
     "startup_view": "timetable",
-    "enable_ctrl_r_reload": False,
 }
 
 

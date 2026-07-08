@@ -8,9 +8,9 @@ from timetable_db import status_meeting
 NOTIFICATION_PREFS_DOC_ID = "Notification Preferences"
 
 DEFAULT_NOTIFICATION_PREFS = {
-    "notifications_enabled": True,
-    "notify_others_start": True,
-    "notify_others_end": True,
+    "notifications_enabled": False,
+    "notify_others_start": False,
+    "notify_others_end": False,
     "notify_own_start": False,
     "notify_own_end": False,
 }

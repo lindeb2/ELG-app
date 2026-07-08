@@ -57,3 +57,5 @@
 - [ ]  Auto log and record during meetings
 - [ ]  Implement Color Themes
 - [ ]  Improve first-time wizard
+- [ ]  Bugfix start up on launch
+- [ ]  Bugfix notifications

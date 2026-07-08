@@ -13,10 +13,9 @@ StartupView = Literal["timetable", "statistics"]
 
 DEFAULT_APP_PREFERENCES: dict = {
     "close_action": "tray",
-    "launch_at_startup": False,
-    "launch_minimized_to_tray": False,
+    "launch_at_startup": True,
+    "launch_minimized_to_tray": True,
     "startup_view": "timetable",
-    "enable_ctrl_r_reload": False,
     "include_prereleases": False,
     "pending_update": None,
     "last_update_check_at": None,
@@ -58,8 +57,6 @@ def normalize_app_preferences(app: dict | None) -> dict:
     startup_view = app.get("startup_view", merged["startup_view"])
     if startup_view in ("timetable", "statistics"):
         merged["startup_view"] = startup_view
-
-    merged["enable_ctrl_r_reload"] = bool(app.get("enable_ctrl_r_reload", False))
 
     merged["include_prereleases"] = bool(app.get("include_prereleases", False))
 
