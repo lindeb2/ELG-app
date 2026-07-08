@@ -14,6 +14,9 @@ COLOR_HOVER=        "#333333" # Hover [Buttons, Scrollbars] & EntryBorders & Too
 COLOR_DISABLED_TEXT="#666666" # Disabled text                                                                                         102    40      40
 COLOR_TEXT=         "#FFFFFF" # Text                                                                                                  255    100     10
 
+_TOP_PAD = 3
+
+
 class MeetingPointManagerFrame(ctk.CTkFrame):
     @staticmethod
     def _fetch_server_time():
@@ -137,6 +140,17 @@ class MeetingPointManagerFrame(ctk.CTkFrame):
         self.description_entry.bind("<Return>", lambda event: self.add())
 
         threading.Thread(target=self.week_check, name="WeekSync", daemon=True).start()
+
+        self.sync_top_padding()
+
+    def sync_top_padding(self) -> None:
+        shell = self._shell
+        if shell is not None and hasattr(shell, "content_top_pad_active"):
+            top_pad = _TOP_PAD if shell.content_top_pad_active() else 0
+        else:
+            top_pad = 0
+
+        self.menu_bar.pack_configure(pady=(top_pad, 0))
 
     def _build_week_list_frame(self, year, week):
         frame = CtkSmartScrollableFrame(

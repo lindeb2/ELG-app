@@ -24,6 +24,52 @@ COLOR_HOVER=        "#333333"
 COLOR_DISABLED_TEXT="#666666"
 COLOR_TEXT=         "#FFFFFF"
 
+_PAD = 6
+_ROW_TOP_PAD = 0
+_PAD_ROWS = (0, 2, 4)
+_PAD_COLS = (0, 2, 4)
+_ROW_BUTTONS = 1
+_ROW_TIMER = 3
+_COL_LEFT = 1
+_COL_RIGHT = 3
+_COL_FULL_SPAN = 3
+_PRIMARY_BTN_FONT = ("Arial", 24)
+_ACTION_BTN_FONT = ("Arial", 14)
+
+_OVERLAY_PAD_ROWS = (0, 2, 4, 6)
+_OVERLAY_ROW_NAME = 1
+_OVERLAY_ROW_DESC = 3
+_OVERLAY_ROW_BUTTONS = 5
+
+
+def _configure_padded_grid(
+    frame,
+    *,
+    pad_rows: tuple[int, ...],
+    pad_cols: tuple[int, ...],
+    content_rows: tuple[int, ...],
+    content_cols: tuple[int, ...],
+    content_row_weights: tuple[int, ...] | None = None,
+    content_row_uniform: str | None = None,
+    content_col_uniform: str | None = None,
+) -> None:
+    for row in pad_rows:
+        frame.grid_rowconfigure(row, weight=0, minsize=_PAD)
+    for i, row in enumerate(content_rows):
+        weight = content_row_weights[i] if content_row_weights else 1
+        row_kwargs: dict = {"weight": weight}
+        if content_row_uniform is not None:
+            row_kwargs["uniform"] = content_row_uniform
+        frame.grid_rowconfigure(row, **row_kwargs)
+    for col in pad_cols:
+        frame.grid_columnconfigure(col, weight=0, minsize=_PAD)
+    for col in content_cols:
+        col_kwargs: dict = {"weight": 1}
+        if content_col_uniform is not None:
+            col_kwargs["uniform"] = content_col_uniform
+        frame.grid_columnconfigure(col, **col_kwargs)
+
+
 class TimetableFrame(ctk.CTkFrame):
     def __init__(self, parent, shell=None):
         super().__init__(parent, fg_color=COLOR_BACKGROUND)
@@ -40,39 +86,65 @@ class TimetableFrame(ctk.CTkFrame):
         self._user = get_user()
         self._commit_txn = CommitTransactionManager(collection, aggregations, client, self._user)
 
-        self.grid_rowconfigure([0, 1], weight=1, uniform='a')
-        self.grid_columnconfigure([0, 1], weight=1, uniform='a')
+        _configure_padded_grid(
+            self,
+            pad_rows=_PAD_ROWS,
+            pad_cols=_PAD_COLS,
+            content_rows=(_ROW_BUTTONS, _ROW_TIMER),
+            content_cols=(_COL_LEFT, _COL_RIGHT),
+            content_row_uniform="main",
+            content_col_uniform="main",
+        )
 
         self.time_label = ctk.CTkLabel(self, text="00:00", font=("Arial", 32), text_color=COLOR_TEXT, fg_color=COLOR_BACKGROUND)
-        self.time_label.grid(row=1, column=0, sticky='nsew', columnspan=2)
+        self.time_label.grid(row=_ROW_TIMER, column=_COL_LEFT, sticky="nsew", columnspan=_COL_FULL_SPAN)
 
-        self.toggle_run_button = ctk.CTkButton(self, text="Start", fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER, text_color=COLOR_TEXT, font=("Arial", 24), corner_radius=8, command=self.toggle_button)
-        self.toggle_run_button.grid(row=0, column=0, sticky='nsew', padx=4, pady=(0, 4), columnspan=2)
+        self.toggle_run_button = ctk.CTkButton(self, text="Start", fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER, text_color=COLOR_TEXT, font=_PRIMARY_BTN_FONT, corner_radius=8, command=self.toggle_button)
+        self.toggle_run_button.grid(row=_ROW_BUTTONS, column=_COL_LEFT, sticky="nsew", columnspan=_COL_FULL_SPAN)
 
-        self.done_button = ctk.CTkButton(self, text="Done", fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER, text_color=COLOR_TEXT, text_color_disabled=COLOR_DISABLED_TEXT, font=("Arial", 14), corner_radius=8, command=self.show_entry_overlay, state="disabled")
+        self.done_button = ctk.CTkButton(self, text="Done", fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER, text_color=COLOR_TEXT, text_color_disabled=COLOR_DISABLED_TEXT, font=_ACTION_BTN_FONT, corner_radius=8, command=self.show_entry_overlay, state="disabled")
 
         self.overlay_canvas = ctk.CTkFrame(self, corner_radius=0, fg_color=COLOR_BACKGROUND)
-        self.overlay_canvas.grid_rowconfigure([0, 1, 2], weight=1, uniform='a')
-        self.overlay_canvas.grid_rowconfigure(2, weight=2)
-        self.overlay_canvas.grid_columnconfigure([0, 1], weight=1, uniform='a')
+        _configure_padded_grid(
+            self.overlay_canvas,
+            pad_rows=_OVERLAY_PAD_ROWS,
+            pad_cols=_PAD_COLS,
+            content_rows=(_OVERLAY_ROW_NAME, _OVERLAY_ROW_DESC, _OVERLAY_ROW_BUTTONS),
+            content_cols=(_COL_LEFT, _COL_RIGHT),
+            content_row_weights=(2, 2, 3),
+            content_row_uniform="overlay",
+            content_col_uniform="overlay",
+        )
 
         self.name_entry = CTkStickyPlaceholderEntry(self.overlay_canvas, placeholder_text="Name", font=("Arial", 18),
                      fg_color=COLOR_PRIMARY, border_color=COLOR_HOVER, placeholder_text_color=COLOR_DISABLED_TEXT, text_color=COLOR_TEXT)
-        self.name_entry.grid(row=0, column=0, padx=4, pady=4, sticky='nsew', columnspan=2)
+        self.name_entry.grid(row=_OVERLAY_ROW_NAME, column=_COL_LEFT, sticky="nsew", columnspan=_COL_FULL_SPAN)
         self.name_entry.bind("<KeyPress>", lambda event: self.after_idle(self.validate_inputs))
 
         self.desc_entry = CTkStickyPlaceholderEntry(self.overlay_canvas, placeholder_text="Description", font=("Arial", 18),
                      fg_color=COLOR_PRIMARY, border_color=COLOR_HOVER, placeholder_text_color=COLOR_DISABLED_TEXT, text_color=COLOR_TEXT)
-        self.desc_entry.grid(row=1, column=0, padx=4, pady=4, sticky='nsew', columnspan=2)
+        self.desc_entry.grid(row=_OVERLAY_ROW_DESC, column=_COL_LEFT, sticky="nsew", columnspan=_COL_FULL_SPAN)
         self.desc_entry.bind("<KeyPress>", lambda event: self.after_idle(self.validate_inputs))
 
         ctk.CTkButton(self.overlay_canvas, text="Continue", fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER,
-                      command=self.continue_timer, text_color=COLOR_TEXT, font=("Arial", 14), corner_radius=8
-        ).grid(row=2, column=0, padx=4, pady=4, sticky='nsew')
+                      command=self.continue_timer, text_color=COLOR_TEXT, font=_ACTION_BTN_FONT, corner_radius=8
+        ).grid(row=_OVERLAY_ROW_BUTTONS, column=_COL_LEFT, sticky="nsew")
 
         self.log_button = ctk.CTkButton(self.overlay_canvas, text="Log Entry", fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER,
-                                   command=self.submit_entry, text_color=COLOR_TEXT, text_color_disabled=COLOR_DISABLED_TEXT, font=("Arial", 14), corner_radius=8, state="disabled")
-        self.log_button.grid(row=2, column=1, padx=4, pady=4, sticky='nsew')
+                                   command=self.submit_entry, text_color=COLOR_TEXT, text_color_disabled=COLOR_DISABLED_TEXT, font=_ACTION_BTN_FONT, corner_radius=8, state="disabled")
+        self.log_button.grid(row=_OVERLAY_ROW_BUTTONS, column=_COL_RIGHT, sticky="nsew")
+
+        self.sync_top_padding()
+
+    def sync_top_padding(self) -> None:
+        shell = self._shell
+        if shell is not None and hasattr(shell, "content_top_pad_active"):
+            top_pad = _PAD if shell.content_top_pad_active() else 0
+        else:
+            top_pad = _PAD
+
+        self.grid_rowconfigure(_ROW_TOP_PAD, weight=0, minsize=top_pad)
+        self.overlay_canvas.grid_rowconfigure(_ROW_TOP_PAD, weight=0, minsize=top_pad)
 
     def _notify_session_changed(self) -> None:
         shell = self._shell
@@ -111,10 +183,10 @@ class TimetableFrame(ctk.CTkFrame):
         else:
             self.elapsed_time += time.perf_counter() - self._monotonic_anchor
             self.running = False
-            self.toggle_run_button.configure(text="Continue", font=("Arial", 14))
+            self.toggle_run_button.configure(text="Continue", font=_ACTION_BTN_FONT)
             self.time_label.configure(text=format_time(self.elapsed_time))
-            self.done_button.grid(row=0, column=1, sticky='nsew', padx=4, pady=(0, 4))
-            self.toggle_run_button.grid_configure(columnspan=1)
+            self.done_button.grid(row=_ROW_BUTTONS, column=_COL_RIGHT, sticky="nsew")
+            self.toggle_run_button.grid_configure(column=_COL_LEFT, columnspan=1)
         self._notify_session_changed()
 
     def get_log_db_timestamp(self):
@@ -166,8 +238,8 @@ class TimetableFrame(ctk.CTkFrame):
             print(f"Failed to prepare start notification: {exc}")
 
     def hide_done_button(self, text):
-        self.toggle_run_button.configure(text=text, font=("Arial", 24))
-        self.toggle_run_button.grid_configure(columnspan=2)
+        self.toggle_run_button.configure(text=text, font=_PRIMARY_BTN_FONT)
+        self.toggle_run_button.grid_configure(column=_COL_LEFT, columnspan=_COL_FULL_SPAN)
         self.done_button.grid_forget()
 
     def update_timer(self):
@@ -396,7 +468,7 @@ class TimetableFrame(ctk.CTkFrame):
             self.log_button.configure(state="disabled")
 
     def show_entry_overlay(self):
-        self.overlay_canvas.grid(row=0, column=0, sticky="nsew", columnspan=2, rowspan=2)
+        self.overlay_canvas.grid(row=0, column=0, sticky="nsew", columnspan=5, rowspan=5)
         if self.name_entry.get() == "":
             self.name_entry._activate_placeholder()
         if self.desc_entry.get() == "":

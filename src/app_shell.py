@@ -38,21 +38,19 @@ from window_chrome import (
 _APP_BG = "#000000"
 _SECTION_GAP = 1
 _GAP_COLOR = "#303030"
-_CONTENT_TOP_INSET_VIEWS = frozenset({"timetable", "meeting_points"})
-_CONTENT_TOP_INSET = 4
 _SIDEBAR_WIDTH = 100
 _SIDEBAR_BTN_PADX = (0, 0)
 _SIDEBAR_BTN_PADY = (0, 1)
 _SIDEBAR_BTN_TEXT_INSET = 5
 _SIDEBAR_BTN_WIDTH = _SIDEBAR_WIDTH
-_CONTENT_SQUARE = 200
-_SMALL_VIEW = (_SIDEBAR_WIDTH + _CONTENT_SQUARE, _CONTENT_SQUARE)
+_WIDGET_WIDTH = 200
+_WIDGET_HEIGHT = 170
 
 _VIEW_SIZES: dict[str, tuple[int, int]] = {
-    "timetable": _SMALL_VIEW,
+    "timetable": (300, 177),
     "statistics": (1420, 800),
     "meeting": (1360, 820),
-    "meeting_points": _SMALL_VIEW,
+    "meeting_points": (300, 177),
     "settings": (462, 462),
 }
 
@@ -359,23 +357,17 @@ class AppShell(tk.Frame):
     def _section_gaps_active(self) -> bool:
         return self._sidebar_visible and not self._widget_mode
 
-    def _content_top_inset(self) -> int:
-        if not self._section_gaps_active():
-            return 0
-        if self._active_view in _CONTENT_TOP_INSET_VIEWS:
-            return _CONTENT_TOP_INSET
-        return 0
+    def content_top_pad_active(self) -> bool:
+        return self._sidebar_visible and not self._widget_mode
 
-    def _sync_content_top_inset(self) -> None:
-        inset = self._content_top_inset()
-        for name in _CONTENT_TOP_INSET_VIEWS:
-            host = self._frames.get(name)
-            if host is not None and host.winfo_children():
-                pad = (inset, 0) if self._active_view == name else (0, 0)
-                host.winfo_children()[0].pack_configure(pady=pad)
-        meeting_frame = self._view_child(self._frames.get("meeting"))
-        if meeting_frame is not None:
-            meeting_frame.pack_configure(pady=(0, 0))
+    def _sync_view_padding(self) -> None:
+        timetable = self.get_timetable()
+        if timetable is not None and hasattr(timetable, "sync_top_padding"):
+            timetable.sync_top_padding()
+
+        meeting_points = self._view_child(self._frames.get("meeting_points"))
+        if meeting_points is not None and hasattr(meeting_points, "sync_top_padding"):
+            meeting_points.sync_top_padding()
 
     def _apply_shell_layout(self) -> None:
         """Strip-colored shell + grid gaps: empty cells show through as 1px dividers."""
@@ -405,7 +397,7 @@ class AppShell(tk.Frame):
             self._content_row = 0
             self._content_col = 0
 
-        self._sync_content_top_inset()
+        self._sync_view_padding()
 
     def warm_widget_title_bar_pin(self) -> None:
         if not sys.platform.startswith("win"):
@@ -588,7 +580,7 @@ class AppShell(tk.Frame):
         self._window.geometry(f"{width}x{height}")
 
     def _apply_widget_geometry(self) -> None:
-        self._window.geometry(f"{_CONTENT_SQUARE}x{_CONTENT_SQUARE}")
+        self._window.geometry(f"{_WIDGET_WIDTH}x{_WIDGET_HEIGHT}")
 
     def _on_alt_enter_widget(self, _event=None) -> str | None:
         if self._active_view == "timetable" and not self._widget_mode:
@@ -709,7 +701,7 @@ class AppShell(tk.Frame):
         if self._active_view != "timetable":
             self._activate_view("timetable", update_geometry=False)
         else:
-            self._apply_widget_layout()
+            self._apply_layout("timetable")
             self._forgot_inactive_view_hosts("timetable")
 
         apply_widget_chrome(self._window, enabled=True)
@@ -759,41 +751,17 @@ class AppShell(tk.Frame):
 
         self._window.after_idle(self._sync_title_bar_chrome)
 
-    def _apply_widget_layout(self) -> None:
-        self.grid_rowconfigure(0, weight=0)
-        self.grid_columnconfigure(0, weight=0, minsize=_CONTENT_SQUARE)
-        self._content.grid(row=0, column=0, sticky="n")
-        self._content.configure(width=_CONTENT_SQUARE, height=_CONTENT_SQUARE)
-        self._content.grid_propagate(False)
-
     def _apply_layout(self, name: str) -> None:
-        if self._widget_mode:
-            self._apply_widget_layout()
-            return
-
         row = self._content_row
         col = self._content_col
-        self.grid_rowconfigure(row, weight=0)
-        is_small = name in ("timetable", "meeting_points")
-        if is_small:
-            self.grid_rowconfigure(row, weight=0)
-            self.grid_columnconfigure(col, weight=0, minsize=_CONTENT_SQUARE)
-            self._content.grid(
-                row=row,
-                column=col,
-                sticky="nw",
-            )
-            self._content.configure(width=_CONTENT_SQUARE, height=_CONTENT_SQUARE)
-            self._content.grid_propagate(False)
-        else:
-            self.grid_rowconfigure(row, weight=1)
-            self.grid_columnconfigure(col, weight=1, minsize=0)
-            self._content.grid(
-                row=row,
-                column=col,
-                sticky="nsew",
-            )
-            self._content.grid_propagate(True)
+        self.grid_rowconfigure(row, weight=1)
+        self.grid_columnconfigure(col, weight=1, minsize=0)
+        self._content.grid(
+            row=row,
+            column=col,
+            sticky="nsew",
+        )
+        self._content.grid_propagate(True)
 
     def _leave_meeting_fullscreen(self) -> None:
         meeting = self._view_child(self._frames.get("meeting"))
@@ -839,7 +807,7 @@ class AppShell(tk.Frame):
             self._apply_window_geometry()
 
         self._update_nav_styles(name)
-        self._sync_content_top_inset()
+        self._sync_view_padding()
         self._focus_view(name)
 
     def switch_view(self, name: str, *, update_geometry: bool = True) -> None:
@@ -882,21 +850,9 @@ class AppShell(tk.Frame):
         frame.pack(fill="both", expand=True)
         return host
 
-    def _square_host(self, frame_cls: type, **kwargs) -> tk.Frame:
-        host = _tk_frame(
-            self._content,
-            bg=_APP_BG,
-            width=_CONTENT_SQUARE,
-            height=_CONTENT_SQUARE,
-        )
-        host.pack_propagate(False)
-        frame = frame_cls(host, **kwargs)
-        frame.pack(fill="both", expand=True)
-        return host
-
     def _create_frame(self, name: str) -> tk.Frame | ctk.CTkFrame:
         if name == "timetable":
-            return self._square_host(TimetableFrame, shell=self)
+            return self._view_host(TimetableFrame, shell=self)
         if name == "statistics":
             return self._view_host(StatsFrame)
         if name == "meeting":
@@ -904,7 +860,7 @@ class AppShell(tk.Frame):
         if name == "settings":
             return self._view_host(SettingsFrame, shell=self)
         if name == "meeting_points":
-            return self._square_host(
+            return self._view_host(
                 MeetingPointManagerFrame,
                 navigate_back=lambda: self.switch_view("timetable"),
                 shell=self,
