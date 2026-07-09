@@ -7,6 +7,7 @@ from typing import Any
 
 import customtkinter as ctk
 
+from CTkStickyPlaceholderEntry import CTkStickyPlaceholderEntry
 from settings_toggle_switch import SettingsToggleSwitch
 from settings_ui_constants import (
     ACCENT,
@@ -38,6 +39,8 @@ from settings_ui_constants import (
     SEPARATOR_COLOR,
     TEXT_MUTED,
 )
+
+from utils import bind_digits_only_entry, set_ctk_entry_value
 
 __all__ = [
     "ACCENT",
@@ -188,7 +191,15 @@ class SettingsRow(ctk.CTkFrame):
 class SettingsAccountFieldRow(ctk.CTkFrame):
     """Account field row with fixed label width so Username/Discord line up across boxes."""
 
-    def __init__(self, parent, label: str, *, editable: bool = True, placeholder: str = ""):
+    def __init__(
+        self,
+        parent,
+        label: str,
+        *,
+        editable: bool = True,
+        placeholder: str = "",
+        digits_only: bool = False,
+    ):
         super().__init__(parent, fg_color="transparent")
         self._editable = editable
         self.grid_columnconfigure(0, weight=1)
@@ -222,21 +233,25 @@ class SettingsAccountFieldRow(ctk.CTkFrame):
 
         text_pad = (FIELD_TEXT_PADX, FIELD_TEXT_PADX)
         if editable:
-            self.entry = ctk.CTkEntry(
-                self._field_box,
-                font=FONT_ROW,
-                placeholder_text=placeholder,
-                fg_color=FIELD_FG,
-                border_width=0,
-                corner_radius=0,
-                text_color="#FFFFFF",
-            )
+            entry_kwargs = {
+                "font": FONT_ROW,
+                "placeholder_text": placeholder,
+                "fg_color": FIELD_FG,
+                "border_width": 0,
+                "corner_radius": 0,
+                "text_color": "#FFFFFF",
+                "placeholder_text_color": TEXT_MUTED,
+            }
+            entry_cls = CTkStickyPlaceholderEntry if placeholder else ctk.CTkEntry
+            self.entry = entry_cls(self._field_box, **entry_kwargs)
             self.entry.pack(
                 fill="both",
                 expand=True,
                 padx=(FIELD_ENTRY_PADX, FIELD_TEXT_PADX),
                 pady=1,
             )
+            if digits_only:
+                bind_digits_only_entry(self.entry)
             self._value_label = None
         else:
             self.entry = None
@@ -252,9 +267,7 @@ class SettingsAccountFieldRow(ctk.CTkFrame):
 
     def set_value(self, value: str) -> None:
         if self._editable and self.entry is not None:
-            self.entry.delete(0, "end")
-            if value:
-                self.entry.insert(0, value)
+            set_ctk_entry_value(self.entry, value)
         elif self._value_label is not None:
             self._value_label.configure(text=value)
 

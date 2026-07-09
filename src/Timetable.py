@@ -256,6 +256,11 @@ class TimetableFrame(ctk.CTkFrame):
             entry.bind("<Return>", self._submit_via_return, add="+")
             entry.bind("<Shift-Return>", lambda event: None, add="+")
 
+    def sync_user(self) -> None:
+        """Refresh cached username after first-run setup writes config."""
+        self._user = get_user()
+        self._commit_txn.set_user(self._user)
+
     def sync_top_padding(self) -> None:
         shell = self._shell
         if shell is not None and hasattr(shell, "content_top_pad_active"):

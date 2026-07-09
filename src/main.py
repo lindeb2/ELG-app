@@ -116,6 +116,9 @@ def _mount_app_shell(
 
 def _finish_setup(root: ctk.CTk, setup: SetupFrame, shell: AppShell) -> None:
     _sync_db_user()
+    timetable = shell.get_timetable()
+    if timetable is not None:
+        timetable.sync_user()
     app_prefs = app_preferences_from_config(read_config())
     shell._initial_view = _resolve_startup_view(app_prefs)
     shell.set_app_preferences(app_prefs)

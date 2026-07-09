@@ -39,6 +39,8 @@
 - [X]  Improve settings
 - [X]  Improve first time setup
 - [X]  Bugfix Reload
+- [X]  Bugfix start up on launch
+- [X]  Bugfix notifications
 
 ## Moved to Issues
 - [ ]  `self.days_chart_data_row.bind("<Configure>", update_day_bars)`? (Moved to issue)
@@ -58,5 +60,3 @@
 ## To-Do
 - [ ]  Auto log and record during meetings
 - [ ]  Implement Color Themes
-- [ ]  Bugfix start up on launch
-- [ ]  Bugfix notifications

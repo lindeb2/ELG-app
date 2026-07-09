@@ -246,6 +246,9 @@ class CommitTransactionManager:
     def has_open_commit(self) -> bool:
         return self._open is not None
 
+    def set_user(self, user: str) -> None:
+        self._user = user
+
     def begin_async(
         self,
         log_ts: datetime,

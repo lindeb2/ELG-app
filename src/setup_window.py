@@ -8,7 +8,7 @@ import customtkinter as ctk
 from app_config import apply_startup_registration, app_preferences_from_config, read_config, write_config
 from notification_preferences import save_notification_prefs
 from settings_ui_constants import ACCENT
-from utils import flash_error
+from utils import bind_digits_only_entry, flash_error
 
 _PADX = 8
 _FONT_TITLE = ("Arial", 19, "bold")
@@ -23,7 +23,6 @@ _ENTRY = {
     "border_color": "#444444",
     "border_width": 1,
     "text_color": "#FFFFFF",
-    "placeholder_text_color": "#777777",
     "justify": "center",
 }
 _BTN = {"height": 24, "font": _FONT_BODY, "corner_radius": 6}
@@ -105,11 +104,19 @@ class SetupFrame(ctk.CTkFrame):
     def _on_return(self, _event=None) -> None:
         self._on_next()
 
-    def _add_entry(self, parent: ctk.CTkFrame, *, on_change: Callable | None = None) -> ctk.CTkEntry:
+    def _add_entry(
+        self,
+        parent: ctk.CTkFrame,
+        *,
+        on_change: Callable | None = None,
+        digits_only: bool = False,
+    ) -> ctk.CTkEntry:
         entry = ctk.CTkEntry(parent, **_ENTRY)
         entry.bind("<Return>", self._on_return)
         if on_change is not None:
             entry.bind("<KeyRelease>", on_change)
+        if digits_only:
+            bind_digits_only_entry(entry)
         entry.pack(fill="x", pady=(0, 2), padx=5)
         return entry
 
@@ -199,7 +206,7 @@ class SetupFrame(ctk.CTkFrame):
 
         discord_desc = ctk.CTkLabel(
             header,
-            text="Enter your Discord username to receive\nDM-notifications for the events you choose.",
+            text="Enter your Discord user-ID to receive\nDM-notifications for events of your choosing.",
             font=_FONT_DESC,
             text_color=_DESC_COLOR,
             anchor="center",
@@ -208,7 +215,11 @@ class SetupFrame(ctk.CTkFrame):
         discord_desc.pack(pady=(0, 6))
         self._bind_wrap_sync(header, discord_title, discord_desc)
 
-        self._discord_entry = self._add_entry(self._step_discord, on_change=self._on_discord_change)
+        self._discord_entry = self._add_entry(
+            self._step_discord,
+            on_change=self._on_discord_change,
+            digits_only=True,
+        )
 
     def _build_notifications_step(self) -> None:
         body = ctk.CTkFrame(self._step_notifications, fg_color="transparent")

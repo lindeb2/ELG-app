@@ -20,6 +20,7 @@ from notification_preferences import (
 )
 from platform_keys import alt_modifier_label, primary_modifier_label
 from session_guard import confirm_discard_session, has_unlogged_time
+from settings_ui_constants import DISCORD_USER_ID_PLACEHOLDER
 from settings_ui import (
     ACCENT,
     BOX_GAP,
@@ -84,9 +85,10 @@ class SettingsFrame(ctk.CTkFrame):
         discord_group = SettingsGroup(scroll)
         self._discord_row = SettingsAccountFieldRow(
             discord_group.surface,
-            "Discord",
+            "Discord user-ID",
             editable=True,
-            placeholder="Linked via /link in Discord",
+            placeholder=DISCORD_USER_ID_PLACEHOLDER,
+            digits_only=True,
         )
         discord_group.add_row(self._discord_row)
         row = self._place_box(scroll, row, discord_group)
@@ -420,7 +422,7 @@ class SettingsFrame(ctk.CTkFrame):
 
         self._startup_view_var.trace_add("write", lambda *_args: self._schedule_save())
         self._close_action_var.trace_add("write", lambda *_args: self._schedule_save())
-        self._discord_row.entry.bind("<FocusOut>", lambda _event: self._schedule_save())
+        self._discord_row.entry.bind("<FocusOut>", lambda _event: self._schedule_save(), add="+")
         self._discord_row.entry.bind("<Return>", self._on_discord_return)
 
     def _on_discord_return(self, _event=None) -> str:
