@@ -69,6 +69,7 @@ class MeetingFrame(ctk.CTkFrame):
         self._window = self.winfo_toplevel()
         self._shell = shell
         self._closed = threading.Event()
+        self._teardown_done = False
         self.bind("<Destroy>", self._on_destroy, add="+")
 
         self.fullscreen = False
@@ -167,10 +168,35 @@ class MeetingFrame(ctk.CTkFrame):
     def _is_active(self) -> bool:
         return self.winfo_ismapped()
 
+    def _clear_user_presence(self) -> None:
+        status_meeting_collection.update_one(
+            {"_id": "Users"},
+            {"$unset": {f"data.{self.user_name}": ""}},
+        )
+
+    def teardown(self) -> None:
+        """Stop background work and remove this user from online presence."""
+        if self._teardown_done:
+            return
+        self._teardown_done = True
+        self._closed.set()
+        try:
+            self._clear_user_presence()
+        except Exception as e:
+            print(f"Failed to clear presence: {e}")
+
     def _on_destroy(self, event):
         if event.widget is not self:
             return
-        self._closed.set()
+        if not self._teardown_done:
+            self._teardown_done = True
+            self._closed.set()
+            try:
+                self._clear_user_presence()
+            except Exception:
+                pass
+        else:
+            self._closed.set()
         for sequence, funcid in getattr(self, "_nav_key_bindings", []):
             try:
                 self._window.unbind(sequence, funcid)
@@ -631,6 +657,8 @@ class MeetingFrame(ctk.CTkFrame):
                 sel_user = self.s4_selected_user_var.get()  # type: ignore[attr-defined]
             else:
                 sel_user = None
+            if self._closed.is_set():
+                return
             try:
                 status_meeting_collection.update_one(
                     {"_id": "Users"},

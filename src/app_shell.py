@@ -268,19 +268,25 @@ class AppShell(tk.Frame):
             return
 
         if name != self._active_view:
-            host = self._frames.get(name)
-            if host is not None:
-                host.destroy()
-                self._frames[name] = None
+            if name == "meeting":
+                self._destroy_meeting_view()
+            else:
+                host = self._frames.get(name)
+                if host is not None:
+                    host.destroy()
+                    self._frames[name] = None
             return
 
         if self._widget_mode:
             self._exit_widget_mode(restore_view=False)
         was_active = name == self._active_view
-        host = self._frames.get(name)
-        if host is not None:
-            host.destroy()
-            self._frames[name] = None
+        if name == "meeting":
+            self._destroy_meeting_view()
+        else:
+            host = self._frames.get(name)
+            if host is not None:
+                host.destroy()
+                self._frames[name] = None
         if was_active and self._active_view == name:
             self._activate_view(name)
 
@@ -323,6 +329,8 @@ class AppShell(tk.Frame):
         self._quit_app()
 
     def _quit_app(self) -> None:
+        if self._active_view == "meeting":
+            self._destroy_meeting_view()
         self._persist_window_preferences()
         self._shutdown_blocker.teardown()
         if self._title_bar_pin is not None and self._title_bar_pin.winfo_exists():
@@ -844,6 +852,16 @@ class AppShell(tk.Frame):
         if meeting is not None and hasattr(meeting, "leave_fullscreen_if_active"):
             meeting.leave_fullscreen_if_active()
 
+    def _destroy_meeting_view(self) -> None:
+        host = self._frames.get("meeting")
+        if host is None:
+            return
+        meeting = self._view_child(host)
+        if meeting is not None and hasattr(meeting, "teardown"):
+            meeting.teardown()
+        host.destroy()
+        self._frames["meeting"] = None
+
     def _activate_view(self, name: str, *, update_geometry: bool = True) -> None:
         """Show a view without leaving widget mode."""
         if name != "meeting":
@@ -858,6 +876,8 @@ class AppShell(tk.Frame):
                 settings.on_leave_view()
         if previous == "statistics" and name != "statistics":
             self._set_stats_refresh_active(False)
+        if previous == "meeting" and name != "meeting":
+            self._destroy_meeting_view()
 
         self._apply_layout(name)
         self._forgot_inactive_view_hosts(name)
