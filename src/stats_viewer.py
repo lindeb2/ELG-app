@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 from CtkSmartScrollableFrame import CtkSmartScrollableFrame
 from format_time import format_time
-from meeting_app import MeetingFrame
+from meeting import MeetingFrame
 from mongo_doc_lookup import _doc_lookup, week_bucket_from_agg, week_goals
 from period_model import (
     APP_TIMEZONE,

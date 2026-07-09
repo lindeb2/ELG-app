@@ -171,7 +171,7 @@ Legacy per-view entry points (still work for development):
 
 ```bash
 python src/Timetable.py
-python src/meeting_app.py
+python src/meeting.py
 python src/meeting_point_manager.py
 python src/stats_viewer.py
 ```

@@ -15,7 +15,7 @@ FORMAT = "dot"
 
 RANKDIR = "LR" # Riktning: "LR", "TB"
 FUNCTION_FILTER = None # Exempel: "my_module.my_function"
-NAMESPACE_FILTER = None # Exempel: "meeting_app"
+NAMESPACE_FILTER = None # Exempel: "meeting"
 NESTED_GROUPS = True # Visa grupper efter moduler och submoduler
 DRAW_DEFINES = True # Rita "defines" edges (funktioner som definieras)
 DRAW_USES = True # Rita "uses" edges (funktioner som används/kallas)

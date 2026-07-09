@@ -9,7 +9,7 @@ from collections.abc import Callable
 import customtkinter as ctk
 
 from app_config import app_preferences_from_config, merge_app_preferences, read_config, write_config
-from meeting_app import MeetingFrame
+from meeting import MeetingFrame
 from meeting_point_manager import MeetingPointManagerFrame
 from session_guard import has_unlogged_time, prompt_unlogged_action_blocked, prompt_unlogged_exit
 from settings_frame import SettingsFrame
@@ -57,7 +57,7 @@ _VIEW_SIZES: dict[str, tuple[int, int]] = {
 _NAV_ITEMS: tuple[tuple[str, str], ...] = (
     ("timetable", "Timetable"),
     ("statistics", "Statistics"),
-    ("meeting", "Meeting App"),
+    ("meeting", "Meeting"),
     ("meeting_points", "Point Manager"),
 )
 
