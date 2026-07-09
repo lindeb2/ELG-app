@@ -38,6 +38,7 @@
 - [X]  Notification settings
 - [X]  Improve settings
 - [X]  Improve first time setup
+- [X]  Bugfix Reload
 
 ## Moved to Issues
 - [ ]  `self.days_chart_data_row.bind("<Configure>", update_day_bars)`? (Moved to issue)
@@ -59,4 +60,3 @@
 - [ ]  Implement Color Themes
 - [ ]  Bugfix start up on launch
 - [ ]  Bugfix notifications
-- [ ]  Bugfix Reload

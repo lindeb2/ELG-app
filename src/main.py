@@ -36,7 +36,8 @@ import tkinter as tk
 import customtkinter as ctk
 
 import timetable_db
-from app_config import app_preferences_from_config, read_config
+from app_config import app_preferences_from_config, read_config, sync_startup_registration_from_config
+from runtime_paths import is_packaged_build
 from app_shell import AppShell
 from app_update import schedule_automatic_checks
 from setup_window import SetupFrame
@@ -202,6 +203,8 @@ def main() -> None:
 
     config = load_config()
     app_prefs = app_preferences_from_config(config)
+    if sys.platform.startswith("win") and is_packaged_build():
+        sync_startup_registration_from_config()
     initial_view = _resolve_startup_view(app_prefs)
     start_minimized = _should_start_minimized(app_prefs, args)
 

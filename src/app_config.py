@@ -5,7 +5,7 @@ import os
 import sys
 from typing import Literal
 
-from runtime_paths import is_packaged_build
+from runtime_paths import bundle_dir, is_packaged_build
 from storage import get_data_file, load_data, save_data
 
 CloseAction = Literal["tray", "exit"]
@@ -26,8 +26,8 @@ DEFAULT_APP_PREFERENCES: dict = {
 }
 
 _STARTUP_REG_NAME = "ELG"
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_MAIN_SCRIPT = os.path.join(_SCRIPT_DIR, "main.py")
+_STARTUP_LEGACY_SHORTCUT_NAME = "ELG.lnk"
+_STARTUP_APPROVED_ENABLED = bytes([0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
 
 
 def config_path() -> str:
@@ -102,36 +102,94 @@ def merge_app_preferences(config: dict, app_prefs: dict) -> dict:
     return config
 
 
-def startup_command(*, minimized: bool) -> str:
-    if is_packaged_build():
-        launch_target = f'"{sys.executable}"'
-    else:
-        python = sys.executable
-        if os.name == "nt" and python.lower().endswith("python.exe"):
-            pythonw = os.path.join(os.path.dirname(python), "pythonw.exe")
-            if os.path.isfile(pythonw):
-                python = pythonw
-        launch_target = f'"{python}" "{_MAIN_SCRIPT}"'
+def _packaged_executable() -> str:
+    exe = bundle_dir() / "main.exe"
+    if exe.is_file():
+        return str(exe)
+    return sys.executable
 
-    parts = [launch_target, "--started-at-login"]
+
+def _startup_arguments(*, minimized: bool) -> str:
+    parts = ["--started-at-login"]
     if minimized:
         parts.append("--minimized-tray")
     return " ".join(parts)
+
+
+def startup_command(*, minimized: bool) -> str:
+    launch_target = f'"{_packaged_executable()}"'
+    arguments = _startup_arguments(minimized=minimized)
+    return f"{launch_target} {arguments}" if arguments else launch_target
+
+
+def _legacy_startup_shortcut_path() -> str:
+    return os.path.join(
+        os.environ["APPDATA"],
+        r"Microsoft\Windows\Start Menu\Programs\Startup",
+        _STARTUP_LEGACY_SHORTCUT_NAME,
+    )
+
+
+def _remove_legacy_startup_shortcut() -> None:
+    shortcut = _legacy_startup_shortcut_path()
+    if os.path.isfile(shortcut):
+        os.remove(shortcut)
+
+
+def _set_startup_approved(*, scope: Literal["Run", "StartupFolder"], name: str, enabled: bool) -> None:
+    import winreg
+
+    key_path = rf"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\{scope}"
+    access = winreg.KEY_SET_VALUE
+    if not enabled:
+        access |= winreg.KEY_QUERY_VALUE
+    try:
+        key_handle = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, access)
+    except FileNotFoundError:
+        if not enabled:
+            return
+        key_handle = winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path)
+    with key_handle as key:
+        if enabled:
+            winreg.SetValueEx(key, name, 0, winreg.REG_BINARY, _STARTUP_APPROVED_ENABLED)
+        else:
+            try:
+                winreg.DeleteValue(key, name)
+            except FileNotFoundError:
+                pass
+
+
+def _remove_registry_startup() -> None:
+    import winreg
+
+    key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE) as key:
+        try:
+            winreg.DeleteValue(key, _STARTUP_REG_NAME)
+        except FileNotFoundError:
+            pass
+    _set_startup_approved(scope="Run", name=_STARTUP_REG_NAME, enabled=False)
+
+
+def _clear_legacy_startup_entries() -> None:
+    _remove_legacy_startup_shortcut()
+    _set_startup_approved(scope="StartupFolder", name=_STARTUP_LEGACY_SHORTCUT_NAME, enabled=False)
 
 
 def apply_startup_registration(*, enabled: bool, minimized: bool) -> None:
     if not sys.platform.startswith("win"):
         return
 
+    _clear_legacy_startup_entries()
+
+    if not is_packaged_build():
+        _remove_registry_startup()
+        return
+
     import winreg
 
     key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
-    with winreg.OpenKey(
-        winreg.HKEY_CURRENT_USER,
-        key_path,
-        0,
-        winreg.KEY_SET_VALUE,
-    ) as key:
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE) as key:
         if enabled:
             winreg.SetValueEx(
                 key,
@@ -140,8 +198,20 @@ def apply_startup_registration(*, enabled: bool, minimized: bool) -> None:
                 winreg.REG_SZ,
                 startup_command(minimized=minimized),
             )
+            _set_startup_approved(scope="Run", name=_STARTUP_REG_NAME, enabled=True)
         else:
             try:
                 winreg.DeleteValue(key, _STARTUP_REG_NAME)
             except FileNotFoundError:
                 pass
+            _set_startup_approved(scope="Run", name=_STARTUP_REG_NAME, enabled=False)
+
+
+def sync_startup_registration_from_config() -> None:
+    if not is_packaged_build():
+        return
+    prefs = app_preferences_from_config(read_config())
+    apply_startup_registration(
+        enabled=prefs["launch_at_startup"],
+        minimized=prefs["launch_minimized_to_tray"],
+    )
