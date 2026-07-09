@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import os
+import struct
 import sys
+import time
 from typing import Literal
 
 from runtime_paths import bundle_dir, is_packaged_build
@@ -28,6 +30,11 @@ DEFAULT_APP_PREFERENCES: dict = {
 _STARTUP_REG_NAME = "ELG"
 _STARTUP_LEGACY_SHORTCUT_NAME = "ELG.lnk"
 _STARTUP_APPROVED_ENABLED = bytes([0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+
+
+def _startup_approved_disabled() -> bytes:
+    filetime = int((time.time() + 11644473600) * 10_000_000)
+    return struct.pack("<IQ", 0x03, filetime)
 
 
 def config_path() -> str:
@@ -140,23 +147,15 @@ def _set_startup_approved(*, scope: Literal["Run", "StartupFolder"], name: str, 
     import winreg
 
     key_path = rf"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\{scope}"
-    access = winreg.KEY_SET_VALUE
-    if not enabled:
-        access |= winreg.KEY_QUERY_VALUE
     try:
-        key_handle = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, access)
+        key_handle = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE)
     except FileNotFoundError:
         if not enabled:
             return
         key_handle = winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path)
+    approved = _STARTUP_APPROVED_ENABLED if enabled else _startup_approved_disabled()
     with key_handle as key:
-        if enabled:
-            winreg.SetValueEx(key, name, 0, winreg.REG_BINARY, _STARTUP_APPROVED_ENABLED)
-        else:
-            try:
-                winreg.DeleteValue(key, name)
-            except FileNotFoundError:
-                pass
+        winreg.SetValueEx(key, name, 0, winreg.REG_BINARY, approved)
 
 
 def _remove_registry_startup() -> None:
@@ -200,10 +199,6 @@ def apply_startup_registration(*, enabled: bool, minimized: bool) -> None:
             )
             _set_startup_approved(scope="Run", name=_STARTUP_REG_NAME, enabled=True)
         else:
-            try:
-                winreg.DeleteValue(key, _STARTUP_REG_NAME)
-            except FileNotFoundError:
-                pass
             _set_startup_approved(scope="Run", name=_STARTUP_REG_NAME, enabled=False)
 
 
