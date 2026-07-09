@@ -82,14 +82,30 @@ class ShutdownBlocker:
     recommended by Microsoft Learn shutdown documentation.
     """
 
-    def __init__(self, window, should_block: Callable[[], bool]) -> None:
+    def __init__(
+        self,
+        window,
+        should_block: Callable[[], bool],
+        on_end_session: Callable[[], None] | None = None,
+    ) -> None:
         self._window = window
         self._should_block = should_block
+        self._on_end_session = on_end_session
         self._hwnd: int | None = None
         self._old_wndproc: int = 0
         self._new_wndproc = None
         self._installed = False
         self._reason_active = False
+        self._end_session_notified = False
+
+    def _notify_end_session(self) -> None:
+        if self._end_session_notified or self._on_end_session is None:
+            return
+        self._end_session_notified = True
+        try:
+            self._on_end_session()
+        except Exception:
+            return
 
     def install(self) -> None:
         if self._installed or not sys.platform.startswith("win") or _user32 is None:
@@ -155,7 +171,10 @@ class ShutdownBlocker:
                     self._reason_active = True
                 return 0
             self.sync()
+            self._notify_end_session()
         elif msg == WM_ENDSESSION:
+            if wparam:
+                self._notify_end_session()
             if self._reason_active:
                 _user32.ShutdownBlockReasonDestroy(hwnd)
                 self._reason_active = False

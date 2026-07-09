@@ -137,6 +137,7 @@ class AppShell(tk.Frame):
         self._shutdown_blocker = ShutdownBlocker(
             window,
             should_block=lambda: has_unlogged_time(self.get_timetable()),
+            on_end_session=self._persist_window_preferences,
         )
         self._manual_update_check: Callable | None = None
         self._instance_guard = None
@@ -157,6 +158,7 @@ class AppShell(tk.Frame):
         self._entering_widget_mode = False
         self._timetable_nav_hovered = False
         self._timetable_pin_hovered = False
+        self._window_state_persisted = False
         self._content_row = 0
         self._content_col = 0
 
@@ -332,6 +334,8 @@ class AppShell(tk.Frame):
         self._window.destroy()
 
     def _persist_window_preferences(self) -> None:
+        if self._window_state_persisted:
+            return
         active_view = self._active_view or "timetable"
         persisted_widget_mode = self._widget_mode and active_view == "timetable"
         persisted_sidebar_visible = (
@@ -353,6 +357,7 @@ class AppShell(tk.Frame):
             config = merge_app_preferences(config, app_updates)
             write_config(config)
             self._app_prefs = app_preferences_from_config(config)
+            self._window_state_persisted = True
         except OSError:
             return
 
