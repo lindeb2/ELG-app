@@ -166,7 +166,12 @@ class MeetingFrame(ctk.CTkFrame):
                 "$lt": self.next_week_start}}))
 
     def _is_active(self) -> bool:
-        return self.winfo_ismapped()
+        try:
+            if not self.winfo_exists():
+                return False
+            return self.winfo_ismapped()
+        except tkinter.TclError:
+            return False
 
     def _clear_user_presence(self) -> None:
         status_meeting_collection.update_one(
@@ -180,10 +185,29 @@ class MeetingFrame(ctk.CTkFrame):
             return
         self._teardown_done = True
         self._closed.set()
+        self._unbind_navigation_keys()
         try:
             self._clear_user_presence()
         except Exception as e:
             print(f"Failed to clear presence: {e}")
+
+    def destroy(self):
+        self._unbind_navigation_keys()
+        super().destroy()
+
+    def _unbind_navigation_keys(self) -> None:
+        if getattr(self, "_keys_unbound", False):
+            return
+        self._keys_unbound = True
+        window = getattr(self, "_window", None)
+        for sequence, funcid in getattr(self, "_nav_key_bindings", ()):
+            if window is None:
+                continue
+            try:
+                window.unbind(sequence, funcid)
+            except Exception:
+                pass
+        self._nav_key_bindings = []
 
     def _on_destroy(self, event):
         if event.widget is not self:
@@ -197,11 +221,7 @@ class MeetingFrame(ctk.CTkFrame):
                 pass
         else:
             self._closed.set()
-        for sequence, funcid in getattr(self, "_nav_key_bindings", []):
-            try:
-                self._window.unbind(sequence, funcid)
-            except Exception:
-                pass
+        self._unbind_navigation_keys()
 
     def _bind_navigation_keys(self) -> None:
         bindings = (
