@@ -356,8 +356,15 @@ class AppShell(tk.Frame):
         except OSError:
             return
 
-    def mount_initial_view(self) -> None:
-        self._apply_initial_window_position()
+    def mount_initial_view(self, *, preserve_current_position: bool = False) -> None:
+        preserved_x: int | None = None
+        preserved_y: int | None = None
+        if preserve_current_position:
+            self._window.update_idletasks()
+            preserved_x = self._window.winfo_x()
+            preserved_y = self._window.winfo_y()
+        if not preserve_current_position:
+            self._apply_initial_window_position()
         if self._start_minimized_to_tray:
             self._tray.ensure_started()
             self.switch_view(self._initial_view, update_geometry=False)
@@ -368,6 +375,11 @@ class AppShell(tk.Frame):
         self.switch_view(self._initial_view)
         if self._initial_view == "timetable" and self._restore_widget_on_mount:
             self._enter_widget_mode()
+        if preserve_current_position and preserved_x is not None and preserved_y is not None:
+            self._window.geometry(f"+{preserved_x}+{preserved_y}")
+            self._window.after_idle(
+                lambda x=preserved_x, y=preserved_y: self._window.geometry(f"+{x}+{y}")
+            )
 
     def _window_size_for_view(self, view: str, sidebar_visible: bool) -> tuple[int, int]:
         width, height = _VIEW_SIZES[view]

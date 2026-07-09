@@ -127,7 +127,8 @@ def _finish_setup(root: ctk.CTk, setup: SetupFrame, shell: AppShell) -> None:
     configure_window_title(root, "ELG")
     apply_app_title_bar_chrome(root)
     root.geometry(f"+{setup_x}+{setup_y}")
-    shell.mount_initial_view()
+    shell.mount_initial_view(preserve_current_position=True)
+    root.after_idle(lambda x=setup_x, y=setup_y: root.geometry(f"+{x}+{y}"))
 
 
 def _start_update_scheduler(
@@ -205,7 +206,7 @@ def main() -> None:
     start_minimized = _should_start_minimized(app_prefs, args)
 
     needs_setup = not (config.get("user") or "").strip()
-    _map_on_start = not needs_setup and not start_minimized
+    _map_on_start = not start_minimized
     if sys.platform.startswith("win") and _map_on_start:
         root.withdraw()
     configure_app_icon(root)
