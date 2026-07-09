@@ -1,6 +1,7 @@
 import customtkinter as ctk
 import threading
 import time
+from tkinter import TclError
 from CtkSmartScrollableFrame import CtkSmartScrollableFrame
 from CTkFlexToolTip import CTkFlexToolTip
 from CTkStickyPlaceholderEntry import CTkStickyPlaceholderEntry
@@ -56,6 +57,7 @@ class MeetingPointManagerFrame(ctk.CTkFrame):
         self.navigate_back = navigate_back
         self._shell = shell
         self._closed = threading.Event()
+        self._destroyed = False
         self.bind("<Destroy>", self._on_destroy, add="+")
 
         # State variables
@@ -174,11 +176,12 @@ class MeetingPointManagerFrame(ctk.CTkFrame):
     def _on_destroy(self, event):
         if event.widget is not self:
             return
-        self._closed.set()
         try:
             self._app_root.unbind_all("<Button-1>")
         except Exception:
             pass
+        self._destroyed = True
+        self._closed.set()
 
     def week_check(self):
         while not self._closed.is_set():
@@ -207,6 +210,8 @@ class MeetingPointManagerFrame(ctk.CTkFrame):
 
     def _apply_week_rollover(self, current_week_anchor, next_week_start, new_target):
         """Runs on the Tk main thread."""
+        if self._destroyed:
+            return
         self.local_target_timestamp = new_target
 
         expected_next_week = utc_naive_after_calendar_days(self.current_week_start, 7)
@@ -443,7 +448,12 @@ class MeetingPointManagerFrame(ctk.CTkFrame):
         return False
 
     def _reset_focus_if_needed(self, event):
-        if not self.winfo_ismapped():
+        if self._destroyed:
+            return
+        try:
+            if not self.winfo_exists() or not self.winfo_ismapped():
+                return
+        except TclError:
             return
         widget = event.widget
         w = widget

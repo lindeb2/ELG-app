@@ -270,19 +270,19 @@ class AppShell(tk.Frame):
         if name != self._active_view:
             host = self._frames.get(name)
             if host is not None:
-                for child in list(host.winfo_children()):
-                    child.destroy()
+                host.destroy()
                 self._frames[name] = None
             return
 
         if self._widget_mode:
             self._exit_widget_mode(restore_view=False)
+        was_active = name == self._active_view
         host = self._frames.get(name)
         if host is not None:
-            for child in list(host.winfo_children()):
-                child.destroy()
+            host.destroy()
             self._frames[name] = None
-        self._activate_view(name)
+        if was_active and self._active_view == name:
+            self._activate_view(name)
 
     def reload_current_view(self) -> None:
         if self._active_view:

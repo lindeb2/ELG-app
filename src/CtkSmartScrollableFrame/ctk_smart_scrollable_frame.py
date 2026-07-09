@@ -85,6 +85,8 @@ class CtkSmartScrollableFrame(tkinter.Frame, CTkAppearanceModeBaseClass, CTkScal
 
         self._scrollbar_vis_job: str | None = None
         self._content_refresh_job: str | None = None
+        self._delayed_jobs: set[str] = set()
+        self._destroyed = False
         self._scrollbar_visible: bool | None = None
         self._tracked_widgets: set[str] = set()
         self._watched_child_count = -1
@@ -117,10 +119,57 @@ class CtkSmartScrollableFrame(tkinter.Frame, CTkAppearanceModeBaseClass, CTkScal
         self._parent_canvas.bind("<Configure>", self._on_canvas_configure, add="+")
         self._parent_frame.bind("<Map>", self._on_parent_mapped, add="+")
         self._parent_frame.bind("<Configure>", self._schedule_content_refresh, add="+")
+        self._parent_frame.bind("<Destroy>", self._on_widget_destroy, add="+")
+        self.bind("<Destroy>", self._on_widget_destroy, add="+")
 
-        self.after_idle(self._refresh_content_geometry)
+        self.after_idle(lambda: self._is_alive() and self._refresh_content_geometry())
         if self._reserve_scrollbar_space:
-            self.after_idle(self._cache_scrollbar_reserved_size)
+            self.after_idle(lambda: self._is_alive() and self._cache_scrollbar_reserved_size())
+
+    def _is_alive(self) -> bool:
+        if self._destroyed:
+            return False
+        try:
+            return bool(self.winfo_exists())
+        except tkinter.TclError:
+            return False
+
+    def _cancel_pending_jobs(self) -> None:
+        self._destroyed = True
+        for job_id in list(self._delayed_jobs):
+            try:
+                self.after_cancel(job_id)
+            except tkinter.TclError:
+                pass
+        self._delayed_jobs.clear()
+        if self._scrollbar_vis_job is not None:
+            try:
+                self.after_cancel(self._scrollbar_vis_job)
+            except tkinter.TclError:
+                pass
+            self._scrollbar_vis_job = None
+        if self._content_refresh_job is not None:
+            try:
+                self.after_cancel(self._content_refresh_job)
+            except tkinter.TclError:
+                pass
+            self._content_refresh_job = None
+        self._child_watch_running = False
+
+    def _safe_after(self, delay: int, func) -> str:
+        def wrapper(*args, **kwargs):
+            self._delayed_jobs.discard(job_id)
+            if self._is_alive():
+                func(*args, **kwargs)
+
+        job_id = self.after(delay, wrapper)
+        self._delayed_jobs.add(job_id)
+        return job_id
+
+    def _on_widget_destroy(self, event) -> None:
+        if event.widget not in (self, self._parent_frame):
+            return
+        self._cancel_pending_jobs()
 
     def _get_scrollbar_reserved_pixels(self) -> int:
         if self._scrollbar_reserved_pixels is not None:
@@ -128,7 +177,7 @@ class CtkSmartScrollableFrame(tkinter.Frame, CTkAppearanceModeBaseClass, CTkScal
         return int(self._apply_widget_scaling(16))
 
     def _cache_scrollbar_reserved_size(self) -> None:
-        if not self.winfo_exists():
+        if not self._is_alive():
             return
         was_visible = self._scrollbar_visible
         self._scrollbar.grid()
@@ -169,7 +218,7 @@ class CtkSmartScrollableFrame(tkinter.Frame, CTkAppearanceModeBaseClass, CTkScal
         self._start_child_watch()
         # Canvas size often settles a few frames after the first map (e.g. settings grid).
         for delay in (0, 50, 150, 350):
-            self.after(delay, self._schedule_content_refresh)
+            self._safe_after(delay, self._schedule_content_refresh)
 
     def _start_child_watch(self) -> None:
         if self._child_watch_running:
@@ -178,7 +227,7 @@ class CtkSmartScrollableFrame(tkinter.Frame, CTkAppearanceModeBaseClass, CTkScal
         self._watch_children(stable_polls=0)
 
     def _watch_children(self, stable_polls: int = 0) -> None:
-        if not self.winfo_exists() or not self._parent_frame.winfo_ismapped():
+        if not self._is_alive() or not self._parent_frame.winfo_ismapped():
             self._child_watch_running = False
             return
 
@@ -192,17 +241,17 @@ class CtkSmartScrollableFrame(tkinter.Frame, CTkAppearanceModeBaseClass, CTkScal
             stable_polls += 1
 
         if stable_polls < 5:
-            self.after(50, lambda: self._watch_children(stable_polls))
+            self._safe_after(50, lambda: self._watch_children(stable_polls))
         else:
             self._child_watch_running = False
 
     def _scan_for_new_children(self, attempts: int = 0) -> None:
-        if not self.winfo_exists() or attempts > 25:
+        if not self._is_alive() or attempts > 25:
             return
         if self._ensure_content_tracking():
             self._schedule_content_refresh()
         if any(str(child) not in self._tracked_widgets for child in self.winfo_children()):
-            self.after(20, lambda: self._scan_for_new_children(attempts + 1))
+            self._safe_after(20, lambda: self._scan_for_new_children(attempts + 1))
         else:
             self._start_child_watch()
 
@@ -216,7 +265,7 @@ class CtkSmartScrollableFrame(tkinter.Frame, CTkAppearanceModeBaseClass, CTkScal
             self._schedule_content_refresh()
 
     def _schedule_content_refresh(self, event=None):
-        if not self.winfo_exists() or self._refreshing_content:
+        if not self._is_alive() or self._refreshing_content:
             return
         if any(str(child) not in self._tracked_widgets for child in self.winfo_children()):
             self._ensure_content_tracking()
@@ -226,7 +275,7 @@ class CtkSmartScrollableFrame(tkinter.Frame, CTkAppearanceModeBaseClass, CTkScal
 
         def apply() -> None:
             self._content_refresh_job = None
-            if self.winfo_exists():
+            if self._is_alive():
                 self._refresh_content_geometry()
 
         self._content_refresh_job = self.after_idle(apply)
@@ -267,7 +316,11 @@ class CtkSmartScrollableFrame(tkinter.Frame, CTkAppearanceModeBaseClass, CTkScal
         def measure(widget: tkinter.Misc) -> None:
             nonlocal max_right, max_bottom
             if widget is self:
-                for child in widget.winfo_children():
+                try:
+                    children = widget.winfo_children()
+                except tkinter.TclError:
+                    return
+                for child in children:
                     measure(child)
                 return
             try:
@@ -304,7 +357,7 @@ class CtkSmartScrollableFrame(tkinter.Frame, CTkAppearanceModeBaseClass, CTkScal
             tkinter.Frame.configure(self, width=target_width, height=target_height)
 
     def _refresh_content_geometry(self) -> None:
-        if self._refreshing_content:
+        if not self._is_alive() or self._refreshing_content:
             return
         self._refreshing_content = True
         try:
@@ -325,6 +378,8 @@ class CtkSmartScrollableFrame(tkinter.Frame, CTkAppearanceModeBaseClass, CTkScal
                 self._parent_canvas.configure(scrollregion=new_region)
 
             self._apply_scrollbar_visibility()
+        except tkinter.TclError:
+            return
         finally:
             self._refreshing_content = False
 
@@ -371,18 +426,13 @@ class CtkSmartScrollableFrame(tkinter.Frame, CTkAppearanceModeBaseClass, CTkScal
 
         def apply() -> None:
             self._scrollbar_vis_job = None
-            if self.winfo_exists():
+            if self._is_alive():
                 self._apply_scrollbar_visibility()
 
         self._scrollbar_vis_job = self.after_idle(apply)
 
     def destroy(self):
-        if self._scrollbar_vis_job is not None:
-            self.after_cancel(self._scrollbar_vis_job)
-            self._scrollbar_vis_job = None
-        if self._content_refresh_job is not None:
-            self.after_cancel(self._content_refresh_job)
-            self._content_refresh_job = None
+        self._cancel_pending_jobs()
         self.unbind_all("<MouseWheel>")
         self.unbind_all("<KeyPress-Shift_L>")
         self.unbind_all("<KeyPress-Shift_R>")
