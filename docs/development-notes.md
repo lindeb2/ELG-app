@@ -59,3 +59,4 @@
 - [ ]  Implement Color Themes
 - [ ]  Bugfix start up on launch
 - [ ]  Bugfix notifications
+- [ ]  Bugfix Reload

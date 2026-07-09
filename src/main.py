@@ -48,10 +48,13 @@ from window_chrome import (
     configure_window_title,
     deactivate_ctk_title_bar_manipulation,
 )
+from window_geometry import center_geometry
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)
 _APP_BG = "#000000"
+_SETUP_WIDTH = 301
+_SETUP_HEIGHT = 171
 
 
 def load_config() -> dict:
@@ -115,11 +118,15 @@ def _finish_setup(root: ctk.CTk, setup: SetupFrame, shell: AppShell) -> None:
     app_prefs = app_preferences_from_config(read_config())
     shell._initial_view = _resolve_startup_view(app_prefs)
     shell.set_app_preferences(app_prefs)
+    root.update_idletasks()
+    setup_x = root.winfo_x()
+    setup_y = root.winfo_y()
     setup.grid_remove()
     setup.destroy()
     configure_app_icon(root)
     configure_window_title(root, "ELG")
     apply_app_title_bar_chrome(root)
+    root.geometry(f"+{setup_x}+{setup_y}")
     shell.mount_initial_view()
 
 
@@ -234,6 +241,7 @@ def main() -> None:
         setup.set_continue_enabled(False)
 
         def _preload() -> None:
+            root.geometry(center_geometry(root, _SETUP_WIDTH, _SETUP_HEIGHT))
             shell.switch_view("timetable", update_geometry=True)
             setup.set_continue_enabled(True)
 

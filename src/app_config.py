@@ -19,6 +19,10 @@ DEFAULT_APP_PREFERENCES: dict = {
     "include_prereleases": False,
     "pending_update": None,
     "last_update_check_at": None,
+    "last_sidebar_visible": True,
+    "last_widget_mode": False,
+    "last_active_view": "timetable",
+    "last_window_state": None,
 }
 
 _STARTUP_REG_NAME = "ELG"
@@ -68,6 +72,19 @@ def normalize_app_preferences(app: dict | None) -> dict:
 
     last_checked = app.get("last_update_check_at")
     merged["last_update_check_at"] = str(last_checked) if last_checked else None
+
+    merged["last_sidebar_visible"] = bool(app.get("last_sidebar_visible", True))
+    merged["last_widget_mode"] = bool(app.get("last_widget_mode", False))
+
+    last_active_view = app.get("last_active_view", "timetable")
+    if last_active_view in ("timetable", "statistics", "meeting", "meeting_points", "settings"):
+        merged["last_active_view"] = last_active_view
+
+    last_window_state = app.get("last_window_state")
+    if isinstance(last_window_state, dict):
+        merged["last_window_state"] = dict(last_window_state)
+    else:
+        merged["last_window_state"] = None
 
     if not merged["launch_at_startup"]:
         merged["launch_minimized_to_tray"] = False

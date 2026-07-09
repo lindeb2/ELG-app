@@ -8,7 +8,7 @@ from collections.abc import Callable
 
 import customtkinter as ctk
 
-from app_config import app_preferences_from_config, read_config
+from app_config import app_preferences_from_config, merge_app_preferences, read_config, write_config
 from meeting_app import MeetingFrame
 from meeting_point_manager import MeetingPointManagerFrame
 from session_guard import has_unlogged_time, prompt_unlogged_action_blocked, prompt_unlogged_exit
@@ -33,6 +33,7 @@ from window_chrome import (
     hide_title_bar_icon,
     warm_widget_title_bar_assets,
 )
+from window_geometry import capture_window_state, resolve_saved_position, safe_top_left_geometry
 
 _APP_BG = "#000000"
 _SECTION_GAP = 1
@@ -139,9 +140,13 @@ class AppShell(tk.Frame):
         )
         self._manual_update_check: Callable | None = None
         self._instance_guard = None
-        self._sidebar_visible = True
+        self._sidebar_visible = bool(self._app_prefs.get("last_sidebar_visible", True))
         self._sidebar_before_fullscreen: bool | None = None
         self._widget_mode = False
+        self._restore_widget_on_mount = bool(
+            self._app_prefs.get("last_widget_mode", False)
+            and self._app_prefs.get("last_active_view") == "timetable"
+        )
         self._view_before_widget: str | None = None
         self._view_before_settings: str | None = None
         self._sidebar_before_widget = True
@@ -316,6 +321,7 @@ class AppShell(tk.Frame):
         self._quit_app()
 
     def _quit_app(self) -> None:
+        self._persist_window_preferences()
         self._shutdown_blocker.teardown()
         if self._title_bar_pin is not None and self._title_bar_pin.winfo_exists():
             self._title_bar_pin.destroy()
@@ -325,13 +331,70 @@ class AppShell(tk.Frame):
         self._tray.stop()
         self._window.destroy()
 
+    def _persist_window_preferences(self) -> None:
+        active_view = self._active_view or "timetable"
+        persisted_widget_mode = self._widget_mode and active_view == "timetable"
+        persisted_sidebar_visible = (
+            self._sidebar_before_widget if self._widget_mode else self._sidebar_visible
+        )
+        try:
+            last_window_state = capture_window_state(self._window)
+        except Exception:
+            last_window_state = None
+
+        app_updates = {
+            "last_sidebar_visible": bool(persisted_sidebar_visible),
+            "last_widget_mode": bool(persisted_widget_mode),
+            "last_active_view": active_view,
+            "last_window_state": last_window_state,
+        }
+        try:
+            config = read_config()
+            config = merge_app_preferences(config, app_updates)
+            write_config(config)
+            self._app_prefs = app_preferences_from_config(config)
+        except OSError:
+            return
+
     def mount_initial_view(self) -> None:
+        self._apply_initial_window_position()
         if self._start_minimized_to_tray:
             self._tray.ensure_started()
             self.switch_view(self._initial_view, update_geometry=False)
+            if self._initial_view == "timetable" and self._restore_widget_on_mount:
+                self._enter_widget_mode()
             self._window.withdraw()
             return
         self.switch_view(self._initial_view)
+        if self._initial_view == "timetable" and self._restore_widget_on_mount:
+            self._enter_widget_mode()
+
+    def _window_size_for_view(self, view: str, sidebar_visible: bool) -> tuple[int, int]:
+        width, height = _VIEW_SIZES[view]
+        if not sidebar_visible:
+            width -= _SIDEBAR_WIDTH
+            return width, height
+        return width + _SECTION_GAP, height + _SECTION_GAP
+
+    def _apply_initial_window_position(self) -> None:
+        startup_view = self._initial_view
+        if startup_view == "statistics":
+            width, height = self._window_size_for_view("statistics", self._sidebar_visible)
+            self._window.geometry(safe_top_left_geometry(width, height))
+            return
+        if startup_view != "timetable":
+            return
+
+        if self._restore_widget_on_mount:
+            width, height = _WIDGET_WIDTH, _WIDGET_HEIGHT
+        else:
+            width, height = self._window_size_for_view("timetable", self._sidebar_visible)
+        saved_state = self._app_prefs.get("last_window_state")
+        restored = resolve_saved_position(self._window, saved_state, width, height)
+        if restored is not None:
+            self._window.geometry(restored)
+        else:
+            self._window.geometry(safe_top_left_geometry(width, height))
 
     def _sync_title_bar_chrome(self) -> None:
         if self._widget_mode:
