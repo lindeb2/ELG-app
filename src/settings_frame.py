@@ -1,6 +1,8 @@
 """Settings view embedded in the app shell."""
 from __future__ import annotations
 
+import threading
+
 import customtkinter as ctk
 
 from CtkSmartScrollableFrame import CtkSmartScrollableFrame
@@ -11,8 +13,20 @@ from app_config import (
     read_config,
     write_config,
 )
+from app_secrets import has_discord_bot_token_configured
 from app_update import format_last_checked, load_pending_update
 from app_version import current_version
+from meeting_recorder_setup import (
+    HighQualitySetupJob,
+    SetupError,
+    SetupJob,
+    best_quality_ready,
+    high_quality_assets_ready,
+    is_supported_os,
+    models_ready,
+    validate_and_store_token,
+)
+from meeting_recorder_token_dialog import prompt_discord_bot_token
 from notification_preferences import (
     DEFAULT_NOTIFICATION_PREFS,
     fetch_notification_prefs,
@@ -62,6 +76,17 @@ class SettingsFrame(ctk.CTkFrame):
         self._update_status_message = ""
         self._update_status_color = TEXT_MUTED
         self._update_status_show_install = False
+        self._meeting_recorder_group: SettingsExpandableGroup | None = None
+        self._meeting_recorder_status_label: ctk.CTkLabel | None = None
+        self._meeting_recorder_token_btn: ctk.CTkButton | None = None
+        self._meeting_recorder_status_message = ""
+        self._meeting_recorder_setup_job = SetupJob()
+        self._high_quality_cb: ctk.CTkCheckBox | None = None
+        self._high_quality_status_label: ctk.CTkLabel | None = None
+        self._high_quality_status_message = ""
+        self._high_quality_setup_job = HighQualitySetupJob()
+        self._best_quality_cb: ctk.CTkCheckBox | None = None
+        self._best_quality_status_label: ctk.CTkLabel | None = None
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
@@ -169,6 +194,19 @@ class SettingsFrame(ctk.CTkFrame):
         self._last_checked_label: ctk.CTkLabel | None = None
         self._check_updates_btn: ctk.CTkButton | None = None
         self._updates_group.build_body(self._build_updates_body)
+
+        self._meeting_recorder_enabled_var = ctk.BooleanVar(value=False)
+        self._high_quality_enabled_var = ctk.BooleanVar(value=False)
+        self._best_quality_enabled_var = ctk.BooleanVar(value=False)
+        self._meeting_recorder_group = SettingsExpandableGroup(
+            scroll,
+            "Meeting Recorder",
+            toggle_var=self._meeting_recorder_enabled_var,
+            on_toggle=self._on_meeting_recorder_toggle,
+            on_expand=self._on_meeting_recorder_expand,
+        )
+        row = self._place_box(scroll, row, self._meeting_recorder_group)
+        self._meeting_recorder_group.build_body(self._build_meeting_recorder_body)
 
         discard_group = SettingsGroup(scroll, border_color=DISCARD_BORDER, border_width=2)
         discard_row = ctk.CTkFrame(discard_group.surface, fg_color="transparent")
@@ -294,6 +332,320 @@ class SettingsFrame(ctk.CTkFrame):
         widgets.append(last_row)
         return widgets
 
+    def _build_meeting_recorder_body(self, group: SettingsExpandableGroup) -> list[ctk.CTkBaseClass]:
+        widgets: list[ctk.CTkBaseClass] = []
+
+        status_row = ctk.CTkFrame(group.surface, fg_color="transparent")
+        self._meeting_recorder_status_label = ctk.CTkLabel(
+            status_row,
+            text=self._meeting_recorder_status_text(),
+            font=FONT_ROW,
+            text_color=TEXT_MUTED,
+            anchor="w",
+            wraplength=320,
+            justify="left",
+        )
+        self._meeting_recorder_status_label.pack(
+            side="left", anchor="w", padx=(ROW_PADX + 12, ROW_PADX), pady=CHILD_ROW_PADY
+        )
+        group.add_child_row(status_row)
+        widgets.append(status_row)
+
+        token_row = ctk.CTkFrame(group.surface, fg_color="transparent")
+        ctk.CTkLabel(token_row, text="Discord bot token", font=FONT_ROW, anchor="w").pack(
+            side="left", anchor="w", padx=(ROW_PADX + 12, 0), pady=CHILD_ROW_PADY
+        )
+        self._meeting_recorder_token_btn = _make_outlined_action_button(
+            token_row,
+            "Change token" if has_discord_bot_token_configured() else "Set token",
+            command=self._change_meeting_recorder_token,
+        )
+        self._meeting_recorder_token_btn.pack(side="right", padx=(0, ROW_PADX), pady=CHILD_ROW_PADY)
+        group.add_child_row(token_row)
+        widgets.append(token_row)
+
+        quality_row = ctk.CTkFrame(group.surface, fg_color="transparent")
+        self._high_quality_cb = ctk.CTkCheckBox(
+            quality_row,
+            text="High-quality mode (adds a slower combined-audio pass)",
+            variable=self._high_quality_enabled_var,
+            font=FONT_ROW,
+            fg_color=ACCENT,
+            hover_color=ACCENT,
+            border_color=ACCENT,
+            checkmark_color="#1E1E1E",
+            command=self._on_high_quality_toggle,
+        )
+        quality_row.grid_columnconfigure(0, weight=1)
+        self._high_quality_cb.pack(anchor="w", padx=(ROW_PADX + 12, ROW_PADX), pady=CHILD_ROW_PADY)
+        group.add_child_row(quality_row)
+        widgets.append(quality_row)
+
+        quality_status_row = ctk.CTkFrame(group.surface, fg_color="transparent")
+        self._high_quality_status_label = ctk.CTkLabel(
+            quality_status_row,
+            text=self._high_quality_status_text(),
+            font=FONT_MUTED,
+            text_color=TEXT_MUTED,
+            anchor="w",
+            wraplength=320,
+            justify="left",
+        )
+        self._high_quality_status_label.pack(
+            side="left", anchor="w", padx=(ROW_PADX + 12, ROW_PADX), pady=CHILD_ROW_PADY
+        )
+        group.add_child_row(quality_status_row)
+        widgets.append(quality_status_row)
+
+        best_quality_row = ctk.CTkFrame(group.surface, fg_color="transparent")
+        self._best_quality_cb = ctk.CTkCheckBox(
+            best_quality_row,
+            text="Best quality (adds an LLM reconciliation pass)",
+            variable=self._best_quality_enabled_var,
+            font=FONT_ROW,
+            fg_color=ACCENT,
+            hover_color=ACCENT,
+            border_color=ACCENT,
+            checkmark_color="#1E1E1E",
+            command=self._on_best_quality_toggle,
+        )
+        best_quality_row.grid_columnconfigure(0, weight=1)
+        self._best_quality_cb.pack(anchor="w", padx=(ROW_PADX + 24, ROW_PADX), pady=CHILD_ROW_PADY)
+        group.add_child_row(best_quality_row)
+        widgets.append(best_quality_row)
+
+        best_quality_status_row = ctk.CTkFrame(group.surface, fg_color="transparent")
+        self._best_quality_status_label = ctk.CTkLabel(
+            best_quality_status_row,
+            text=self._best_quality_status_text(),
+            font=FONT_MUTED,
+            text_color=TEXT_MUTED,
+            anchor="w",
+            wraplength=320,
+            justify="left",
+        )
+        self._best_quality_status_label.pack(
+            side="left", anchor="w", padx=(ROW_PADX + 24, ROW_PADX), pady=CHILD_ROW_PADY
+        )
+        group.add_child_row(best_quality_status_row)
+        widgets.append(best_quality_status_row)
+
+        self._sync_meeting_recorder_children()
+
+        return widgets
+
+    def _meeting_recorder_status_text(self) -> str:
+        if self._meeting_recorder_setup_job.is_running:
+            return self._meeting_recorder_status_message or "Setting up…"
+        if not is_supported_os():
+            return "Not supported on this OS yet."
+        if not self._meeting_recorder_enabled_var.get():
+            return "Off — no downloads or dependencies used until enabled."
+        if self._meeting_recorder_status_message:
+            return self._meeting_recorder_status_message
+        if models_ready() and has_discord_bot_token_configured():
+            return "Ready."
+        return "Not fully configured — toggle off and on to retry setup."
+
+    def _refresh_meeting_recorder_status_label(self) -> None:
+        if self._meeting_recorder_status_label is not None:
+            self._meeting_recorder_status_label.configure(text=self._meeting_recorder_status_text())
+
+    def _on_meeting_recorder_toggle(self) -> None:
+        if self._loading:
+            return
+        self._sync_meeting_recorder_children()
+        if not self._meeting_recorder_enabled_var.get():
+            self._meeting_recorder_status_message = ""
+            self._refresh_meeting_recorder_status_label()
+            self._schedule_save()
+            return
+        self._start_meeting_recorder_setup()
+
+    def _start_meeting_recorder_setup(self) -> None:
+        if not is_supported_os():
+            self._meeting_recorder_status_message = "Meeting Recorder isn't supported on this OS yet."
+            self._refresh_meeting_recorder_status_label()
+            self._meeting_recorder_group.switch.set(False)
+            return
+
+        token: str | None = None
+        if not has_discord_bot_token_configured():
+            token = prompt_discord_bot_token(self)
+            if not token:
+                self._meeting_recorder_group.switch.set(False)
+                return
+
+        if self._meeting_recorder_group.switch is not None:
+            self._meeting_recorder_group.switch.configure(state="disabled")
+        self._meeting_recorder_status_message = "Setting up…"
+        self._refresh_meeting_recorder_status_label()
+
+        def on_status(message: str) -> None:
+            self._meeting_recorder_status_message = message
+            self._refresh_meeting_recorder_status_label()
+
+        def on_error(exc: Exception) -> None:
+            self._meeting_recorder_status_message = f"Setup failed: {exc}"
+            self._refresh_meeting_recorder_status_label()
+            if self._meeting_recorder_group.switch is not None:
+                self._meeting_recorder_group.switch.configure(state="normal")
+            self._meeting_recorder_group.switch.set(False)
+            if self._meeting_recorder_token_btn is not None:
+                self._meeting_recorder_token_btn.configure(
+                    text="Change token" if has_discord_bot_token_configured() else "Set token"
+                )
+
+        def on_done(_result) -> None:
+            self._meeting_recorder_status_message = "Ready."
+            self._refresh_meeting_recorder_status_label()
+            if self._meeting_recorder_group.switch is not None:
+                self._meeting_recorder_group.switch.configure(state="normal")
+            if self._meeting_recorder_token_btn is not None:
+                self._meeting_recorder_token_btn.configure(text="Change token")
+            self._schedule_save()
+
+        self._meeting_recorder_setup_job.start(
+            token,
+            on_status=lambda msg: self.after(0, on_status, msg),
+            on_error=lambda exc: self.after(0, on_error, exc),
+            on_done=lambda result: self.after(0, on_done, result),
+        )
+
+    def _change_meeting_recorder_token(self) -> None:
+        token = prompt_discord_bot_token(self)
+        if not token:
+            return
+        self._meeting_recorder_status_message = "Validating Discord bot token…"
+        self._refresh_meeting_recorder_status_label()
+
+        def worker() -> None:
+            try:
+                validate_and_store_token(token)
+            except SetupError as exc:
+                self.after(0, self._on_meeting_recorder_token_error, exc)
+            else:
+                self.after(0, self._on_meeting_recorder_token_done)
+
+        threading.Thread(target=worker, daemon=True, name="meeting_recorder_token_check").start()
+
+    def _on_meeting_recorder_token_error(self, exc: SetupError) -> None:
+        self._meeting_recorder_status_message = f"Token not saved: {exc}"
+        self._refresh_meeting_recorder_status_label()
+
+    def _on_meeting_recorder_token_done(self) -> None:
+        self._meeting_recorder_status_message = "Discord bot token updated."
+        self._refresh_meeting_recorder_status_label()
+        if self._meeting_recorder_token_btn is not None:
+            self._meeting_recorder_token_btn.configure(text="Change token")
+
+    def _on_meeting_recorder_expand(self) -> None:
+        self._refresh_meeting_recorder_status_label()
+        self._refresh_high_quality_status_label()
+        self._refresh_best_quality_status_label()
+
+    def _high_quality_status_text(self) -> str:
+        if self._high_quality_setup_job.is_running:
+            return self._high_quality_status_message or "Downloading…"
+        if not self._high_quality_enabled_var.get():
+            return "Off — adds a second, slower transcription pass on a combined mixdown for comparison."
+        if self._high_quality_status_message:
+            return self._high_quality_status_message
+        if high_quality_assets_ready():
+            return "Ready."
+        return "Not fully downloaded — toggle off and on to retry."
+
+    def _refresh_high_quality_status_label(self) -> None:
+        if self._high_quality_status_label is not None:
+            self._high_quality_status_label.configure(text=self._high_quality_status_text())
+
+    def _sync_meeting_recorder_children(self) -> None:
+        enabled = bool(self._meeting_recorder_enabled_var.get())
+        if self._high_quality_cb is not None:
+            _apply_nested_checkbox_style(self._high_quality_cb, enabled=enabled)
+        self._refresh_high_quality_status_label()
+        self._sync_high_quality_children()
+
+    def _best_quality_status_text(self) -> str:
+        if not self._high_quality_enabled_var.get():
+            return "Requires High-quality mode."
+        if not self._best_quality_enabled_var.get():
+            return "Off — adds a local-LLM pass that reconciles this transcript with the combined-audio one."
+        if not best_quality_ready():
+            return "Waiting on High-quality mode's assets to finish downloading."
+        return "Ready."
+
+    def _refresh_best_quality_status_label(self) -> None:
+        if self._best_quality_status_label is not None:
+            self._best_quality_status_label.configure(text=self._best_quality_status_text())
+
+    def _sync_high_quality_children(self) -> None:
+        """Best quality is nested one level deeper than High-quality mode
+        (see _sync_meeting_recorder_children above for the outer nesting) -
+        disabled/styled unless _high_quality_enabled_var is also on, not just
+        _meeting_recorder_enabled_var."""
+        enabled = bool(self._high_quality_enabled_var.get())
+        if self._best_quality_cb is not None:
+            _apply_nested_checkbox_style(self._best_quality_cb, enabled=enabled)
+        self._refresh_best_quality_status_label()
+
+    def _on_best_quality_toggle(self) -> None:
+        """No SetupJob here - unlike the base feature/High-quality mode toggles,
+        Step 6 downloads nothing new (see meeting_recorder_setup.best_quality_ready),
+        so this just saves the preference directly."""
+        if self._loading:
+            return
+        self._refresh_best_quality_status_label()
+        self._schedule_save()
+
+    def _on_high_quality_toggle(self) -> None:
+        if self._loading:
+            return
+        self._sync_high_quality_children()
+        if not self._high_quality_enabled_var.get():
+            self._high_quality_status_message = ""
+            self._refresh_high_quality_status_label()
+            self._schedule_save()
+            return
+        self._start_high_quality_setup()
+
+    def _start_high_quality_setup(self) -> None:
+        if not is_supported_os():
+            self._high_quality_status_message = "High-quality mode isn't supported on this OS yet."
+            self._refresh_high_quality_status_label()
+            self._high_quality_enabled_var.set(False)
+            return
+
+        if self._high_quality_cb is not None:
+            self._high_quality_cb.configure(state="disabled")
+        self._high_quality_status_message = "Downloading…"
+        self._refresh_high_quality_status_label()
+
+        def on_status(message: str) -> None:
+            self._high_quality_status_message = message
+            self._refresh_high_quality_status_label()
+
+        def on_error(exc: Exception) -> None:
+            self._high_quality_status_message = f"Setup failed: {exc}"
+            self._refresh_high_quality_status_label()
+            if self._high_quality_cb is not None:
+                self._high_quality_cb.configure(state="normal")
+            self._high_quality_enabled_var.set(False)
+
+        def on_done(_result) -> None:
+            self._high_quality_status_message = "Ready."
+            self._refresh_high_quality_status_label()
+            if self._high_quality_cb is not None:
+                self._high_quality_cb.configure(state="normal")
+            self._refresh_best_quality_status_label()
+            self._schedule_save()
+
+        self._high_quality_setup_job.start(
+            on_status=lambda msg: self.after(0, on_status, msg),
+            on_error=lambda exc: self.after(0, on_error, exc),
+            on_done=lambda result: self.after(0, on_done, result),
+        )
+
     def _build_shortcuts_body(self, group: SettingsExpandableGroup) -> list[ctk.CTkBaseClass]:
         mod = primary_modifier_label()
         alt = alt_modifier_label()
@@ -416,6 +768,9 @@ class SettingsFrame(ctk.CTkFrame):
             self._startup_enabled_var,
             self._launch_minimized_var,
             self._include_prereleases_var,
+            self._meeting_recorder_enabled_var,
+            self._high_quality_enabled_var,
+            self._best_quality_enabled_var,
             *self._notify_vars.values(),
         ):
             var.trace_add("write", lambda *_args: self._schedule_save())
@@ -503,6 +858,15 @@ class SettingsFrame(ctk.CTkFrame):
             close_key = app_prefs.get("close_action", "tray")
             self._close_action_var.set(_CLOSE_ACTION_LABELS.get(close_key, _CLOSE_ACTION_LABELS["tray"]))
             self._include_prereleases_var.set(bool(app_prefs.get("include_prereleases", False)))
+            self._meeting_recorder_enabled_var.set(bool(app_prefs.get("meeting_recording_enabled", False)))
+            self._high_quality_enabled_var.set(
+                bool(app_prefs.get("meeting_recording_high_quality_enabled", False))
+            )
+            self._best_quality_enabled_var.set(
+                bool(app_prefs.get("meeting_recording_best_quality_enabled", False))
+            )
+            self._refresh_meeting_recorder_status_label()
+            self._sync_meeting_recorder_children()
 
             self._refresh_last_checked_label()
 
@@ -602,6 +966,9 @@ class SettingsFrame(ctk.CTkFrame):
             "launch_minimized_to_tray": launch_minimized,
             "startup_view": startup_view,
             "include_prereleases": bool(self._include_prereleases_var.get()),
+            "meeting_recording_enabled": bool(self._meeting_recorder_enabled_var.get()),
+            "meeting_recording_high_quality_enabled": bool(self._high_quality_enabled_var.get()),
+            "meeting_recording_best_quality_enabled": bool(self._best_quality_enabled_var.get()),
             "pending_update": existing_prefs.get("pending_update"),
             "last_update_check_at": existing_prefs.get("last_update_check_at"),
         }

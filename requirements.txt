@@ -1,3 +1,7 @@
+# Prebuilt llama-cpp-python wheels avoid a Windows source build that fails
+# on MAX_PATH when extracting the vendor/llama.cpp tree from the sdist.
+--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+
 customtkinter
 pymongo
 requests
@@ -7,3 +11,7 @@ platformdirs
 certifi
 tzdata
 packaging
+py-cord[voice]>=2.7
+faster-whisper
+psutil
+llama-cpp-python

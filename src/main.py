@@ -6,6 +6,26 @@
 # nuitka-project: --include-package-data=pystray
 # nuitka-project: --include-package-data=certifi
 # nuitka-project: --include-package=certifi
+# --- Meeting Recorder (see docs/step-4-packaging.md): these three pull in
+# --- compiled native extensions (ctranslate2, py-cord's voice extras, the
+# --- llama.cpp bindings) that Nuitka's standalone mode needs to be told
+# --- about explicitly, the same way customtkinter/tzdata/pystray/certifi
+# --- are above. Unvalidated on non-Windows CI runners as of this writing -
+# --- see step-4-packaging.md's Nuitka validation step; if a standalone
+# --- build fails to import discord/faster_whisper/llama_cpp post-packaging
+# --- (meeting_recorder_setup.dependencies_importable() surfaces this in
+# --- Settings), the documented fallback is to ship these three as an
+# --- external, unpacked plugin directory next to the executable instead of
+# --- compiling them into the binary (see app_secrets.py's bundle_dir()
+# --- loading of runtime_secrets.py for the same pattern).
+# nuitka-project: --include-package=discord
+# nuitka-project: --include-package-data=discord
+# nuitka-project: --include-package=faster_whisper
+# nuitka-project: --include-package-data=faster_whisper
+# nuitka-project: --include-package=ctranslate2
+# nuitka-project: --include-package-data=ctranslate2
+# nuitka-project: --include-package=llama_cpp
+# nuitka-project: --include-package-data=llama_cpp
 # nuitka-project: --nofollow-import-to=tkinter.test
 # nuitka-project: --company-name=ELG Studio
 # nuitka-project: --product-name=ELG

@@ -66,3 +66,31 @@ def get_gae_url() -> str:
 
 def get_notifications_secret() -> str:
     return _get("NOTIFICATIONS_SECRET", "ELG_NOTIFICATIONS_SECRET")
+
+
+def get_discord_bot_token() -> str:
+    """A per-user local token (see meeting_recorder_secrets.py - set via
+    Settings -> Meeting Recorder) takes priority over any build-time/env
+    token, since it's the more specific, more likely to be intentional
+    configuration for this particular install."""
+    from meeting_recorder_secrets import get_local_discord_bot_token
+
+    local_token = get_local_discord_bot_token()
+    if local_token:
+        return local_token
+    return _get("DISCORD_BOT_TOKEN", "ELG_DISCORD_BOT_TOKEN")
+
+
+def has_discord_bot_token_configured() -> bool:
+    """Non-raising check for UI status - is *some* bot token available
+    (local, build-time, or env var)? See get_discord_bot_token for the
+    resolution order."""
+    try:
+        get_discord_bot_token()
+    except RuntimeError:
+        return False
+    return True
+
+
+def get_discord_guild_id() -> int:
+    return int(_get("DISCORD_GUILD_ID", "ELG_DISCORD_GUILD_ID"))

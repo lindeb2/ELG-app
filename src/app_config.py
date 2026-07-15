@@ -25,6 +25,9 @@ DEFAULT_APP_PREFERENCES: dict = {
     "last_widget_mode": False,
     "last_active_view": "timetable",
     "last_window_state": None,
+    "meeting_recording_enabled": False,
+    "meeting_recording_high_quality_enabled": False,
+    "meeting_recording_best_quality_enabled": False,
 }
 
 _STARTUP_REG_NAME = "ELG"
@@ -70,6 +73,29 @@ def normalize_app_preferences(app: dict | None) -> dict:
         merged["startup_view"] = startup_view
 
     merged["include_prereleases"] = bool(app.get("include_prereleases", False))
+
+    # Settings -> "Meeting Recorder" (settings_frame.py) toggles this; turning it
+    # on runs meeting_recorder_setup.py's one-time setup before it takes effect.
+    merged["meeting_recording_enabled"] = bool(app.get("meeting_recording_enabled", False))
+
+    # Settings -> Meeting Recorder -> "High-quality mode" (settings_frame.py) - Step 5's
+    # optional combined-audio second pass (see meeting_combined_transcriber.py). Turning
+    # it on runs meeting_recorder_setup.py's download_high_quality_assets() before it
+    # takes effect. Independent of meeting_recording_enabled above so the base feature
+    # never has to care whether this add-on is on.
+    merged["meeting_recording_high_quality_enabled"] = bool(
+        app.get("meeting_recording_high_quality_enabled", False)
+    )
+
+    # Settings -> Meeting Recorder -> High-quality mode -> "Best quality" (settings_frame.py) -
+    # Step 6's optional LLM reconciliation pass (see meeting_reconciler.py), nested one level
+    # deeper than meeting_recording_high_quality_enabled since it only means anything once
+    # that pass's own input (combined.json) is already being produced. No new setup job -
+    # reuses Step 3's already-downloaded LLM, so there's nothing to download before this
+    # takes effect (contrast the two prefs above, which each gate a *SetupJob).
+    merged["meeting_recording_best_quality_enabled"] = bool(
+        app.get("meeting_recording_best_quality_enabled", False)
+    )
 
     pending = app.get("pending_update")
     if isinstance(pending, dict) and pending.get("version"):

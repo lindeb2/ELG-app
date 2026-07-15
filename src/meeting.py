@@ -13,6 +13,14 @@ from CTkPieChart import CTkPieChart
 from CTkFlexToolTip import *
 from utils import flash_error
 from user_dropdown import UserDropdown
+from app_config import app_preferences_from_config, read_config
+from meeting_recorder import MeetingRecorder, RecorderConfigError, get_recorder_guild_config
+from meeting_transcriber import TranscriptionJob, TranscriptionResult
+from meeting_summarizer import SummarizationJob, SummarizationResult
+from meeting_combined_transcriber import CombinedPassJob, CombinedPassResult
+from meeting_reconciler import ReconciliationJob, ReconciliationResult
+from meeting_recorder_setup import best_quality_ready, high_quality_assets_ready
+from notification_preferences import fetch_notification_prefs
 import random
 import requests
 from collections import defaultdict
@@ -70,6 +78,12 @@ class MeetingFrame(ctk.CTkFrame):
         self._shell = shell
         self._closed = threading.Event()
         self._teardown_done = False
+        self._recorder: MeetingRecorder | None = None
+        self._recording_guild_id: int | None = None
+        self._transcriber: TranscriptionJob | None = None
+        self._summarizer: SummarizationJob | None = None
+        self._combined_pass_job: CombinedPassJob | None = None
+        self._reconciliation_job: ReconciliationJob | None = None
         self.bind("<Destroy>", self._on_destroy, add="+")
 
         self.fullscreen = False
@@ -186,6 +200,8 @@ class MeetingFrame(ctk.CTkFrame):
         self._teardown_done = True
         self._closed.set()
         self._unbind_navigation_keys()
+        if self._recorder is not None and self._recorder.is_recording:
+            self._recorder.stop()
         try:
             self._clear_user_presence()
         except Exception as e:
@@ -802,6 +818,242 @@ class MeetingFrame(ctk.CTkFrame):
             text_color="white"
         )
         title.place(relx=0.5, rely=0.5, anchor="center")
+        self._build_recording_controls(self.slide_frames[0])
+
+    ### MEETING RECORDING ###
+    def _build_recording_controls(self, parent):
+        """Adds a start/stop recording control to the Welcome slide, on the host who
+        clicks it (see meeting_recorder.py's scope note - this is not synced across
+        participants). Hidden entirely unless the feature is enabled and configured."""
+        if not app_preferences_from_config(read_config()).get("meeting_recording_enabled"):
+            return
+        try:
+            guild_id = get_recorder_guild_config()
+        except RecorderConfigError:
+            return  # Discord bot/guild secrets aren't set up; nothing to show.
+
+        self._recorder = MeetingRecorder()
+        self._recording_guild_id = guild_id
+        self._transcriber = TranscriptionJob()
+        self._summarizer = SummarizationJob()
+        self._combined_pass_job = CombinedPassJob()
+        self._reconciliation_job = ReconciliationJob()
+
+        self._recording_status_var = ctk.StringVar(value="Start meeting recording")
+        self._recording_btn = ctk.CTkButton(
+            parent,
+            textvariable=self._recording_status_var,
+            command=self._toggle_recording,
+            font=("Arial", 16),
+            fg_color="#333333",
+            hover_color="#444444",
+            text_color="white",
+        )
+        self._recording_btn.place(relx=0.5, rely=0.85, anchor="center")
+
+    def _toggle_recording(self):
+        if self._recorder is None:
+            return
+        if self._recorder.is_recording:
+            self._recording_status_var.set("Stopping…")
+            self._recording_btn.configure(state="disabled")
+            self._recorder.stop()
+        else:
+            self._recording_status_var.set("Starting…")
+            self._recording_btn.configure(state="disabled")
+            self._recorder.start(
+                guild_id=self._recording_guild_id,
+                host_discord_user_id=self._host_discord_user_id(),
+                on_status=lambda status: self.after(0, self._on_recording_status, status),
+                on_error=lambda exc: self.after(0, self._on_recording_error, exc),
+                on_stopped=lambda: self.after(0, self._on_recording_stopped),
+            )
+
+    def _host_discord_user_id(self) -> int | None:
+        """This host's own linked Discord user id (Settings -> Discord user-ID),
+        used to find which voice channel they're currently in. None if unlinked
+        or unparsable — recording still proceeds, falling back to the named
+        RECORDING_CHANNEL_NAME channel (see meeting_recorder.resolve_recording_channel)."""
+        raw = fetch_notification_prefs(self.user_name).get("discord_user_id")
+        if not raw:
+            return None
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return None
+
+    def _on_recording_status(self, status):
+        if not self._is_active():
+            return
+        if status == "recording":
+            self._recording_status_var.set("Stop meeting recording")
+            self._recording_btn.configure(state="normal")
+
+    def _on_recording_error(self, exc):
+        print(f"Meeting recording error: {exc}")
+        self._reset_recording_controls()
+
+    def _on_recording_stopped(self):
+        if not self._is_active():
+            return
+        self._recording_status_var.set("Start meeting recording")
+        self._recording_btn.configure(state="normal")
+        self._start_transcription_if_ready()
+
+    ### MEETING TRANSCRIPTION (Step 2) ###
+    def _start_transcription_if_ready(self):
+        """Kick off baseline transcription (see meeting_transcriber.py) right after
+        a recording finishes, on the same host that recorded it. Silently does
+        nothing if the feature isn't set up or a transcription is already running
+        — this is best-effort automation, not something the user blocks on."""
+        if self._recorder is None or self._transcriber is None or self._transcriber.is_running:
+            return
+        meeting_start_utc = self._recorder.last_meeting_start_utc
+        if meeting_start_utc is None:
+            return
+        self._recording_status_var.set("Transcribing meeting…")
+        self._recording_btn.configure(state="disabled")
+        self._transcriber.start(
+            meeting_start_utc,
+            on_status=lambda msg: self.after(0, self._on_transcription_status, msg),
+            on_error=lambda exc: self.after(0, self._on_transcription_error, exc),
+            on_done=lambda result: self.after(0, self._on_transcription_done, result),
+        )
+
+    def _on_transcription_status(self, message: str):
+        if not self._is_active():
+            return
+        self._recording_status_var.set(message)
+
+    def _on_transcription_error(self, exc):
+        print(f"Meeting transcription error: {exc}")
+        self._reset_recording_controls()
+
+    def _on_transcription_done(self, result: TranscriptionResult):
+        if not self._is_active():
+            return
+        self._start_summarization_if_ready()
+        self._start_combined_pass_if_ready()
+
+    ### MEETING SUMMARIZATION (Step 3) ###
+    def _start_summarization_if_ready(self):
+        """Kick off structured summarization (see meeting_summarizer.py) right
+        after transcription finishes, on the same host. Silently resets the
+        control back to idle if the feature isn't set up or is already
+        running — this is best-effort automation, matching
+        _start_transcription_if_ready's shape."""
+        meeting_start_utc = self._recorder.last_meeting_start_utc if self._recorder else None
+        if self._summarizer is None or self._summarizer.is_running or meeting_start_utc is None:
+            self._reset_recording_controls()
+            return
+        self._recording_status_var.set("Summarizing meeting…")
+        self._summarizer.start(
+            meeting_start_utc,
+            on_status=lambda msg: self.after(0, self._on_summarization_status, msg),
+            on_error=lambda exc: self.after(0, self._on_summarization_error, exc),
+            on_done=lambda result: self.after(0, self._on_summarization_done, result),
+        )
+
+    def _on_summarization_status(self, message: str):
+        if not self._is_active():
+            return
+        self._recording_status_var.set(message)
+
+    def _on_summarization_error(self, exc):
+        print(f"Meeting summarization error: {exc}")
+        self._reset_recording_controls()
+
+    def _on_summarization_done(self, result: SummarizationResult):
+        self._reset_recording_controls()
+
+    def _reset_recording_controls(self):
+        if not self._is_active():
+            return
+        self._recording_status_var.set("Start meeting recording")
+        self._recording_btn.configure(state="normal")
+
+    ### MEETING QUALITY UPGRADE (Step 5 — optional combined-audio pass) ###
+    def _start_combined_pass_if_ready(self):
+        """Kick off the optional combined-audio second pass (see
+        meeting_combined_transcriber.py) alongside summarization, on the same
+        host. Purely additive: writes combined.json/combined_mixdown.wav next to
+        Step 2's per_channel/*.json and merged.md without touching them, and
+        doesn't drive the recording controls the way
+        _start_transcription_if_ready/_start_summarization_if_ready do — it just
+        runs quietly in the background whether or not summarization is still
+        going. Silently does nothing unless Settings -> Meeting Recorder ->
+        High-quality mode is on and its assets (ffmpeg + the stronger model)
+        have already been downloaded."""
+        if self._combined_pass_job is None or self._combined_pass_job.is_running:
+            return
+        app_prefs = app_preferences_from_config(read_config())
+        if not app_prefs.get("meeting_recording_high_quality_enabled"):
+            return
+        if not high_quality_assets_ready():
+            return
+        meeting_start_utc = self._recorder.last_meeting_start_utc if self._recorder else None
+        if meeting_start_utc is None:
+            return
+        self._combined_pass_job.start(
+            meeting_start_utc,
+            on_status=lambda msg: self.after(0, self._on_combined_pass_status, msg),
+            on_error=lambda exc: self.after(0, self._on_combined_pass_error, exc),
+            on_done=lambda result: self.after(0, self._on_combined_pass_done, result),
+        )
+
+    @staticmethod
+    def _on_combined_pass_status(message: str):
+        print(f"Combined-audio pass: {message}")
+
+    @staticmethod
+    def _on_combined_pass_error(exc):
+        print(f"Combined-audio pass error: {exc}")
+
+    def _on_combined_pass_done(self, result: CombinedPassResult):
+        print(f"Combined-audio pass complete: {result.combined_transcript_path}")
+        self._start_reconciliation_if_ready()
+
+    ### MEETING QUALITY UPGRADE (Step 6 — optional LLM reconciliation pass) ###
+    def _start_reconciliation_if_ready(self):
+        """Kick off the optional LLM reconciliation pass (see meeting_reconciler.py)
+        once Step 5's combined-audio pass has finished, on the same host. Needs
+        *both* merged.md (Step 2) and combined.json (Step 5) to exist, which is why
+        this hooks off _on_combined_pass_done rather than _on_transcription_done -
+        summarization (Step 3) doesn't wait for the combined pass, but reconciliation
+        must. Purely additive and, like the combined pass itself, doesn't drive the
+        recording controls or chain into anything else - it just runs quietly in the
+        background and writes reconciled.md next to the other transcripts for later
+        manual comparison/QA. Silently does nothing unless Settings -> Meeting
+        Recorder -> High-quality mode -> "Best quality" is on and its (shared with
+        High-quality mode's) assets are ready."""
+        if self._reconciliation_job is None or self._reconciliation_job.is_running:
+            return
+        app_prefs = app_preferences_from_config(read_config())
+        if not app_prefs.get("meeting_recording_best_quality_enabled"):
+            return
+        if not best_quality_ready():
+            return
+        meeting_start_utc = self._recorder.last_meeting_start_utc if self._recorder else None
+        if meeting_start_utc is None:
+            return
+        self._reconciliation_job.start(
+            meeting_start_utc,
+            on_status=lambda msg: self.after(0, self._on_reconciliation_status, msg),
+            on_error=lambda exc: self.after(0, self._on_reconciliation_error, exc),
+            on_done=lambda result: self.after(0, self._on_reconciliation_done, result),
+        )
+
+    @staticmethod
+    def _on_reconciliation_status(message: str):
+        print(f"Reconciliation pass: {message}")
+
+    @staticmethod
+    def _on_reconciliation_error(exc):
+        print(f"Reconciliation pass error: {exc}")
+
+    @staticmethod
+    def _on_reconciliation_done(result: ReconciliationResult):
+        print(f"Reconciliation pass complete: {result.reconciled_transcript_path}")
 
     ### SLIDE 1 ###
     def slide_1(self):
