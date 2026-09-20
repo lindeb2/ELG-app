@@ -10,6 +10,7 @@ import customtkinter as ctk
 
 from app_config import app_preferences_from_config, merge_app_preferences, read_config, write_config
 from meeting import MeetingFrame
+from meeting_mike_client import shutdown_session as shutdown_meeting_mike
 from meeting_point_manager import MeetingPointManagerFrame
 from session_guard import has_unlogged_time, prompt_unlogged_action_blocked, prompt_unlogged_exit
 from settings_frame import SettingsFrame
@@ -331,6 +332,7 @@ class AppShell(tk.Frame):
     def _quit_app(self) -> None:
         if self._active_view == "meeting":
             self._destroy_meeting_view()
+        shutdown_meeting_mike()
         self._persist_window_preferences()
         self._shutdown_blocker.teardown()
         if self._title_bar_pin is not None and self._title_bar_pin.winfo_exists():

@@ -19,3 +19,5 @@ temp*
 config.json
 src/runtime_secrets.py
 src/_version.py
+meeting_host/runtime_secrets.py
+meeting_host/_version.py

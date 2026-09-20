@@ -59,4 +59,7 @@
 
 ## To-Do
 - [ ]  Auto log and record during meetings
+   - [X]  Record meetings (Meeting Mike, optional Host install — see `docs/meeting-mike.md`)
+   - [ ]  Auto log time from meeting attendance
 - [ ]  Implement Color Themes
+- [ ]  Move slide 5 end-string generation to the local Meeting Mike model

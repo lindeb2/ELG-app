@@ -13,6 +13,7 @@ from CTkPieChart import CTkPieChart
 from CTkFlexToolTip import *
 from utils import flash_error
 from user_dropdown import UserDropdown
+import meeting_mike_panel
 import random
 import requests
 from collections import defaultdict
@@ -186,10 +187,17 @@ class MeetingFrame(ctk.CTkFrame):
         self._teardown_done = True
         self._closed.set()
         self._unbind_navigation_keys()
+        self._detach_meeting_mike_panel()
         try:
             self._clear_user_presence()
         except Exception as e:
             print(f"Failed to clear presence: {e}")
+
+    def _detach_meeting_mike_panel(self) -> None:
+        """Stop mirroring recorder state; an active recording keeps running."""
+        panel = getattr(self, "meeting_mike_panel", None)
+        if panel is not None:
+            panel.detach()
 
     def destroy(self):
         self._unbind_navigation_keys()
@@ -221,6 +229,7 @@ class MeetingFrame(ctk.CTkFrame):
                 pass
         else:
             self._closed.set()
+        self._detach_meeting_mike_panel()
         self._unbind_navigation_keys()
 
     def _bind_navigation_keys(self) -> None:
@@ -311,6 +320,9 @@ class MeetingFrame(ctk.CTkFrame):
 
         # Bind hover event
         self.users_count_label.bind("<Enter>", self.show_users_list)
+
+        # Record controls; None unless the optional Meeting Host is installed
+        self.meeting_mike_panel = meeting_mike_panel.attach(self, self.user_name)
 
     def initialize_slides(self):
         """Initialize all slides in slide_map."""

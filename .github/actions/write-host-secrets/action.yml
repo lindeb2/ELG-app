@@ -1,0 +1,36 @@
+name: Write Meeting Host secrets
+description: Bake CI secrets into meeting_host/runtime_secrets.py for the Host payload
+inputs:
+  discord_bot_token:
+    description: Meeting Mike Discord bot token
+    required: true
+  discord_guild_id:
+    description: Discord guild (server) id the bot records in
+    required: true
+  mongodb_uri:
+    description: MongoDB connection URI
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Write meeting_host/runtime_secrets.py
+      shell: python
+      env:
+        DISCORD_BOT_TOKEN: ${{ inputs.discord_bot_token }}
+        DISCORD_GUILD_ID: ${{ inputs.discord_guild_id }}
+        MONGODB_URI: ${{ inputs.mongodb_uri }}
+      run: |
+        import os
+        from pathlib import Path
+
+        names = ("DISCORD_BOT_TOKEN", "DISCORD_GUILD_ID", "MONGODB_URI")
+        lines = []
+        for name in names:
+            value = os.environ.get(name, "")
+            if not value:
+                raise SystemExit(f"Missing GitHub Actions secret: {name}")
+            lines.append(f"{name} = {value!r}")
+
+        path = Path("meeting_host/runtime_secrets.py")
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        print(f"Wrote {path} with {len(names)} secrets")

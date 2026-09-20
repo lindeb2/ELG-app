@@ -74,6 +74,60 @@ jobs:
             dist-installers/*.exe
             dist-installers/${{ matrix.checksum }}
 
+  build-meeting-host-windows:
+    # Optional Meeting Mike sidecar. Separate installer so the ELG app that
+    # everyone installs stays small and free of Discord/Whisper/llama deps.
+    # Non-blocking: until DISCORD_BOT_TOKEN and DISCORD_GUILD_ID exist this job
+    # fails and the release ships without the Host installer.
+    continue-on-error: true
+    strategy:
+      matrix:
+        include:
+          - runner: windows-latest
+            arch: x64
+            artifact: ELG-meeting-host-win-x64
+            checksum: checksums-meeting-host-win-x64.txt
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: ./.github/actions/set-release-version
+        with:
+          ref-name: ${{ env.RELEASE_REF }}
+      - uses: ./.github/actions/write-host-secrets
+        with:
+          discord_bot_token: ${{ secrets.DISCORD_BOT_TOKEN }}
+          discord_guild_id: ${{ secrets.DISCORD_GUILD_ID }}
+          mongodb_uri: ${{ secrets.MONGODB_URI }}
+      - name: Verify Meeting Host logic
+        run: |
+          pip install numpy requests platformdirs "discord.py[voice]==2.7.1" "discord-ext-voice-recv==0.5.2a179"
+          python tools/meeting_mike_selftest.py
+          python tools/meeting_host_flow_test.py
+          python tools/meeting_mike_client_test.py
+      - name: Build Meeting Host payload
+        run: >
+          python scripts/build_meeting_host.py
+          --arch ${{ matrix.arch }}
+          --gpu-backend none
+          --version ${{ env.APP_VERSION }}
+      - name: Compile Inno Setup installer
+        run: iscc /DMyAppVersion=${{ env.APP_VERSION }} /DMyAppArch=${{ matrix.arch }} installer\windows\ELG-meeting-host.iss
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cd dist-installers
+          sha256sum *.exe > ${{ matrix.checksum }}
+          cat ${{ matrix.checksum }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            dist-installers/*.exe
+            dist-installers/${{ matrix.checksum }}
+
   build-macos-arm64:
     runs-on: macos-latest
     steps:
@@ -164,7 +218,7 @@ jobs:
 
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    needs: [build-windows, build-macos-arm64, build-linux-x64]
+    needs: [build-windows, build-meeting-host-windows, build-macos-arm64, build-linux-x64]
     runs-on: ubuntu-latest
     permissions:
       contents: write

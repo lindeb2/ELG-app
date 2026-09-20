@@ -151,6 +151,7 @@ ELG-app/
 ├── config.json          # Legacy per-machine config (gitignored; migrated on first run)
 ├── src/                 # Application code loaded at runtime
 │   └── storage.py       # User data in OS app-data dir (data.json)
+├── meeting_host/        # Optional Meeting Mike sidecar (own interpreter; not imported by src/)
 ├── scripts/             # Admin-only CLI entry points
 │   └── lib/             # Admin-only rebuild logic (not imported by src/)
 ├── tools/               # Dev-only utilities
@@ -178,9 +179,18 @@ python src/stats_viewer.py
 
 Or set `PYTHONPATH=src` (Windows: `set PYTHONPATH=src`) if you prefer running modules by name.
 
+### Meeting Mike (optional)
+
+Meeting recording, transcription and summaries live in a separate Windows
+installer so the main app stays small. The **Record** button only appears in
+the Meeting App on machines that installed `ELG-Meeting-Host` and linked a
+Discord user-ID. See [docs/meeting-mike.md](docs/meeting-mike.md).
+
 ## 5. Releases
 
 Tagged commits (`v*`) trigger a GitHub Actions workflow that builds four release artifacts (Windows x64 installer, Windows ARM64 installer, macOS ARM64 `.dmg`, Linux x64 `.tar.gz`) and attaches them to a GitHub Release.
+
+The optional Meeting Host installer is built by the same workflow. It requires the `DISCORD_BOT_TOKEN` and `DISCORD_GUILD_ID` secrets; without them that job fails without blocking the release.
 
 To validate CI changes without publishing a release, run the **Build and Release** workflow manually (`workflow_dispatch`) with a test version (e.g. `0.0.0-ci`). That builds all artifacts but skips the release job.
 
@@ -222,4 +232,13 @@ python scripts/recalculate_all.py
 python tools/test_commit.py
 python tools/test_ctk_smart_scrollable_frame.py
 python tools/callgraph/static_callgraph_generator.py
+```
+
+Meeting Mike checks (no Discord, Mongo or models needed):
+
+```bash
+python tools/meeting_mike_selftest.py
+python tools/meeting_host_flow_test.py
+python tools/meeting_mike_client_test.py
+python tools/meeting_mike_panel_test.py   # needs Tk
 ```
