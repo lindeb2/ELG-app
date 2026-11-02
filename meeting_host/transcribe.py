@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from meeting_host import config, models
+from meeting_host import config, models, protocol
 
 
 def _load_model(model_dir: Path):
@@ -16,9 +16,15 @@ def _load_model(model_dir: Path):
     from faster_whisper import WhisperModel
 
     try:
-        return WhisperModel(str(model_dir), device="cuda", compute_type="float16")
+        model = WhisperModel(str(model_dir), device="cuda", compute_type="float16")
+        return model, "CUDA float16"
     except Exception:
-        return WhisperModel(str(model_dir), device="cpu", compute_type="int8")
+        model = WhisperModel(str(model_dir), device="cpu", compute_type="int8")
+        return model, "CPU int8"
+
+
+def _runtime_label(model_name: str, device: str) -> str:
+    return f"{model_name} · {device}" if device else model_name
 
 
 def _transcribe_file(model, audio_path: Path) -> dict:
@@ -66,7 +72,20 @@ def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def transcribe_mix(base: Path, meeting_dir: Path, *, on_progress=None) -> dict:
+def _stage(
+    on_stage,
+    name: str,
+    which: str,
+    detail: str = "",
+    label: str = "",
+    parent: str = "",
+    model: str = "",
+) -> None:
+    if on_stage is not None:
+        on_stage(name, which, detail, label, parent, model)
+
+
+def transcribe_mix(base: Path, meeting_dir: Path, *, on_progress=None, on_stage=None) -> dict:
     audio_path = meeting_dir / "audio" / "mix.wav"
     output = meeting_dir / "transcripts" / "mix.json"
 
@@ -75,38 +94,128 @@ def transcribe_mix(base: Path, meeting_dir: Path, *, on_progress=None) -> dict:
         _write_json(output, payload)
         return payload
 
-    model_dir = models.ensure_whisper_model(base, config.MIX_MODEL, on_progress=on_progress)
-    model = _load_model(model_dir)
+    def _note(detail: str) -> None:
+        if on_progress is not None:
+            on_progress(detail)
+
+    runtime = config.MIX_MODEL
+    _stage(
+        on_stage,
+        protocol.PHASE_WHISPER_MIX,
+        "start",
+        label="Transcribing meeting",
+        model=runtime,
+    )
+    model = None
     try:
-        payload = _transcribe_file(model, audio_path)
+        _stage(
+            on_stage,
+            protocol.PHASE_WHISPER_MIX_PREPARE,
+            "start",
+            label="Loading model",
+            parent=protocol.PHASE_WHISPER_MIX,
+            model=runtime,
+        )
+        try:
+            model_dir = models.ensure_whisper_model(base, config.MIX_MODEL, on_progress=_note)
+            model, device = _load_model(model_dir)
+            runtime = _runtime_label(config.MIX_MODEL, device)
+            _stage(on_stage, protocol.PHASE_WHISPER_MIX, "detail", model=runtime)
+            _stage(on_stage, protocol.PHASE_WHISPER_MIX_PREPARE, "detail", model=device)
+        finally:
+            _stage(on_stage, protocol.PHASE_WHISPER_MIX_PREPARE, "end")
+
+        _stage(
+            on_stage,
+            protocol.PHASE_WHISPER_MIX_INFER,
+            "start",
+            label="Transcribing",
+            parent=protocol.PHASE_WHISPER_MIX,
+        )
+        try:
+            payload = _transcribe_file(model, audio_path)
+        finally:
+            _stage(on_stage, protocol.PHASE_WHISPER_MIX_INFER, "end")
     finally:
-        del model
+        if model is not None:
+            del model
+        _stage(on_stage, protocol.PHASE_WHISPER_MIX, "end")
 
     _write_json(output, payload)
     return payload
 
 
-def transcribe_users(base: Path, meeting_dir: Path, *, on_progress=None) -> dict[str, dict]:
+def transcribe_users(
+    base: Path,
+    meeting_dir: Path,
+    *,
+    on_progress=None,
+    on_stage=None,
+    labels: dict[str, str] | None = None,
+) -> dict[str, dict]:
     """Per-speaker transcripts keyed by Discord user id."""
     users_dir = meeting_dir / "audio" / "users"
     audio_files = sorted(users_dir.glob("*.wav")) if users_dir.is_dir() else []
     if not audio_files:
         return {}
 
-    model_dir = models.ensure_whisper_model(base, config.USER_MODEL, on_progress=on_progress)
-    model = _load_model(model_dir)
+    def _note(detail: str) -> None:
+        if on_progress is not None:
+            on_progress(detail)
 
+    names = labels or {}
+    runtime = config.USER_MODEL
+    _stage(
+        on_stage,
+        protocol.PHASE_WHISPER_USERS,
+        "start",
+        label="Transcribing speakers",
+        model=runtime,
+    )
+    model = None
     results: dict[str, dict] = {}
     try:
-        for index, audio_path in enumerate(audio_files):
+        _stage(
+            on_stage,
+            protocol.PHASE_WHISPER_USERS_PREPARE,
+            "start",
+            label="Loading model",
+            parent=protocol.PHASE_WHISPER_USERS,
+            model=runtime,
+        )
+        try:
+            model_dir = models.ensure_whisper_model(base, config.USER_MODEL, on_progress=_note)
+            model, device = _load_model(model_dir)
+            runtime = _runtime_label(config.USER_MODEL, device)
+            _stage(on_stage, protocol.PHASE_WHISPER_USERS, "detail", model=runtime)
+            _stage(on_stage, protocol.PHASE_WHISPER_USERS_PREPARE, "detail", model=device)
+        finally:
+            _stage(on_stage, protocol.PHASE_WHISPER_USERS_PREPARE, "end")
+
+        for index, audio_path in enumerate(audio_files, start=1):
             discord_id = audio_path.stem
-            if on_progress is not None:
-                on_progress(index / len(audio_files))
-            payload = _transcribe_file(model, audio_path)
-            results[discord_id] = payload
-            _write_json(meeting_dir / "transcripts" / "users" / f"{discord_id}.json", payload)
+            speaker = str(names.get(discord_id) or "").strip()
+            if not speaker or speaker == discord_id:
+                speaker = f"Speaker {index}"
+            stage = f"whisper_user:{discord_id}"
+            _stage(
+                on_stage,
+                stage,
+                "start",
+                label=speaker,
+                parent=protocol.PHASE_WHISPER_USERS,
+                model=runtime,
+            )
+            try:
+                payload = _transcribe_file(model, audio_path)
+                results[discord_id] = payload
+                _write_json(meeting_dir / "transcripts" / "users" / f"{discord_id}.json", payload)
+            finally:
+                _stage(on_stage, stage, "end")
     finally:
-        del model
+        if model is not None:
+            del model
+        _stage(on_stage, protocol.PHASE_WHISPER_USERS, "end")
 
     return results
 

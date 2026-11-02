@@ -40,26 +40,29 @@ def wait_for(predicate, timeout: float = 30.0, interval: float = 0.05) -> bool:
     return False
 
 
-def write_marker(data_dir: Path, exe_path: str, *, version: str = "0.0.1-test") -> Path:
+def write_marker(
+    data_dir: Path,
+    exe_path: str,
+    *,
+    args: list[str] | None = None,
+    version: str = "0.0.1-test",
+) -> Path:
+    payload: dict = {
+        "schema_version": 1,
+        "exe_path": exe_path,
+        "installed_version": version,
+    }
+    if args is not None:
+        payload["args"] = list(args)
     marker = data_dir / "meeting_host.json"
-    marker.write_text(
-        json.dumps({"schema_version": 1, "exe_path": exe_path, "installed_version": version}),
-        encoding="utf-8",
-    )
+    marker.write_text(json.dumps(payload), encoding="utf-8")
     return marker
 
 
-def make_launcher(tmp: Path, name: str, *extra_args: str) -> Path:
-    """Shell wrapper so the fake Host looks like a normal executable."""
-    fake = REPO_ROOT / "tools" / "fake_meeting_host.py"
-    launcher = tmp / f"MeetingHost-{name}.sh"
-    extra = " ".join(f'"{arg}"' for arg in extra_args)
-    launcher.write_text(
-        f'#!/bin/sh\nexec "{sys.executable}" "{fake}" {extra} "$@"\n',
-        encoding="utf-8",
-    )
-    launcher.chmod(0o755)
-    return launcher
+def fake_host_launch(*extra_args: str) -> tuple[str, list[str]]:
+    """Same shape as the Windows Host marker: interpreter plus script args."""
+    fake = str(REPO_ROOT / "tools" / "fake_meeting_host.py")
+    return sys.executable, [fake, *extra_args]
 
 
 def main() -> int:
@@ -86,8 +89,8 @@ def main() -> int:
         (data_dir / "meeting_host.json").write_text("{not json", encoding="utf-8")
         check("corrupt marker is rejected", not client.is_meeting_host_available())
 
-        launcher = make_launcher(tmp, "ok")
-        write_marker(data_dir, str(launcher))
+        host_exe, host_args = fake_host_launch()
+        write_marker(data_dir, host_exe, args=host_args)
         check("valid marker is accepted", client.is_meeting_host_available())
         check("version is exposed", client.host_version() == "0.0.1-test", client.host_version())
 
@@ -136,6 +139,13 @@ def main() -> int:
         check("meeting dir reported", snapshot["meeting_dir"].endswith("fake"), snapshot["meeting_dir"])
         check("summary file exists", (Path(snapshot["meeting_dir"]) / "summary.md").is_file())
         check("phases were observed", client.STATE_PROCESSING in events)
+        timed = {step["name"]: step for step in snapshot["steps"]}
+        check(
+            "summary step was timed",
+            timed.get("summary", {}).get("state") == "done"
+            and timed["summary"]["seconds"] is not None,
+            str(timed),
+        )
         check("no longer busy", not session.is_busy())
         check("child process reaped", wait_for(lambda: session._process is None))
 
@@ -143,8 +153,8 @@ def main() -> int:
         check("reset returns to idle", session.snapshot()["state"] == client.STATE_IDLE)
 
         print("failure handling")
-        failing_launcher = make_launcher(tmp, "fail", "--fail-start", "You are not in a voice channel.")
-        write_marker(data_dir, str(failing_launcher))
+        fail_exe, fail_args = fake_host_launch("--fail-start", "You are not in a voice channel.")
+        write_marker(data_dir, fail_exe, args=fail_args)
         failing = client.MeetingHostSession()
         started, error = failing.start(elg_username="Johan", discord_user_id="111")
         check("start command is accepted", started, error)
@@ -160,7 +170,7 @@ def main() -> int:
         )
 
         print("shutdown path")
-        write_marker(data_dir, str(launcher))
+        write_marker(data_dir, host_exe, args=host_args)
         quitting = client.MeetingHostSession()
         started, error = quitting.start(elg_username="Johan", discord_user_id="111")
         check("start for shutdown test", started, error)

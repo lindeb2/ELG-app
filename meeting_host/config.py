@@ -25,6 +25,8 @@ PAD_TOLERANCE_SAMPLES = SAMPLE_RATE * FRAME_MS // 1000
 
 # Someone arriving more than this late is flagged as a late joiner.
 LATE_JOIN_GRACE_SECONDS = 5.0
+# Voice states sometimes arrive a beat after on_ready; wait this long.
+VOICE_JOIN_WAIT_SECONDS = 15.0
 
 FALLBACK_VOICE_CHANNEL_NAME = "\U0001F935boardroom"
 
@@ -34,6 +36,8 @@ WHISPER_LANGUAGE = "en"
 
 LLM_REPO = "Qwen/Qwen3-8B-GGUF"
 LLM_FILENAME = "Qwen3-8B-Q4_K_M.gguf"
+# hf_hub_download needs the file size plus a little slack (~5.4 GB).
+LLM_BYTES = 5_000_000_000
 LLM_CONTEXT = 32_768
 LLM_PORT = 8765
 LLM_TEMPERATURE = 0.2

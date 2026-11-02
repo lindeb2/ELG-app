@@ -42,7 +42,7 @@ def main() -> int:
         for index, phase in enumerate(_PHASES):
             emit("phase", name=phase, progress=0.0)
             time.sleep(args.speed)
-            emit("phase", name=phase, progress=1.0)
+            emit("phase", name=phase, progress=1.0, elapsed=args.speed)
         meeting_dir.mkdir(parents=True, exist_ok=True)
         (meeting_dir / "summary.md").write_text("# Fake summary\n", encoding="utf-8")
         emit("done", meeting_dir=str(meeting_dir))

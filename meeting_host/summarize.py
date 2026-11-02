@@ -1,8 +1,10 @@
 """Fixed-format meeting summary.
 
-Factual sections (attendance, goal outcomes, next-week goals) are rendered
-from data. The model only writes the prose under those headings, and if it is
-unavailable the file is still produced with the facts intact.
+The document structure is written here, not by the model. Attendance, this
+week's goals, logs and next week's goals come only from meeting-app data.
+One model call fills the discussion notes and the action list. Splitting
+that into several calls would resend the transcript each time and take
+longer, not less.
 """
 from __future__ import annotations
 
@@ -22,11 +24,12 @@ _NOT_DISCUSSED = "Not discussed."
 _UNAVAILABLE = "_Local model unavailable; transcript saved without narrative._"
 
 _SYSTEM_PROMPT = (
-    "You write the narrative parts of a weekly status meeting summary for a small "
-    "game studio. You are given a speaker-attributed transcript and the verified "
-    "facts for the week. Rules: "
+    "You fill two slots in a weekly status meeting summary for a small game studio. "
+    "You are given a speaker-attributed transcript and the discussion-point titles. "
+    "Rules: "
     "1) Use only what the transcript supports. Never invent decisions, numbers or names. "
-    "2) Never contradict the given facts; whether a goal was reached is already decided. "
+    "2) Do not restate goal hours, goal days or whether a goal was reached. "
+    "Those figures are already written from the meeting app and must not appear in your text. "
     "3) If a topic was not discussed, output exactly \"Not discussed.\" for it. "
     "4) Be concise and concrete. No greetings, no sign-offs, no headings, no markdown tables."
 )
@@ -36,10 +39,9 @@ def _summary_schema(point_count: int) -> dict:
     return {
         "type": "object",
         "additionalProperties": False,
-        "required": ["goals_narrative", "logs_narrative", "points", "next_week_narrative", "actions"],
+        "required": ["discussion", "points", "actions"],
         "properties": {
-            "goals_narrative": {"type": "string"},
-            "logs_narrative": {"type": "string"},
+            "discussion": {"type": "string"},
             "points": {
                 "type": "array",
                 "maxItems": max(1, point_count),
@@ -53,7 +55,6 @@ def _summary_schema(point_count: int) -> dict:
                     },
                 },
             },
-            "next_week_narrative": {"type": "string"},
             "actions": {"type": "array", "items": {"type": "string"}},
         },
     }
@@ -148,18 +149,6 @@ def _log_lines(facts: MeetingFacts) -> list[str]:
 def _build_prompt(facts: MeetingFacts, attendance: dict, transcript: str) -> str:
     payload = {
         "week": f"{facts.iso_week}/{facts.iso_year}",
-        "verified_goal_facts": [
-            {
-                "user": goal.username,
-                "goal_hours": goal.goal_hours,
-                "goal_days": goal.goal_days,
-                "actual_hours": goal.actual_hours,
-                "actual_days": goal.actual_days,
-                "outcome": goal.status,
-            }
-            for goal in facts.goals
-        ],
-        "next_week_goals": facts.next_goals,
         "discussion_points": [
             {"index": index, "title": point["title"], "description": point["description"]}
             for index, point in enumerate(facts.discussion_points)
@@ -180,10 +169,8 @@ def _build_prompt(facts: MeetingFacts, attendance: dict, transcript: str) -> str
         + json.dumps(payload, ensure_ascii=False, indent=2)
         + "\n\nTRANSCRIPT:\n"
         + (transcript or "(no speech was transcribed)")
-        + "\n\nWrite: goals_narrative (2-6 sentences on what was said about goals), "
-        "logs_narrative (only if logged work was discussed, else \"Not discussed.\"), "
+        + "\n\nWrite: discussion (what was said, 4-8 sentences, no goal targets), "
         "points (notes per discussion point index, \"Not discussed.\" when absent), "
-        "next_week_narrative (1-4 sentences, else \"Not discussed.\"), "
         "actions (decisions and action items as short bullets, empty list if none)."
     )
 
@@ -213,11 +200,11 @@ def build_summary(
         narratives = {}
         available = False
 
-    def narrative(key: str, fallback: str) -> str:
-        if not available:
-            return _UNAVAILABLE
-        value = str(narratives.get(key) or "").strip()
-        return value or fallback
+    discussion = _NOT_DISCUSSED
+    if not available:
+        discussion = _UNAVAILABLE
+    else:
+        discussion = str(narratives.get("discussion") or "").strip() or _NOT_DISCUSSED
 
     point_notes: dict[int, str] = {}
     if available:
@@ -243,15 +230,13 @@ def build_summary(
     out.append("## This week's goals")
     out.extend(_goal_lines(facts))
     out.append("")
-    out.append(narrative("goals_narrative", _NOT_DISCUSSED))
-    out.append("")
 
     out.append("## Logs")
     log_lines = _log_lines(facts)
     if log_lines:
         out.extend(log_lines)
-        out.append("")
-    out.append(narrative("logs_narrative", _NOT_DISCUSSED))
+    else:
+        out.append("No logs for this week.")
     out.append("")
 
     out.append("## Discussion points")
@@ -269,7 +254,9 @@ def build_summary(
     out.append("## Next week's goals")
     out.extend(_next_goal_lines(facts))
     out.append("")
-    out.append(narrative("next_week_narrative", _NOT_DISCUSSED))
+
+    out.append("## What was said")
+    out.append(discussion)
     out.append("")
 
     out.append("## Decisions and action items")

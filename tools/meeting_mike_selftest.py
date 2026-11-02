@@ -12,6 +12,7 @@ import json
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
@@ -264,6 +265,52 @@ def test_merge_llm(tmp: Path) -> None:
     check("invalid model ids rejected", applied == 0, str(applied))
 
 
+def test_energy_diarization(tmp: Path) -> None:
+    print("merge (microphone energy)")
+    from meeting_host.audio_mix import write_wav_mono
+
+    meeting_dir = tmp / "meeting-energy"
+    users = meeting_dir / "audio" / "users"
+    users.mkdir(parents=True)
+    total = config.SAMPLE_RATE * 4
+    johan = np.zeros(total, dtype=np.int16)
+    ada = np.zeros(total, dtype=np.int16)
+    johan[int(0.2 * config.SAMPLE_RATE) : int(1.0 * config.SAMPLE_RATE)] = 8000
+    ada[int(2.0 * config.SAMPLE_RATE) : int(3.0 * config.SAMPLE_RATE)] = 8000
+    johan[int(3.2 * config.SAMPLE_RATE) : int(3.6 * config.SAMPLE_RATE)] = 9000
+    ada[int(3.2 * config.SAMPLE_RATE) : int(3.6 * config.SAMPLE_RATE)] = 2000
+    write_wav_mono(users / "111.wav", johan)
+    write_wav_mono(users / "222.wav", ada)
+
+    mix = {
+        "segments": [
+            {
+                "start": 0.2,
+                "end": 3.6,
+                "text": "hello there hours both",
+                "words": [
+                    {"start": 0.3, "end": 0.8, "word": "hello"},
+                    {"start": 1.2, "end": 1.2, "word": "there"},
+                    {"start": 2.1, "end": 2.8, "word": "hours"},
+                    {"start": 3.2, "end": 3.5, "word": "both"},
+                ],
+            }
+        ]
+    }
+    stub = _StubLlm()
+    payload = merge.merge_transcripts(
+        meeting_dir, mix, _user_transcripts(), {"111": "Johan", "222": "Ada"}, llm=stub
+    )
+    segments = payload["segments"]
+    check("energy attribution recorded", payload["speaker_attribution"] == "energy", payload["speaker_attribution"])
+    check("model is not asked to relabel mics", stub.calls == 0, str(stub.calls))
+    check("turn split into three lines", len(segments) == 3, str(segments))
+    check("opening is Johan", segments[0]["elg_username"] == "Johan" and "hello" in segments[0]["text"])
+    check("silent word stays with the previous speaker", "there" in segments[0]["text"], segments[0]["text"])
+    check("middle turn is Ada", segments[1]["elg_username"] == "Ada" and segments[1]["text"] == "hours")
+    check("overlap goes to the louder mic", segments[2]["elg_username"] == "Johan" and segments[2]["text"] == "both")
+
+
 def test_goal_rules() -> None:
     print("goal classification")
     check("no goal", classify_goal(None, None, 12.0, 4) == "none")
@@ -310,13 +357,11 @@ def _attendance() -> dict:
 class _SummaryStub:
     def complete_json(self, *, system, user, schema, max_tokens=4096) -> dict:
         return {
-            "goals_narrative": "Johan cleared his goal; Ada lost time to a build issue.",
-            "logs_narrative": "Not discussed.",
+            "discussion": "Johan cleared his goal; Ada lost time to a build issue.",
             "points": [
                 {"index": 0, "notes": "Agreed to cut the tutorial from the demo."},
                 {"index": 1, "notes": "Not discussed."},
             ],
-            "next_week_narrative": "Ada will retry the same target.",
             "actions": ["Johan cuts tutorial scope", "Ada fixes the build"],
         }
 
@@ -332,9 +377,15 @@ def test_summary() -> None:
         "## Logs",
         "## Discussion points",
         "## Next week's goals",
+        "## What was said",
         "## Decisions and action items",
     ):
         check(f"section present: {heading}", heading in content)
+
+    goals_section = content.split("## Logs")[0]
+    said_section = content.split("## What was said", 1)[1]
+    check("goal section is data only", "cleared his goal" not in goals_section)
+    check("discussion placed under What was said", "cleared his goal" in said_section)
 
     check("late join flagged", "Ada (joined late)" in content)
     check("unlinked account flagged", "(unlinked Discord account)" in content)
@@ -344,7 +395,7 @@ def test_summary() -> None:
     check("unset next-week goal rendered", "**Ada**: not set" in content)
     check("discussion point heading kept", "### Demo scope" in content)
     check("model notes inserted", "cut the tutorial" in content)
-    check("undiscussed point marked", content.count("Not discussed.") >= 2)
+    check("undiscussed point marked", "Not discussed." in content)
     check("actions listed", "- Johan cuts tutorial scope" in content)
 
     degraded = summarize.build_summary(_facts(), _attendance(), "", llm=None)
@@ -395,6 +446,148 @@ def test_protocol_and_pipeline(tmp: Path) -> None:
     check("prose-wrapped json recovers", _parse_json_object('Sure! {"a": 2} done') == {"a": 2})
     check("garbage json rejected", _parse_json_object("no json here") is None)
 
+    print("voice channel matching")
+    from meeting_host.channel_match import is_fallback_voice_channel, normalize_channel_name
+    from meeting_host.models import choose_llm_candidate
+
+    check("boardroom capital B matches", is_fallback_voice_channel("\U0001F935Boardroom"))
+    check(
+        "variation selector matches",
+        is_fallback_voice_channel("\U0001F935\uFE0Fboardroom"),
+    )
+    check("unrelated name rejected", not is_fallback_voice_channel("Enter Current Room"))
+    check("empty name rejected", not is_fallback_voice_channel(""))
+    check("normalize is case-insensitive", normalize_channel_name("Board Room") == "board room")
+    check("8B fits on a large disk", choose_llm_candidate(8_000_000_000)["filename"] == config.LLM_FILENAME)
+    check("8B refused when disk is tight", choose_llm_candidate(3_400_000_000) is None)
+    check("no candidate when disk is empty", choose_llm_candidate(10_000_000) is None)
+
+    leftover = tmp / "llm-cleanup"
+    leftover.mkdir(parents=True, exist_ok=True)
+    from meeting_host.models import llm_dir, remove_noncanonical_llms
+
+    llm_folder = llm_dir(leftover)
+    (llm_folder / "Qwen3-4B-Q4_K_M.gguf").write_bytes(b"old")
+    (llm_folder / "Qwen3-1.7B-Q8_0.gguf").write_bytes(b"old")
+    (llm_folder / config.LLM_FILENAME).write_bytes(b"keep")
+    removed = {path.name for path in remove_noncanonical_llms(leftover)}
+    check("legacy 4B GGUF is deleted", "Qwen3-4B-Q4_K_M.gguf" in removed)
+    check("legacy 1.7B GGUF is deleted", "Qwen3-1.7B-Q8_0.gguf" in removed)
+    check("8B GGUF is kept", (llm_folder / config.LLM_FILENAME).is_file())
+
+    from meeting_host.channel_match import format_permission_names, missing_connect_permissions
+
+    check(
+        "both voice perms reported",
+        missing_connect_permissions(view_channel=False, connect=False)
+        == ["View Channel", "Connect"],
+    )
+    check("connect-only missing", missing_connect_permissions(view_channel=True, connect=False) == ["Connect"])
+    check("no missing perms when granted", missing_connect_permissions(view_channel=True, connect=True) == [])
+    check("permission names joined", format_permission_names(["View Channel", "Connect"]) == "View Channel and Connect")
+
+    from meeting_host.bot_invite import ADMINISTRATOR, application_id_from_token
+
+    fake_id = "123456789012345678"
+    import base64
+
+    fake_token = base64.b64encode(fake_id.encode("ascii")).decode("ascii").rstrip("=") + ".sig.sig"
+    check("bot id decoded from token prefix", application_id_from_token(fake_token) == fake_id)
+    check("administrator bit is 8", ADMINISTRATOR == 8)
+
+    print("DAVE inbound decrypt")
+    from meeting_host import dave_recv
+
+    dave_recv.reset_stats()
+    check("empty payload is not a DAVE frame", not dave_recv.looks_like_dave_frame(b""))
+    check("FAFA prefix only is not a DAVE frame", not dave_recv.looks_like_dave_frame(b"\xfa\xfa\x00\x01"))
+    check("opus silence is not a DAVE frame", not dave_recv.looks_like_dave_frame(b"\xf8\xff\xfe"))
+    dave_frame = b"\x78" + (b"\x00" * 20) + b"\xfa\xfa"
+    check("FAFA suffix is a DAVE frame", dave_recv.looks_like_dave_frame(dave_frame))
+
+    class _NotReady:
+        ready = False
+
+        def decrypt(self, *_args, **_kwargs):
+            raise AssertionError("should not decrypt when not ready")
+
+    unchanged, outcome = dave_recv.decrypt_dave_payload(_NotReady(), 1, dave_frame)
+    check("skip when session not ready", outcome == "skip" and unchanged == dave_frame)
+
+    class _Ready:
+        ready = True
+        calls: list = []
+
+        def decrypt(self, user_id, media, data):
+            self.calls.append((user_id, data))
+            return b"\xf8\xff\xfe"
+
+    ready = _Ready()
+    decrypted, outcome = dave_recv.decrypt_dave_payload(ready, 42, dave_frame)
+    check("decrypt when ready and magic present", outcome == "ok" and decrypted == b"\xf8\xff\xfe")
+    check("decrypt used the speaker id", ready.calls and ready.calls[0][0] == 42)
+    check("decrypt received the full DAVE frame", ready.calls and ready.calls[0][1] == dave_frame)
+
+    passthrough, outcome = dave_recv.decrypt_dave_payload(ready, 42, b"\xf8\xff\xfe")
+    check("plaintext opus is passthrough", outcome == "passthrough" and passthrough == b"\xf8\xff\xfe")
+
+    class _Broken:
+        ready = True
+
+        def decrypt(self, *_args, **_kwargs):
+            raise ValueError("no cryptor")
+
+    failed, outcome = dave_recv.decrypt_dave_payload(_Broken(), 1, dave_frame)
+    check("decrypt failure keeps original bytes", outcome == "fail" and failed == dave_frame)
+
+    class _NoUnwrap:
+        ready = True
+
+        def decrypt(self, *_args, **_kwargs):
+            return dave_frame
+
+    still_wrapped, outcome = dave_recv.decrypt_dave_payload(_NoUnwrap(), 1, dave_frame)
+    check("still-wrapped decrypt is failure", outcome == "fail" and still_wrapped == dave_frame)
+
+    class _Sink:
+        def __init__(self, voice_client):
+            self.voice_client = voice_client
+
+    class _Voice:
+        def __init__(self):
+            self.user = SimpleNamespace(id=99)
+            self.channel = SimpleNamespace(members=[SimpleNamespace(id=99), SimpleNamespace(id=7)])
+            self._ssrc = {}
+
+        def _get_id_from_ssrc(self, ssrc):
+            return self._ssrc.get(ssrc)
+
+        def _add_ssrc(self, user_id, ssrc):
+            self._ssrc[ssrc] = user_id
+
+    voice = _Voice()
+    decoder = SimpleNamespace(_cached_id=None, ssrc=1234, sink=_Sink(voice))
+    check("sole other member fills missing SSRC", dave_recv.resolve_decoder_user_id(decoder) == 7)
+    check("sole other member is cached on the decoder", decoder._cached_id == 7)
+    check("SSRC map updated from fallback", voice._ssrc.get(1234) == 7)
+
+    mapped = SimpleNamespace(_cached_id=None, ssrc=55, sink=_Sink(voice))
+    voice._ssrc[55] = 88
+    check("SSRC map wins over channel fallback", dave_recv.resolve_decoder_user_id(mapped) == 88)
+
+    packet = SimpleNamespace(ssrc=55)
+    data = SimpleNamespace(source=None, packet=packet, pcm=b"\x00\x01")
+    speaker = dave_recv.resolve_audio_user(None, data, voice_client=voice, known_user_ids=["7"])
+    check("audio user resolved from SSRC", getattr(speaker, "id", None) == 88)
+    solo = dave_recv.resolve_audio_user(
+        None, SimpleNamespace(source=None, packet=SimpleNamespace(ssrc=1)), voice_client=None, known_user_ids=["358269533779132426"]
+    )
+    check("audio user falls back to sole attendee", str(getattr(solo, "id", None)) == "358269533779132426")
+
+    dave_recv.apply_voice_recv_patches()
+    dave_recv.apply_voice_recv_patches()
+    check("voice recv patches are idempotent", True)
+
 
 def test_meeting_paths(tmp: Path) -> None:
     print("meeting directory layout")
@@ -428,6 +621,7 @@ def main() -> int:
         test_identity()
         test_merge_baseline(tmp)
         test_merge_llm(tmp)
+        test_energy_diarization(tmp)
         test_goal_rules()
         test_summary()
         test_protocol_and_pipeline(tmp)

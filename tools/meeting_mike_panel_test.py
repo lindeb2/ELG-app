@@ -86,7 +86,7 @@ def main() -> int:
         root.update_idletasks()
         check("panel is placed", bool(panel.place_info()), str(panel.place_info()))
         check("starts on Record", panel._button.cget("text") == "Record", panel._button.cget("text"))
-        check("status starts empty", panel._status.cget("text") == "")
+        check("status button is separate", panel._status_button.cget("text") == "Status")
         check("open-folder button hidden", not panel._open_button_shown)
 
         print("state rendering")
@@ -107,10 +107,13 @@ def main() -> int:
             }
         )
         root.update_idletasks()
+        status = panel_module.open_status_window(panel, focus=False)
+        root.update_idletasks()
         check("shows Stop while recording", panel._button.cget("text") == "Stop")
         check("Stop is enabled", panel._button.cget("state") == "normal")
-        check("shows elapsed time", "01:35" in panel._status.cget("text"), panel._status.cget("text"))
-        check("shows participant count", "2 in call" in panel._status.cget("text"))
+        headline = status._headline.cget("text")
+        check("elapsed is in the status window", "01:35" in headline, headline)
+        check("names are in the status window", "Johan" in headline and "Ada" in headline, headline)
 
         panel._render(
             {
@@ -124,11 +127,38 @@ def main() -> int:
                 "elapsed": 0.0,
                 "participants": {},
                 "busy": True,
+                "log": ["16:12:01  Transcribing meeting"],
+                "steps": [
+                    {"name": "mix", "label": "Mixing audio", "model": "", "parent": "", "state": "done", "seconds": 0.4},
+                    {
+                        "name": "whisper_mix",
+                        "label": "Transcribing meeting",
+                        "model": "distil-large-v3 · CUDA float16",
+                        "parent": "",
+                        "state": "running",
+                        "seconds": 12.4,
+                    },
+                    {
+                        "name": "whisper_user:2",
+                        "label": "Ada",
+                        "model": "small.en · CUDA float16",
+                        "parent": "whisper_users",
+                        "state": "done",
+                        "seconds": 9,
+                    },
+                ],
             }
         )
         root.update_idletasks()
         check("Stop disabled while processing", panel._button.cget("state") == "disabled")
-        check("shows phase and percent", "Transcribing meeting 40%" in panel._status.cget("text"), panel._status.cget("text"))
+        step_text = " ".join(label.cget("text") for label in status._step_labels.values())
+        time_text = " ".join(label.cget("text") for label in status._time_labels.values())
+        model_text = " ".join(label.cget("text") for label in status._model_labels.values())
+        check("status log is not shown in the window", not hasattr(status, "_log"))
+        check("finished step shows its duration", "Mixing audio" in step_text and "0.40s" in time_text, time_text)
+        check("running step shows whole seconds", "Transcribing meeting" in step_text and "12s" in time_text, time_text)
+        check("meeting model is shown", "distil-large-v3" in model_text, model_text)
+        check("speaker model is shown", "small.en" in model_text, model_text)
 
         meeting_dir = tmp / "meeting"
         meeting_dir.mkdir()
@@ -150,7 +180,7 @@ def main() -> int:
         check("back to Record when done", panel._button.cget("text") == "Record")
         check("open-folder button shown", panel._open_button_shown)
         check("open-folder is packed", _is_packed(panel._open_button))
-        check("success colour used", panel._status.cget("text_color") == "#00AD00")
+        check("success colour used", status._headline.cget("text_color") == "#00AD00")
 
         panel._render(
             {
@@ -167,8 +197,8 @@ def main() -> int:
             }
         )
         root.update_idletasks()
-        check("error text shown", "voice channel" in panel._status.cget("text"))
-        check("error colour used", panel._status.cget("text_color") == "#FF4444")
+        check("error text shown", "voice channel" in status._headline.cget("text"))
+        check("error colour used", status._headline.cget("text_color") == "#FF4444")
         check("open-folder hidden again", not panel._open_button_shown)
         check("open-folder is unpacked", not _is_packed(panel._open_button))
 
@@ -176,7 +206,7 @@ def main() -> int:
         check("panel listens to the session", panel._on_session_event in session._listeners)
         panel.detach()
         check("listener removed on detach", panel._on_session_event not in session._listeners)
-        check("timer cancelled", panel._tick_id is None)
+        check("status window stays open after leaving the meeting", status.winfo_exists())
         panel.detach()
         check("detach is idempotent", True)
 

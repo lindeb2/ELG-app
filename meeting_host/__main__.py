@@ -57,18 +57,9 @@ class Host:
             worker.start()
 
     def _start_worker(self) -> None:
-        from meeting_host.models import missing_assets
         from meeting_host.recorder import MeetingRecorder, RecorderError
 
         try:
-            missing = missing_assets(self._base_dir)
-            if missing:
-                self._events.emit(
-                    protocol.EVENT_NEED_MODELS,
-                    detail="Preparing local models (one-time download)",
-                    missing=missing,
-                )
-
             recorder = MeetingRecorder(events=self._events, base_dir=self._base_dir)
             recorder.set_host(
                 elg_username=self._host_username,
@@ -199,6 +190,11 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Verify imports and paths without touching Discord",
     )
+    parser.add_argument(
+        "--invite",
+        action="store_true",
+        help="Print (and open) an Administrator re-invite URL for Meeting Mike",
+    )
     return parser.parse_args(argv)
 
 
@@ -234,6 +230,19 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         events.emit(protocol.EVENT_ERROR, message=f"Could not resolve the ELG data folder: {exc}")
         return 1
+
+    if args.invite:
+        from meeting_host.bot_invite import invite_url
+
+        url = invite_url()
+        print(url)
+        try:
+            import webbrowser
+
+            webbrowser.open(url)
+        except Exception:
+            pass
+        return 0
 
     if args.selftest:
         events.emit(

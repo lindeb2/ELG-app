@@ -12,11 +12,12 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import discord
 from discord.ext import voice_recv
 
-from meeting_host import config
+from meeting_host import config, dave_recv
 from meeting_host.audio_mix import AlignedWavWriter, decode_discord_pcm
 from meeting_host.host_secrets import get_discord_bot_token, get_discord_guild_id
 from meeting_host.identity import DiscordSpeaker, IdentityResolver
@@ -97,6 +98,9 @@ class MeetingRecorder:
         self._ready = threading.Event()
         self._startup_error: str | None = None
         self._stopped = threading.Event()
+        self._join_started = False
+        self._audio_callbacks = 0
+        self._stats_stop = threading.Event()
 
     # --- public API ------------------------------------------------------
     @property
@@ -130,6 +134,9 @@ class MeetingRecorder:
         if self._startup_error:
             self._force_close()
             raise RecorderError(self._startup_error)
+        if not self._channel_id:
+            self._force_close()
+            raise RecorderError("Could not join a Discord voice channel.")
 
     def stop(self, *, host_elg_user: str, host_discord_user_id: str) -> RecordingResult:
         """Leave voice, flush every stream and write attendance.json."""
@@ -222,10 +229,14 @@ class MeetingRecorder:
 
         @client.event
         async def on_ready() -> None:
+            if self._join_started or self._ready.is_set() or self._stopped.is_set():
+                return
+            self._join_started = True
             try:
                 await self._on_ready(host_discord_user_id)
             except Exception as exc:
-                self._startup_error = str(exc)
+                self._startup_error = str(exc) or type(exc).__name__
+                self._log(f"join failed: {self._startup_error}")
                 self._ready.set()
                 await self._async_teardown()
 
@@ -255,15 +266,47 @@ class MeetingRecorder:
                 guild = None
         if guild is None:
             raise RecorderError("Meeting Mike is not in the configured Discord server.")
+        self._log(f"guild {guild.id} {guild.name!r} members={getattr(guild, 'member_count', '?')}")
 
         channel = await self._resolve_channel(guild, host_discord_user_id)
+        self._log(f"joining channel {getattr(channel, 'id', '')} {getattr(channel, 'name', '')!r}")
+        self._assert_can_connect(guild, channel)
 
         self._ensure_opus()
 
-        voice_client = await channel.connect(cls=voice_recv.VoiceRecvClient, self_deaf=False, self_mute=True)
+        try:
+            voice_client = await channel.connect(
+                cls=voice_recv.VoiceRecvClient,
+                self_deaf=False,
+                self_mute=True,
+                timeout=20.0,
+            )
+        except discord.Forbidden:
+            from meeting_host.bot_invite import DYNAMIC_ROOM_HINT
+
+            raise RecorderError(
+                "Meeting Mike does not have permission to connect to "
+                f"'{getattr(channel, 'name', 'that voice channel')}'. {DYNAMIC_ROOM_HINT}"
+            )
+        except asyncio.TimeoutError:
+            from meeting_host.bot_invite import DYNAMIC_ROOM_HINT
+
+            raise RecorderError(
+                f"Timed out joining '{getattr(channel, 'name', 'the voice channel')}'. "
+                f"{DYNAMIC_ROOM_HINT}"
+            )
+        except Exception as exc:
+            detail = str(exc).strip() or type(exc).__name__
+            self._log(f"connect exception {type(exc).__name__}: {exc!r}")
+            raise RecorderError(
+                f"Could not join '{getattr(channel, 'name', 'the voice channel')}': {detail}"
+            ) from exc
+
         self._voice_client = voice_client
-        self._channel_id = str(channel.id)
-        self._channel_name = str(channel.name)
+        self._channel_id = str(getattr(channel, "id", "") or "")
+        self._channel_name = str(getattr(channel, "name", "") or "")
+        if not self._channel_id:
+            raise RecorderError("Could not join a Discord voice channel.")
 
         self._t0 = time.monotonic()
         self._events.emit("joined", channel_name=self._channel_name)
@@ -273,7 +316,17 @@ class MeetingRecorder:
                 continue
             self._register_participant(member, late=False)
 
-        voice_client.listen(voice_recv.BasicSink(self._on_audio))
+        dave_recv.reset_stats()
+        dave_recv.apply_voice_recv_patches()
+        dave_recv.enable_dave_passthrough(voice_client)
+        await self._wait_for_dave(voice_client)
+        self._log(f"listening {dave_recv.dave_status_line(voice_client)}")
+
+        voice_client.listen(
+            voice_recv.BasicSink(self._on_audio),
+            after=self._on_listen_done,
+        )
+        self._start_stats_logger()
         self._ready.set()
 
     @staticmethod
@@ -290,29 +343,182 @@ class MeetingRecorder:
             )
 
     async def _resolve_channel(self, guild, host_discord_user_id: str):
-        """Host's current voice channel, else the tuxedo boardroom channel."""
-        member = guild.get_member(int(host_discord_user_id)) if host_discord_user_id else None
-        if member is None and host_discord_user_id:
+        """Host's current voice/stage channel, else the tuxedo boardroom."""
+        try:
+            host_id = int(str(host_discord_user_id).strip())
+        except (TypeError, ValueError):
+            raise RecorderError("Discord user-ID is not a valid number.")
+
+        if not self._recordable_channels(guild):
             try:
-                member = await guild.fetch_member(int(host_discord_user_id))
+                await guild.fetch_channels()
             except Exception:
-                member = None
+                pass
 
-        voice_state = getattr(member, "voice", None)
-        channel = getattr(voice_state, "channel", None)
-        if channel is not None:
-            return channel
+        if guild.get_member(host_id) is None:
+            try:
+                await guild.query_members(user_ids=[host_id])
+            except Exception:
+                try:
+                    await guild.fetch_member(host_id)
+                except Exception:
+                    pass
 
-        for candidate in getattr(guild, "voice_channels", []):
-            if candidate.name == config.FALLBACK_VOICE_CHANNEL_NAME:
-                return candidate
+        deadline = time.monotonic() + config.VOICE_JOIN_WAIT_SECONDS
+        while True:
+            channel = await self._look_up_channel(guild, host_id)
+            if channel is not None:
+                return channel
+            if time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(0.4)
 
+        visible = [str(getattr(ch, "name", "") or "") for ch in self._recordable_channels(guild)]
+        names = ", ".join(repr(name) for name in visible) if visible else "none"
+        fallback = config.FALLBACK_VOICE_CHANNEL_NAME
         raise RecorderError(
-            "You are not in a voice channel and "
-            f"'{config.FALLBACK_VOICE_CHANNEL_NAME}' does not exist."
+            "You are not in a voice channel that Meeting Mike can join. "
+            f"It looks for your current channel, then {fallback!r}. "
+            f"Visible voice channels: {names}."
         )
 
+    async def _look_up_channel(self, guild, host_id: int):
+        from meeting_host.channel_match import is_fallback_voice_channel
+
+        channel = self._channel_from_voice_state(guild, host_id)
+        if channel is not None:
+            hydrated = await self._hydrate_channel(guild, channel)
+            if hydrated is not None:
+                return hydrated
+
+        for candidate in self._recordable_channels(guild):
+            for connected in getattr(candidate, "members", []) or []:
+                if getattr(connected, "id", None) == host_id:
+                    return candidate
+
+        for candidate in self._recordable_channels(guild):
+            if is_fallback_voice_channel(str(getattr(candidate, "name", "") or "")):
+                return candidate
+        return None
+
+    def _channel_from_voice_state(self, guild, host_id: int):
+        states = getattr(guild, "voice_states", None) or {}
+        state = states.get(host_id)
+        if state is None:
+            member = guild.get_member(host_id)
+            state = getattr(member, "voice", None)
+        if state is None:
+            return None
+        channel = getattr(state, "channel", None)
+        if channel is not None:
+            return channel
+        channel_id = getattr(state, "channel_id", None)
+        if not channel_id:
+            return None
+        found = guild.get_channel(channel_id)
+        if found is None and self._client is not None:
+            found = self._client.get_channel(channel_id)
+        if found is not None:
+            return found
+        return SimpleNamespace(id=channel_id, name="")
+
+    async def _hydrate_channel(self, guild, channel):
+        if callable(getattr(channel, "connect", None)):
+            return channel
+        channel_id = getattr(channel, "id", None)
+        if not channel_id:
+            return None
+        found = guild.get_channel(channel_id)
+        if found is None and self._client is not None:
+            found = self._client.get_channel(channel_id)
+        if found is not None:
+            return found
+        try:
+            return await guild.fetch_channel(channel_id)
+        except discord.Forbidden:
+            from meeting_host.bot_invite import DYNAMIC_ROOM_HINT
+
+            raise RecorderError(
+                "Meeting Mike can see that you are in a voice channel "
+                f"but Discord is blocking the join. {DYNAMIC_ROOM_HINT}"
+            )
+        except Exception:
+            return None
+
+    @staticmethod
+    def _recordable_channels(guild):
+        channels = list(getattr(guild, "voice_channels", []) or [])
+        channels.extend(list(getattr(guild, "stage_channels", []) or []))
+        return channels
+
+    def _assert_can_connect(self, guild, channel) -> None:
+        from meeting_host.channel_match import format_permission_names, missing_connect_permissions
+
+        me = getattr(guild, "me", None)
+        if me is None and self._client is not None and self._client.user is not None:
+            me = guild.get_member(self._client.user.id)
+        if me is None:
+            return
+
+        perms = channel.permissions_for(me)
+        missing = missing_connect_permissions(
+            view_channel=bool(getattr(perms, "view_channel", False)),
+            connect=bool(getattr(perms, "connect", False)),
+        )
+        name = str(getattr(channel, "name", "") or "that voice channel")
+        self._log(
+            f"channel perms {name!r} view={bool(getattr(perms, 'view_channel', False))} "
+            f"connect={bool(getattr(perms, 'connect', False))}"
+        )
+        if not missing:
+            return
+        from meeting_host.bot_invite import DYNAMIC_ROOM_HINT
+
+        needed = format_permission_names(missing)
+        raise RecorderError(
+            f"Meeting Mike found you in '{name}' but Discord is blocking it there "
+            f"(missing {needed}). {DYNAMIC_ROOM_HINT}"
+        )
+
+    def _log(self, message: str) -> None:
+        try:
+            path = config.logs_dir(self._base_dir) / "host.log"
+            with open(path, "a", encoding="utf-8") as handle:
+                handle.write(f"{utc_now().isoformat()} {message}\n")
+        except OSError:
+            pass
+
+    async def _wait_for_dave(self, voice_client, *, timeout: float = 5.0) -> None:
+        session = dave_recv.dave_session_of(voice_client)
+        if session is None:
+            self._log("no DAVE session; inbound audio may be transport-only")
+            return
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if getattr(session, "ready", False):
+                return
+            await asyncio.sleep(0.1)
+        self._log(f"DAVE session not ready after {timeout:.0f}s")
+
+    def _start_stats_logger(self) -> None:
+        self._stats_stop.clear()
+
+        def _loop() -> None:
+            while not self._stats_stop.wait(5.0):
+                self._log(f"receive {dave_recv.snapshot_stats().line()}")
+
+        threading.Thread(target=_loop, name="meeting-mike-recv-stats", daemon=True).start()
+
+    def _on_listen_done(self, error) -> None:
+        stats = dave_recv.snapshot_stats().line()
+        if error:
+            self._log(f"voice receive stopped: {type(error).__name__}: {error}; {stats}")
+        else:
+            self._log(f"voice receive stopped; {stats}")
+
     async def _async_teardown(self) -> None:
+        self._stats_stop.set()
+        self._log(f"receive final {dave_recv.snapshot_stats().line()}")
         voice_client = self._voice_client
         if voice_client is not None:
             try:
@@ -350,7 +556,13 @@ class MeetingRecorder:
 
     def _on_audio(self, user, data) -> None:
         """Sink callback on a library thread: keep it cheap and thread-safe."""
-        if user is None or self._stopped.is_set():
+        try:
+            self._write_audio(user, data)
+        except Exception as exc:
+            self._log(f"audio callback failed: {type(exc).__name__}: {exc}")
+
+    def _write_audio(self, user, data) -> None:
+        if self._stopped.is_set():
             return
 
         packet = getattr(data, "packet", None)
@@ -366,16 +578,37 @@ class MeetingRecorder:
         if not pcm:
             return
 
+        speaker = self._user_for_audio(user, data)
+        if speaker is None:
+            return
+
+        self._audio_callbacks += 1
+        if self._audio_callbacks <= 5 or self._audio_callbacks % 250 == 0:
+            self._log(
+                f"audio callback #{self._audio_callbacks} user={getattr(speaker, 'id', None)} "
+                f"pcm={len(pcm)} ssrc={getattr(packet, 'ssrc', None)}"
+            )
+
         samples = decode_discord_pcm(pcm)
         if samples.size == 0:
             return
 
-        writer = self._writer_for(user)
+        writer = self._writer_for(speaker)
         if writer is None:
             return
 
         offset = max(0, self._elapsed_samples() - int(samples.size))
         writer.write(samples, offset_samples=offset)
+
+    def _user_for_audio(self, user, data):
+        with self._state_lock:
+            known_ids = [participant.discord_user_id for participant in self._participants.values()]
+        return dave_recv.resolve_audio_user(
+            user,
+            data,
+            voice_client=self._voice_client,
+            known_user_ids=known_ids,
+        )
 
     def _writer_for(self, member) -> AlignedWavWriter | None:
         discord_id = str(getattr(member, "id", "") or "")

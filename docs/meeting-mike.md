@@ -43,7 +43,7 @@ If the marker is absent the meeting view is byte-for-byte what it was before:
 | Mix transcription | faster-whisper `distil-large-v3` (source of truth for wording) |
 | Per-speaker transcription | faster-whisper `small.en` (attribution and overlap repair) |
 | Merge and summary | Qwen3-8B Instruct Q4_K_M via bundled `llama-server`, thinking off |
-| Speaker attribution | Model-assisted, with a deterministic overlap fallback |
+| Speaker attribution | Per-microphone energy, word by word |
 | Storage | Local only; nothing is uploaded |
 | Channel | Host's current voice channel, else the tuxedo `boardroom` channel |
 
@@ -51,7 +51,13 @@ If the marker is absent the meeting view is byte-for-byte what it was before:
 
 1. **Create the bot** at the Discord developer portal. Enable the
    **Server Members** privileged intent (Guilds and Voice States are not
-   privileged). Invite it with **View Channel** and **Connect** only.
+   privileged). Invite it with **Administrator**. Status-meeting rooms are
+   created dynamically with their own overwrites, so View Channel + Connect
+   on the server is not enough. On a machine that already has Host secrets:
+
+   ```powershell
+   python -m meeting_host --invite
+   ```
 2. **Add GitHub secrets** `DISCORD_BOT_TOKEN` and `DISCORD_GUILD_ID`.
    `MONGODB_URI` is reused from the ELG build. Until both exist the Host job
    fails and the release simply ships without the Host installer
@@ -66,10 +72,11 @@ into `%LOCALAPPDATA%\ELG Studio\ELG-app\meeting_mike\models`.
 
 ## Using it
 
-Open **Meeting App**. With the Host installed, a **Record** button appears
-bottom-left. Press it to start; press **Stop** to end the meeting and run the
-pipeline. Progress is shown inline, and **Open folder** appears when the
-summary is written.
+Open **Meeting App**. With the Host installed, **Record** and **Status**
+appear bottom-left. Press Record to start. Press **Stop** to end the meeting
+and run the pipeline. Status, the log and how long each step took open in a
+separate **Meeting Mike** window, not inside the meeting view. **Open folder**
+appears when the summary is written.
 
 Recording survives navigating away from the meeting view and minimising to
 tray, because the process is owned by a module-level session in
@@ -95,22 +102,23 @@ padded with leading silence and still lines up in the mix.
 
 ## How attribution stays honest
 
-1. A deterministic pass assigns each mix line to the speaker whose own audio
-   overlaps it most. This always produces a complete transcript.
-2. The model then refines attribution. It is told to keep the mix wording and
-   may only replace a line when the mix is garbled *and* an overlapping
-   per-speaker line is coherent; those lines are marked
-   `"source": "user_fallback"`.
-3. Anything the model returns that is invalid (unknown line id, unknown
-   speaker, malformed JSON) is discarded and the deterministic result stands.
-   `diarized.json` records which path was used in `speaker_attribution`.
+1. Each word in the mix transcript is assigned to the per-speaker recording
+   that was actually loud at that time, and the line splits when the speaker
+   changes. `diarized.json` records this as `speaker_attribution: "energy"`.
+2. If those recordings are missing, a timestamp-overlap pass is used instead,
+   and the model may only relabel that fallback. It does not override a
+   microphone assignment.
+3. Goal hours, days and reached/missed in the summary are rendered from the
+   meeting app. The model only writes "What was said", discussion-point notes
+   and action items, in one call.
 
 Goal outcomes in the summary are computed in
 [meeting_host/facts.py](../meeting_host/facts.py) using the same rules as
 `src/stats_viewer.py` `classify_user_goal_week`, with actual hours and days
-from the same weekly logs the meeting slides display. The model is handed
-those results as facts and instructed not to contradict them. If the model is
-unavailable the summary is still written, with the factual sections intact.
+from the same weekly logs the meeting slides display. Those lines are written
+straight into the summary. The model does not see the goal numbers, so it
+cannot restate them wrong. If the model is unavailable the summary is still
+written, with the factual sections intact.
 
 ## Recording lock
 

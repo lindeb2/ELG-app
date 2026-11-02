@@ -27,16 +27,31 @@ EVENT_ERROR = "error"
 
 PHASE_MIX = "mix"
 PHASE_TRANSCRIBE_MIX = "transcribe_mix"
+PHASE_WHISPER_MIX = "whisper_mix"
+PHASE_WHISPER_MIX_PREPARE = "whisper_mix_prepare"
+PHASE_WHISPER_MIX_INFER = "whisper_mix_infer"
 PHASE_TRANSCRIBE_USERS = "transcribe_users"
+PHASE_WHISPER_USERS = "whisper_users"
+PHASE_WHISPER_USERS_PREPARE = "whisper_users_prepare"
+PHASE_WHISPER_USERS_INFER = "whisper_users_infer"
+PHASE_LLM_START = "llm_start"
 PHASE_MERGE = "merge"
 PHASE_SUMMARY = "summary"
 
 PHASE_LABELS = {
     PHASE_MIX: "Mixing audio",
-    PHASE_TRANSCRIBE_MIX: "Transcribing meeting",
-    PHASE_TRANSCRIBE_USERS: "Transcribing speakers",
+    PHASE_WHISPER_MIX: "Transcribing meeting",
+    PHASE_WHISPER_MIX_PREPARE: "Loading model",
+    PHASE_WHISPER_MIX_INFER: "Transcribing",
+    PHASE_WHISPER_USERS: "Transcribing speakers",
+    PHASE_WHISPER_USERS_PREPARE: "Loading model",
+    PHASE_WHISPER_USERS_INFER: "Transcribing speakers",
+    PHASE_LLM_START: "Starting language model",
     PHASE_MERGE: "Identifying speakers",
     PHASE_SUMMARY: "Writing summary",
+    # Older hosts reported these combined names.
+    PHASE_TRANSCRIBE_MIX: "Transcribing meeting",
+    PHASE_TRANSCRIBE_USERS: "Transcribing speakers",
 }
 
 
@@ -58,8 +73,31 @@ class EventWriter:
                 # ELG closed the pipe; keep running so files still get written.
                 pass
 
-    def phase(self, name: str, progress: float = 0.0, detail: str = "") -> None:
-        self.emit(EVENT_PHASE, name=name, progress=round(float(progress), 4), detail=detail)
+    def phase(
+        self,
+        name: str,
+        progress: float = 0.0,
+        detail: str = "",
+        *,
+        elapsed: float | None = None,
+        label: str = "",
+        parent: str = "",
+        model: str = "",
+    ) -> None:
+        fields: dict[str, Any] = {
+            "name": name,
+            "progress": round(float(progress), 4),
+            "detail": detail,
+        }
+        if elapsed is not None:
+            fields["elapsed"] = round(float(elapsed), 3)
+        if label:
+            fields["label"] = label
+        if parent:
+            fields["parent"] = parent
+        if model:
+            fields["model"] = model
+        self.emit(EVENT_PHASE, **fields)
 
 
 def decode_command(line: str) -> dict | None:

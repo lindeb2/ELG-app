@@ -1,20 +1,27 @@
 """Speaker attribution for the mix transcript.
 
-A deterministic timestamp-overlap pass always produces a usable transcript;
-the local model then refines attribution and may splice in per-speaker text
-where the mix is incoherent. If the model fails at any point the baseline is
-what gets saved, so the pipeline cannot lose a meeting.
+When per-speaker WAVs exist, each mix word is given to the microphone that
+was actually loud at that time. That is the diarization: the model is not
+allowed to relabel those words. Timestamp overlap, then an optional model
+pass, is only the fallback when there is no per-speaker audio.
 """
 from __future__ import annotations
 
 import json
 import math
+import wave
 from pathlib import Path
+
+import numpy as np
 
 from meeting_host import config
 from meeting_host.llama_server import LlmUnavailable
 
 MIN_OVERLAP_SECONDS = 0.05
+# Speech on these recordings sits in the thousands; mic bleed is under ~50.
+ENERGY_FLOOR = 250.0
+# A new line starts when the same person pauses longer than this.
+SPEAKER_GAP_SECONDS = 1.0
 
 _SYSTEM_PROMPT = (
     "You assign speakers to a meeting transcript. "
@@ -117,6 +124,159 @@ def baseline_merge(
                 "source": "mix",
             }
         )
+    return merged
+
+
+def load_speaker_pcm(meeting_dir: Path) -> dict[str, tuple[np.ndarray, int]]:
+    """16 kHz (or native) mono PCM per Discord user, aligned to recording T0."""
+    users_dir = meeting_dir / "audio" / "users"
+    if not users_dir.is_dir():
+        return {}
+
+    loaded: dict[str, tuple[np.ndarray, int]] = {}
+    for path in sorted(users_dir.glob("*.wav")):
+        try:
+            with wave.open(str(path), "rb") as handle:
+                rate = handle.getframerate() or config.SAMPLE_RATE
+                channels = handle.getnchannels()
+                frames = handle.readframes(handle.getnframes())
+        except (OSError, wave.Error):
+            continue
+        if not frames:
+            continue
+        samples = np.frombuffer(frames, dtype="<i2").astype(np.float32)
+        if channels > 1:
+            usable = samples.size - (samples.size % channels)
+            if usable <= 0:
+                continue
+            samples = samples[:usable].reshape(-1, channels).mean(axis=1)
+        loaded[path.stem] = (samples, int(rate))
+    return loaded
+
+
+def _window_rms(samples: np.ndarray, rate: int, start: float, end: float) -> float:
+    if end <= start:
+        mid = start
+        start = mid - 0.05
+        end = mid + 0.05
+    first = max(0, int(start * rate))
+    last = min(int(samples.size), int(end * rate))
+    if last <= first:
+        return 0.0
+    chunk = samples[first:last]
+    return float(np.sqrt(np.mean(np.square(chunk.astype(np.float64)))))
+
+
+def energy_scores(
+    audio: dict[str, tuple[np.ndarray, int]],
+    start: float,
+    end: float,
+) -> dict[str, float]:
+    return {
+        discord_id: _window_rms(samples, rate, start, end)
+        for discord_id, (samples, rate) in audio.items()
+    }
+
+
+def loudest_speaker(scores: dict[str, float]) -> str:
+    """The mic that was actually speaking. Empty when nobody was above the floor."""
+    if not scores:
+        return ""
+    ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+    best_id, best = ranked[0]
+    if best < ENERGY_FLOOR:
+        return ""
+    return best_id
+
+
+def _mix_words(mix: dict) -> list[dict]:
+    words: list[dict] = []
+    for segment in _segments(mix):
+        raw_words = segment.get("words") or []
+        if raw_words:
+            for word in raw_words:
+                text = str(word.get("word") or "").strip()
+                if not text:
+                    continue
+                words.append(
+                    {
+                        "start": float(word.get("start") or 0.0),
+                        "end": float(word.get("end") or word.get("start") or 0.0),
+                        "word": text,
+                    }
+                )
+            continue
+        text = str(segment.get("text") or "").strip()
+        if text:
+            words.append(
+                {
+                    "start": float(segment.get("start") or 0.0),
+                    "end": float(segment.get("end") or 0.0),
+                    "word": text,
+                }
+            )
+    return words
+
+
+def _fill_unassigned(speakers: list[str], words: list[dict]) -> None:
+    """A zero-width word has no energy of its own; give it to a neighbour."""
+    for index, speaker in enumerate(speakers):
+        if speaker:
+            continue
+        previous = next((speakers[j] for j in range(index - 1, -1, -1) if speakers[j]), "")
+        following = next((speakers[j] for j in range(index + 1, len(speakers)) if speakers[j]), "")
+        if previous and following and previous != following:
+            gap_before = words[index]["start"] - words[index - 1]["end"] if index else 999.0
+            gap_after = words[index + 1]["start"] - words[index]["end"] if index + 1 < len(words) else 999.0
+            speakers[index] = previous if gap_before <= gap_after else following
+        else:
+            speakers[index] = previous or following
+
+
+def energy_merge(
+    mix: dict,
+    audio: dict[str, tuple[np.ndarray, int]],
+    speaker_labels: dict[str, str],
+) -> list[dict]:
+    """Split the mix into lines at speaker changes, using microphone energy."""
+    words = _mix_words(mix)
+    if not words or not audio:
+        return []
+
+    speakers = [
+        loudest_speaker(energy_scores(audio, word["start"], word["end"]))
+        for word in words
+    ]
+    _fill_unassigned(speakers, words)
+
+    merged: list[dict] = []
+    current: dict | None = None
+    for speaker_id, word in zip(speakers, words):
+        if not speaker_id:
+            continue
+        gap = 0.0 if current is None else word["start"] - float(current["end"])
+        if (
+            current is not None
+            and current["discord_user_id"] == speaker_id
+            and gap <= SPEAKER_GAP_SECONDS
+        ):
+            current["end"] = round(max(float(current["end"]), word["end"]), 3)
+            current["_words"].append(word["word"])
+            continue
+
+        current = {
+            "start": round(word["start"], 3),
+            "end": round(max(word["end"], word["start"]), 3),
+            "speaker": speaker_labels.get(speaker_id, "Unknown"),
+            "elg_username": speaker_labels.get(speaker_id),
+            "discord_user_id": speaker_id,
+            "source": "mix",
+            "_words": [word["word"]],
+        }
+        merged.append(current)
+
+    for line in merged:
+        line["text"] = " ".join(line.pop("_words")).strip()
     return merged
 
 
@@ -256,9 +416,18 @@ def merge_transcripts(
     on_progress=None,
 ) -> dict:
     """Write transcripts/diarized.json and return its payload."""
-    lines = baseline_merge(mix, user_transcripts, speaker_labels)
-    used_llm = False
+    audio = load_speaker_pcm(meeting_dir)
+    lines = energy_merge(mix, audio, speaker_labels) if audio else []
+    if lines:
+        # Microphone energy is the diarization. The model was relabelling
+        # clear turns, and a full generation just to do that is wasted.
+        attribution = "energy"
+        llm = None
+    else:
+        lines = baseline_merge(mix, user_transcripts, speaker_labels)
+        attribution = "timestamp_overlap"
 
+    used_llm = False
     if llm is not None and lines:
         chunks = _chunk_lines(lines, user_transcripts, speaker_labels)
         for position, indices in enumerate(chunks):
@@ -279,7 +448,7 @@ def merge_transcripts(
                 used_llm = True
 
     payload = {
-        "speaker_attribution": "llm" if used_llm else "timestamp_overlap",
+        "speaker_attribution": "llm" if used_llm else attribution,
         "segments": lines,
     }
     path = meeting_dir / "transcripts" / "diarized.json"

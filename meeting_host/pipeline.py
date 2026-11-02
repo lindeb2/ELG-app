@@ -6,6 +6,7 @@ with `--resume <meeting_dir>` if the app closed mid-processing.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 from meeting_host import audio_mix, config, facts as facts_module, merge, models, summarize, transcribe
@@ -48,6 +49,52 @@ def speaker_labels_from_attendance(attendance: dict) -> dict[str, str]:
     return labels
 
 
+class StepClock:
+    """Emits a phase start and a phase end with elapsed seconds."""
+
+    def __init__(self, events: protocol.EventWriter) -> None:
+        self.events = events
+        self.timings: dict[str, float] = {}
+        self._open: dict[str, float] = {}
+
+    def begin(self, name: str, detail: str = "", *, label: str = "", parent: str = "", model: str = "") -> None:
+        self._open[name] = time.perf_counter()
+        self.events.phase(name, 0.0, detail=detail, label=label, parent=parent, model=model)
+
+    def detail(self, name: str, detail: str = "", *, label: str = "", parent: str = "", model: str = "") -> None:
+        if detail or label or parent or model:
+            self.events.phase(name, 0.0, detail=detail, label=label, parent=parent, model=model)
+
+    def end(self, name: str) -> None:
+        started = self._open.pop(name, None)
+        elapsed = 0.0 if started is None else time.perf_counter() - started
+        self.timings[name] = round(elapsed, 3)
+        self.events.phase(name, 1.0, elapsed=elapsed)
+
+    def on_stage(
+        self,
+        name: str,
+        which: str,
+        detail: str = "",
+        label: str = "",
+        parent: str = "",
+        model: str = "",
+    ) -> None:
+        if which == "start":
+            self.begin(name, detail, label=label, parent=parent, model=model)
+        elif which == "end":
+            self.end(name)
+        else:
+            self.detail(name, detail, label=label, parent=parent, model=model)
+
+    def run(self, name: str, fn, *args, label: str = "", parent: str = "", model: str = "", **kwargs):
+        self.begin(name, label=label, parent=parent, model=model)
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            self.end(name)
+
+
 def mix_audio(meeting_dir: Path) -> float:
     users_dir = meeting_dir / "audio" / "users"
     sources = sorted(users_dir.glob("*.wav")) if users_dir.is_dir() else []
@@ -67,39 +114,29 @@ def run(
     if not isinstance(attendance, dict):
         attendance = {}
     labels = speaker_labels_from_attendance(attendance)
+    clock = StepClock(events)
 
-    events.phase(protocol.PHASE_MIX, 0.0)
     mix_path = meeting_dir / "audio" / "mix.wav"
     if not (skip_existing and mix_path.is_file()):
-        duration = mix_audio(meeting_dir)
+        duration = clock.run(protocol.PHASE_MIX, mix_audio, meeting_dir)
     else:
         duration = audio_mix.wav_duration_seconds(mix_path)
     write_status(meeting_dir, mix_seconds=round(duration, 2), pipeline="running")
-    events.phase(protocol.PHASE_MIX, 1.0)
 
     if skip_existing and (meeting_dir / "transcripts" / "mix.json").is_file():
         mix_transcript, user_transcripts = transcribe.load_saved(meeting_dir)
     else:
-        events.phase(protocol.PHASE_TRANSCRIBE_MIX, 0.0)
         mix_transcript = transcribe.transcribe_mix(
             base_dir,
             meeting_dir,
-            on_progress=lambda detail: events.phase(
-                protocol.PHASE_TRANSCRIBE_MIX, 0.0, detail=str(detail)
-            ),
+            on_stage=clock.on_stage,
         )
-        events.phase(protocol.PHASE_TRANSCRIBE_MIX, 1.0)
-
-        events.phase(protocol.PHASE_TRANSCRIBE_USERS, 0.0)
         user_transcripts = transcribe.transcribe_users(
             base_dir,
             meeting_dir,
-            on_progress=lambda value: events.phase(
-                protocol.PHASE_TRANSCRIBE_USERS,
-                value if isinstance(value, float) else 0.0,
-            ),
+            on_stage=clock.on_stage,
+            labels=labels,
         )
-        events.phase(protocol.PHASE_TRANSCRIBE_USERS, 1.0)
 
     # Anyone who only shows up in audio still needs a label.
     for discord_id in user_transcripts:
@@ -109,14 +146,22 @@ def run(
 
     llm: LlamaServer | None = None
     llm_error = ""
+    diarized: dict = {"segments": []}
     try:
+        llm_name = config.LLM_FILENAME.removesuffix(".gguf")
+        clock.begin(protocol.PHASE_LLM_START, model=llm_name)
         try:
-            llm = LlamaServer(model_path=models.ensure_llm(
+            models.ensure_llama_server(
                 base_dir,
-                on_progress=lambda detail: events.emit(
-                    protocol.EVENT_NEED_MODELS, detail=str(detail)
+                on_progress=lambda detail: clock.detail(protocol.PHASE_LLM_START, str(detail)),
+            )
+            llm = LlamaServer(
+                model_path=models.ensure_llm(
+                    base_dir,
+                    on_progress=lambda detail: clock.detail(protocol.PHASE_LLM_START, str(detail)),
                 ),
-            ))
+                base_dir=base_dir,
+            )
             llm.start()
         except LlmUnavailable as exc:
             llm = None
@@ -124,30 +169,32 @@ def run(
         except Exception as exc:
             llm = None
             llm_error = f"Local model unavailable: {exc}"
+        finally:
+            clock.end(protocol.PHASE_LLM_START)
 
-        events.phase(protocol.PHASE_MERGE, 0.0)
-        diarized = merge.merge_transcripts(
+        diarized = clock.run(
+            protocol.PHASE_MERGE,
+            merge.merge_transcripts,
             meeting_dir,
             mix_transcript,
             user_transcripts,
             labels,
             llm=llm,
-            on_progress=lambda value: events.phase(protocol.PHASE_MERGE, value),
         )
-        events.phase(protocol.PHASE_MERGE, 1.0)
-
-        events.phase(protocol.PHASE_SUMMARY, 0.0)
-        content = summarize.build_summary(
+        content = clock.run(
+            protocol.PHASE_SUMMARY,
+            summarize.build_summary,
             meeting_facts,
             attendance,
             merge.transcript_as_text(diarized),
+            model=llm_name if llm is not None else "unavailable",
             llm=llm,
         )
         summary_path = summarize.write_summary(meeting_dir, content)
-        events.phase(protocol.PHASE_SUMMARY, 1.0)
     finally:
         if llm is not None:
             llm.stop()
+        write_status(meeting_dir, timings=clock.timings)
 
     write_status(
         meeting_dir,
@@ -155,6 +202,7 @@ def run(
         speaker_attribution=diarized.get("speaker_attribution"),
         llm_error=llm_error,
         segments=len(diarized.get("segments") or []),
+        timings=clock.timings,
     )
     return summary_path
 

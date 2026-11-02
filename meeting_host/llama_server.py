@@ -24,9 +24,16 @@ class LlmUnavailable(RuntimeError):
 
 
 class LlamaServer:
-    def __init__(self, *, model_path: Path, port: int = config.LLM_PORT) -> None:
+    def __init__(
+        self,
+        *,
+        model_path: Path,
+        port: int = config.LLM_PORT,
+        base_dir: Path | None = None,
+    ) -> None:
         self._model_path = model_path
         self._port = port
+        self._base_dir = base_dir
         self._process: subprocess.Popen | None = None
         self._base_url = f"http://127.0.0.1:{port}"
 
@@ -38,13 +45,13 @@ class LlamaServer:
         self.stop()
 
     def start(self) -> None:
-        binary = models.llama_server_path()
+        binary = models.llama_server_path(self._base_dir)
         if binary is None:
-            raise LlmUnavailable("Bundled llama-server binary is missing.")
+            raise LlmUnavailable("llama-server binary is missing.")
         if not self._model_path.is_file():
             raise LlmUnavailable("Language model file is missing.")
 
-        gpu_layers = "99" if models.has_gpu_llama() else "0"
+        gpu_layers = "99" if models.has_gpu_llama(self._base_dir) else "0"
         command = [
             str(binary),
             "--model", str(self._model_path),

@@ -9,7 +9,6 @@ import threading
 
 import customtkinter as ctk
 
-from format_time import format_time
 from meeting_mike_client import (
     STATE_DONE,
     STATE_ERROR,
@@ -21,28 +20,20 @@ from meeting_mike_client import (
     is_meeting_host_available,
     open_in_file_manager,
 )
+from meeting_mike_window import open_status_window
 from notification_preferences import fetch_notification_prefs
-from utils import flash_error
-
-_TICK_MS = 500
 
 _BTN_IDLE = {"fg_color": "#333333", "hover_color": "#404040", "text_color": "white"}
 _BTN_RECORDING = {"fg_color": "#8B1A1A", "hover_color": "#A82121", "text_color": "white"}
 
-_STATUS_COLORS = {
-    STATE_ERROR: "#FF4444",
-    STATE_DONE: "#00AD00",
-}
-
 
 class MeetingMikePanel(ctk.CTkFrame):
-    """Bottom-left overlay: Record / Stop plus pipeline status."""
+    """Bottom-left overlay: Record / Stop. Status lives in its own window."""
 
     def __init__(self, parent, username: str):
         super().__init__(parent, fg_color="transparent", bg_color="transparent")
         self._username = username or ""
         self._session = get_session()
-        self._tick_id: str | None = None
         self._detached = False
 
         self._button = ctk.CTkButton(
@@ -57,14 +48,17 @@ class MeetingMikePanel(ctk.CTkFrame):
         )
         self._button.pack(side="left")
 
-        self._status = ctk.CTkLabel(
+        self._status_button = ctk.CTkButton(
             self,
-            text="",
+            text="Status",
+            width=72,
+            height=24,
+            corner_radius=0,
             font=("Arial", 12),
-            text_color="#B0B0B0",
-            anchor="w",
+            command=self._on_status,
+            **_BTN_IDLE,
         )
-        self._status.pack(side="left", padx=(8, 0))
+        self._status_button.pack(side="left", padx=(8, 0))
 
         self._open_button = ctk.CTkButton(
             self,
@@ -81,7 +75,6 @@ class MeetingMikePanel(ctk.CTkFrame):
         self.bind("<Destroy>", self._on_destroy, add="+")
         self._session.add_listener(self._on_session_event)
         self._render(self._session.snapshot())
-        self._schedule_tick()
 
     # --- lifecycle -------------------------------------------------------
     def detach(self) -> None:
@@ -90,32 +83,11 @@ class MeetingMikePanel(ctk.CTkFrame):
             return
         self._detached = True
         self._session.remove_listener(self._on_session_event)
-        if self._tick_id is not None:
-            try:
-                self.after_cancel(self._tick_id)
-            except Exception:
-                pass
-            self._tick_id = None
 
     def _on_destroy(self, _event) -> None:
         # CTkFrame.bind() delegates to an internal canvas, so the event widget
         # is never this frame; any destroy here means the panel is going away.
         self.detach()
-
-    def _schedule_tick(self) -> None:
-        if self._detached:
-            return
-        try:
-            self._tick_id = self.after(_TICK_MS, self._tick)
-        except Exception:
-            self._tick_id = None
-
-    def _tick(self) -> None:
-        self._tick_id = None
-        if self._detached or not self.winfo_exists():
-            return
-        self._render(self._session.snapshot())
-        self._schedule_tick()
 
     def _on_session_event(self, snapshot: dict) -> None:
         if self._detached:
@@ -139,23 +111,8 @@ class MeetingMikePanel(ctk.CTkFrame):
         else:
             self._button.configure(text="Record", state="normal", **_BTN_IDLE)
 
-        if state == STATE_RECORDING:
-            participants = len(snapshot["participants"])
-            text = f"Recording {format_time(snapshot['elapsed'])}"
-            if participants:
-                text += f" · {participants} in call"
-        elif state == STATE_PROCESSING:
-            text = snapshot["message"] or "Processing..."
-            progress = snapshot["phase_progress"]
-            if 0.0 < progress < 1.0:
-                text += f" {int(progress * 100)}%"
-        else:
-            text = snapshot["message"]
-
-        self._status.configure(
-            text=text,
-            text_color=_STATUS_COLORS.get(state, "#B0B0B0"),
-        )
+        if state != STATE_IDLE or snapshot.get("message") or snapshot.get("log") or snapshot.get("steps"):
+            open_status_window(self, focus=False).render(snapshot)
 
         # Tracked explicitly: winfo_ismapped() is false whenever the meeting
         # view is hidden, which would strand the button in the wrong state.
@@ -182,7 +139,7 @@ class MeetingMikePanel(ctk.CTkFrame):
             self._session.reset_if_finished()
 
         self._button.configure(state="disabled")
-        self._status.configure(text="Checking your Discord link...", text_color="#B0B0B0")
+        open_status_window(self).set_note("Checking your Discord link...")
         threading.Thread(
             target=self._start_worker,
             name="meeting-mike-start",
@@ -218,15 +175,18 @@ class MeetingMikePanel(ctk.CTkFrame):
             if self._detached or not self.winfo_exists():
                 return
             self._button.configure(state="normal")
+            window = open_status_window(self)
             if not started:
-                self._status.configure(text=error, text_color="#FF4444")
-                flash_error(self._status)
+                window.set_note(error, error=True)
             self._render(self._session.snapshot())
 
         try:
             self.after(0, apply)
         except Exception:
             pass
+
+    def _on_status(self) -> None:
+        open_status_window(self).render(self._session.snapshot())
 
     def _on_open_folder(self) -> None:
         meeting_dir = self._session.snapshot()["meeting_dir"]
