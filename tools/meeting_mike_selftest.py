@@ -589,6 +589,251 @@ def test_protocol_and_pipeline(tmp: Path) -> None:
     check("voice recv patches are idempotent", True)
 
 
+def test_transcription_sources(tmp: Path) -> None:
+    print("transcription sources")
+    import os
+
+    from meeting_host.audio_mix import write_wav_mono
+    from meeting_host.secret_codec import seal_secret, unseal_secret
+    from meeting_host.host_secrets import baked_transcription_source
+    from meeting_host.transcription import known_sources, open_source, selected_source_id
+    from meeting_host.transcription.audio import spans_for, uploads_for_wav
+    from meeting_host.transcription.groq import (
+        GroqWhisperSource,
+        HourlyAudioBudget,
+        combine_transcripts,
+        parse_groq_transcript,
+    )
+
+    sealed = seal_secret("gsk_test_key")
+    check("sealed key is not the raw key", "gsk_test_key" not in sealed, sealed)
+    check("sealed key round-trips", unseal_secret(sealed) == "gsk_test_key")
+    check("raw key is left as written", unseal_secret("gsk_plain") == "gsk_plain")
+
+    check("local and groq are registered", known_sources() == ("groq", "local"), str(known_sources()))
+    previous = os.environ.pop("ELG_TRANSCRIPTION_SOURCE", None)
+    try:
+        if not baked_transcription_source():
+            check("default source is groq", selected_source_id() == "groq", selected_source_id())
+        check("opened local source is local", open_source("local").id == "local")
+        os.environ["ELG_TRANSCRIPTION_SOURCE"] = "groq"
+        check("env selects groq", selected_source_id() == "groq")
+        try:
+            open_source("missing")
+            check("unknown source is rejected", False)
+        except RuntimeError as exc:
+            check("unknown source is rejected", "missing" in str(exc), str(exc))
+    finally:
+        if previous is None:
+            os.environ.pop("ELG_TRANSCRIPTION_SOURCE", None)
+        else:
+            os.environ["ELG_TRANSCRIPTION_SOURCE"] = previous
+
+    spans = spans_for(16_000, 16_000, max_bytes=16_064, max_seconds=7_200)
+    check("byte cap splits one second into two spans", spans == [(0, 8_000), (8_000, 16_000)], str(spans))
+    one = spans_for(8_000, 16_000, max_bytes=100_000_000, max_seconds=7_200)
+    check("a short file stays one span under the real cap", one == [(0, 8_000)], str(one))
+    by_time = spans_for(16_000, 16_000, max_bytes=100_000_000, max_seconds=0.5)
+    check("hourly piece cap splits on time", by_time == [(0, 8_000), (8_000, 16_000)], str(by_time))
+
+    wav = tmp / "piece.wav"
+    write_wav_mono(wav, np.zeros(16_000, dtype=np.int16))
+    uploads = uploads_for_wav(wav, max_bytes=16_064, max_seconds=7_200, stem="mix")
+    check("upload split respects the byte cap", len(uploads) == 2, str(len(uploads)))
+    check("every upload is under the cap", all(len(item.content) <= 16_064 for item in uploads))
+    check("second upload keeps the meeting offset", abs(uploads[1].offset_seconds - 0.5) < 0.01, str(uploads[1].offset_seconds))
+
+    parsed = parse_groq_transcript(
+        {
+            "language": "english",
+            "duration": 1.0,
+            "segments": [
+                {
+                    "start": 0.1,
+                    "end": 0.4,
+                    "text": " Hello",
+                    "words": [{"word": " Hello", "start": 0.1, "end": 0.4}],
+                }
+            ],
+        },
+        offset_seconds=2.0,
+    )
+    word = parsed["segments"][0]["words"][0]
+    check("groq language normalizes", parsed["language"] == "en")
+    check("word time keeps the chunk offset", word["start"] == 2.1 and word["word"] == "Hello", str(word))
+
+    bare = parse_groq_transcript(
+        {"language": "en", "duration": 1.0, "segments": [{"start": 0.0, "end": 1.0, "text": "one two"}]},
+    )
+    check("missing word times are spread across the segment", len(bare["segments"][0]["words"]) == 2)
+
+    combined = combine_transcripts([parsed, bare], duration=3.0)
+    check("chunks concatenate in order", len(combined["segments"]) == 2)
+
+    clock = {"now": 1_000.0}
+    slept: list[float] = []
+
+    def _now() -> float:
+        return clock["now"]
+
+    def _sleep(delay: float) -> None:
+        slept.append(delay)
+        clock["now"] += delay
+
+    budget = HourlyAudioBudget(
+        tmp / "budget.json",
+        limit_seconds=10,
+        window_seconds=3_600,
+        now=_now,
+        sleep=_sleep,
+    )
+    check("first audio fits without waiting", budget.acquire(6) == 0)
+    waited = budget.acquire(6)
+    check("hourly cap waits until the window moves", waited >= 3_600, str(waited))
+    check("budget persisted across a new object", HourlyAudioBudget(tmp / "budget.json", limit_seconds=10, now=_now, sleep=_sleep).acquire(4) == 0)
+
+    calls: list[str] = []
+
+    def _post(*, url, api_key, model, upload):
+        calls.append(model)
+        check("request does not put the key in the url", api_key not in url)
+        return {"language": "english", "duration": upload.duration_seconds, "text": "Hi", "words": [{"word": "Hi", "start": 0.0, "end": 0.2}]}
+
+    meeting = tmp / "groq-data"
+    source = GroqWhisperSource(post=_post, api_key="gsk_test_key", budget=HourlyAudioBudget(
+        meeting / "groq_audio_budget.json",
+        limit_seconds=7_200,
+        now=_now,
+        sleep=_sleep,
+    ))
+    label = source.prepare(meeting, role="mix")
+    check("mix model is large-v3", label == "whisper-large-v3 · Groq", label)
+    payload = source.transcribe(wav, base=meeting)
+    check("groq mix transcript has the word", payload["segments"][0]["text"] == "Hi", str(payload))
+    source.prepare(meeting, role="user")
+    source.transcribe(wav, base=meeting)
+    check("speaker model is turbo", calls == ["whisper-large-v3", "whisper-large-v3-turbo"], str(calls))
+    try:
+        budget.acquire(11)
+        check("a piece above the hourly cap fails", False)
+    except RuntimeError:
+        check("a piece above the hourly cap fails", True)
+
+    _test_groq_fallback(tmp)
+
+
+def _test_groq_fallback(tmp: Path) -> None:
+    import io
+    import threading
+    import time
+
+    from meeting_host import models as models_module
+    from meeting_host import transcribe as transcribe_module
+    from meeting_host.audio_mix import write_wav_mono
+    from meeting_host.install_prompt import WaitingInstallPrompt
+    from meeting_host.protocol import EventWriter
+    from meeting_host.transcription.groq import GroqUnavailable
+
+    class Boom:
+        id = "groq"
+
+        def prepare(self, base, *, role, on_progress=None):
+            raise GroqUnavailable("down")
+
+        def transcribe(self, audio_path, *, base, on_progress=None):
+            raise GroqUnavailable("down")
+
+        def close(self) -> None:
+            return None
+
+    class LocalOk:
+        id = "local"
+
+        def prepare(self, base, *, role, on_progress=None):
+            return "local · test"
+
+        def transcribe(self, audio_path, *, base, on_progress=None):
+            return {
+                "language": "en",
+                "duration": 1.0,
+                "segments": [{"start": 0.0, "end": 1.0, "text": "local", "words": []}],
+            }
+
+        def close(self) -> None:
+            return None
+
+    opened: list[str] = []
+
+    def fake_open(source_id=None):
+        kind = source_id or "groq"
+        opened.append(kind)
+        return LocalOk() if kind == "local" else Boom()
+
+    meeting = tmp / "fallback"
+    (meeting / "audio").mkdir(parents=True)
+    write_wav_mono(meeting / "audio" / "mix.wav", np.zeros(1600, dtype=np.int16))
+
+    original_open = transcribe_module.open_source
+    original_installed = models_module.local_whisper_installed
+    transcribe_module.open_source = fake_open
+    try:
+        models_module.local_whisper_installed = lambda base: True
+        state = transcribe_module.TranscribeState()
+        tokens = transcribe_module.activate(state, None)
+        try:
+            payload = transcribe_module.transcribe_mix(tmp, meeting)
+        finally:
+            transcribe_module.deactivate(tokens)
+        check("installed local is used without asking", payload["segments"][0]["text"] == "local", str(payload))
+        check("fallback sticks to local", state.force_local)
+        check("groq was tried first", opened[0] == "groq", str(opened))
+
+        opened.clear()
+        asked: list[str] = []
+
+        class Prompt:
+            def ask(self, detail: str) -> bool:
+                asked.append(detail)
+                return False
+
+        models_module.local_whisper_installed = lambda base: False
+        state = transcribe_module.TranscribeState()
+        tokens = transcribe_module.activate(state, Prompt())
+        try:
+            try:
+                transcribe_module.transcribe_mix(tmp, meeting)
+                check("declined download does not transcribe", False)
+            except transcribe_module.TranscriptUnavailable as exc:
+                check("declined download does not transcribe", "down" in str(exc), str(exc))
+        finally:
+            transcribe_module.deactivate(tokens)
+        check("decline does not force local", not state.force_local)
+        check("decline asks once", len(asked) == 1 and "2 GB" in asked[0], str(asked))
+        check("decline does not open local", "local" not in opened, str(opened))
+    finally:
+        transcribe_module.open_source = original_open
+        models_module.local_whisper_installed = original_installed
+
+    stream = io.StringIO()
+    prompt = WaitingInstallPrompt(EventWriter(stream))
+    holder: dict = {}
+
+    def waiter() -> None:
+        holder["allow"] = prompt.ask("please download")
+
+    thread = threading.Thread(target=waiter)
+    thread.start()
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and "need_local_models" not in stream.getvalue():
+        time.sleep(0.01)
+    prompt.answer(True)
+    thread.join(2)
+    check("install answer unblocks the pipeline", holder.get("allow") is True, str(holder))
+    check("prompt event names the download", "need_local_models" in stream.getvalue())
+    prompt.close()
+    check("closed prompt refuses", prompt.ask("again") is False)
+
+
 def test_meeting_paths(tmp: Path) -> None:
     print("meeting directory layout")
     from datetime import datetime, timedelta, timezone
@@ -625,6 +870,7 @@ def main() -> int:
         test_goal_rules()
         test_summary()
         test_protocol_and_pipeline(tmp)
+        test_transcription_sources(tmp)
         test_meeting_paths(tmp)
 
     print()

@@ -40,11 +40,11 @@ If the marker is absent the meeting view is byte-for-byte what it was before:
 |---|---|
 | Distribution | Separate `ELG-Meeting-Host` installer, Windows x64 |
 | Language | English only |
-| Mix transcription | faster-whisper `distil-large-v3` (source of truth for wording) |
-| Per-speaker transcription | faster-whisper `small.en` (attribution and overlap repair) |
+| Mix transcription | `local`: faster-whisper `distil-large-v3`. `groq`: `whisper-large-v3` |
+| Per-speaker transcription | `local`: faster-whisper `small.en`. `groq`: `whisper-large-v3-turbo` |
 | Merge and summary | Qwen3-8B Instruct Q4_K_M via bundled `llama-server`, thinking off |
 | Speaker attribution | Per-microphone energy, word by word |
-| Storage | Local only; nothing is uploaded |
+| Storage | Local audio. The Groq source uploads the audio it transcribes |
 | Channel | Host's current voice channel, else the tuxedo `boardroom` channel |
 
 ## One-time setup
@@ -62,6 +62,12 @@ If the marker is absent the meeting view is byte-for-byte what it was before:
    `MONGODB_URI` is reused from the ELG build. Until both exist the Host job
    fails and the release simply ships without the Host installer
    (`continue-on-error: true`).
+   Set the `GROQ_API_KEY` secret to ship Groq transcription. The key is sealed
+   into the Host payload. That only hides it from a text search of the install
+   folder; set a spend limit on the Groq account. Groq is the default. Set the
+   `ELG_TRANSCRIPTION_SOURCE` repository variable to `local` to force the
+   local Whisper models instead. Without the key, a Groq failure asks before
+   downloading those models.
 3. **Install** `ELG-Meeting-Host.exe` on the one machine that records.
 4. **Link Discord** in ELG: Settings has a Discord user-ID field (or run
    `/link`). Recording refuses to start without it, because that id is how the
@@ -147,9 +153,21 @@ never import each other. For local work:
 ```bash
 # meeting_host/runtime_secrets.py is gitignored; env vars work too
 export ELG_DISCORD_BOT_TOKEN=... ELG_DISCORD_GUILD_ID=... ELG_MONGODB_URI=...
+# Optional. Unset uses Groq. ELG_GROQ_API_KEY is required for that to succeed.
+export ELG_TRANSCRIPTION_SOURCE=groq
 pip install -r meeting_host/requirements.txt
 python -m meeting_host --selftest --elg-data-dir /tmp/elg-data
 ```
+
+`ELG_TRANSCRIPTION_SOURCE` chooses the engine. `groq` is the default: the mix
+goes to `whisper-large-v3` and each speaker to `whisper-large-v3-turbo`.
+`local` forces faster-whisper. Uploads are 16 kHz mono FLAC when PyAV is
+available, otherwise WAV. A piece stays under 100 MB, and the host waits
+when the audio sent in the last hour would pass 7,200 seconds. If Groq
+fails and the local weights are already installed, the rest of that meeting
+uses them. If they are not, Meeting Mike asks before downloading about 2 GB.
+Add another engine by implementing `TranscriptSource` and registering it in
+`meeting_host/transcription/__init__.py`.
 
 Point ELG at a dev Host by writing the marker yourself:
 

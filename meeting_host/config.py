@@ -34,6 +34,24 @@ MIX_MODEL = "distil-large-v3"
 USER_MODEL = "small.en"
 WHISPER_LANGUAGE = "en"
 
+# "groq" or "local". A baked runtime_secrets.TRANSCRIPTION_SOURCE or the
+# ELG_TRANSCRIPTION_SOURCE env var overrides this. Groq is the default; a
+# failed Groq call can fall back to local Whisper. See transcription/.
+TRANSCRIPTION_SOURCE = "groq"
+
+# Shown when Groq fails and the local Whisper weights are not on disk yet.
+LOCAL_WHISPER_DOWNLOAD = "about 2 GB"
+
+# Groq speech-to-text. File size is the developer-tier upload cap. The audio
+# budget is the free-tier hourly cap, which is the tighter throughput limit.
+GROQ_MIX_MODEL = "whisper-large-v3"
+GROQ_USER_MODEL = "whisper-large-v3-turbo"
+GROQ_TRANSCRIBE_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+GROQ_MAX_FILE_BYTES = 100_000_000
+GROQ_UPLOAD_MARGIN_BYTES = 1_000_000
+GROQ_AUDIO_SECONDS_PER_HOUR = 7_200
+GROQ_TIMEOUT_SECONDS = 600.0
+
 LLM_REPO = "Qwen/Qwen3-8B-GGUF"
 LLM_FILENAME = "Qwen3-8B-Q4_K_M.gguf"
 # hf_hub_download needs the file size plus a little slack (~5.4 GB).

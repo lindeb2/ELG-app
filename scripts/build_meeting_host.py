@@ -44,9 +44,6 @@ _LLAMA_CUDART_ASSET = {
 }
 _LLAMA_BASE_URL = f"https://github.com/ggml-org/llama.cpp/releases/download/{LLAMA_BUILD}"
 
-_PACKAGE_FILES = ("*.py",)
-
-
 def log(message: str) -> None:
     print(f"[meeting-host] {message}", flush=True)
 
@@ -174,20 +171,58 @@ def copy_package(stage: Path, version: str) -> None:
     package.mkdir(parents=True)
 
     source = REPO_ROOT / "meeting_host"
-    for pattern in _PACKAGE_FILES:
-        for item in sorted(source.glob(pattern)):
+    for item in sorted(source.iterdir()):
+        if item.name in {"runtime_secrets.py", "__pycache__"} or item.name.startswith("."):
+            continue
+        if item.suffix == ".py":
             shutil.copy2(item, package / item.name)
+        elif item.is_dir() and (item / "__init__.py").is_file():
+            shutil.copytree(
+                item,
+                package / item.name,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+            )
 
     secrets = source / "runtime_secrets.py"
     if not secrets.is_file():
         raise SystemExit(
             "meeting_host/runtime_secrets.py is missing. CI writes it; for a local "
-            "build create it with DISCORD_BOT_TOKEN, DISCORD_GUILD_ID and MONGODB_URI."
+            "build create it with DISCORD_BOT_TOKEN, DISCORD_GUILD_ID and MONGODB_URI. "
+            "Add GROQ_API_KEY and TRANSCRIPTION_SOURCE = 'groq' to transcribe via Groq."
         )
-    shutil.copy2(secrets, package / "runtime_secrets.py")
+    _stage_secrets(secrets, package / "runtime_secrets.py")
 
     (package / "_version.py").write_text(f'__version__ = "{version}"\n', encoding="utf-8")
     log(f"staged meeting_host ({version})")
+
+
+def _stage_secrets(source: Path, destination: Path) -> None:
+    """Copy host secrets. A raw Groq key is sealed so the installer has no plaintext key."""
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    from meeting_host.secret_codec import seal_secret, unseal_secret
+
+    namespace: dict = {}
+    exec(compile(source.read_text(encoding="utf-8"), str(source), "exec"), namespace)
+    lines = []
+    for name in ("DISCORD_BOT_TOKEN", "DISCORD_GUILD_ID", "MONGODB_URI"):
+        value = namespace.get(name)
+        if not value:
+            raise SystemExit(f"meeting_host/runtime_secrets.py is missing {name}.")
+        lines.append(f"{name} = {value!r}")
+
+    key = str(namespace.get("GROQ_API_KEY") or "")
+    source_name = str(namespace.get("TRANSCRIPTION_SOURCE") or "").strip().lower()
+    if source_name == "groq" and not key:
+        raise SystemExit(
+            "TRANSCRIPTION_SOURCE is 'groq' but GROQ_API_KEY is empty in runtime_secrets.py."
+        )
+    if key:
+        lines.append(f"GROQ_API_KEY = {seal_secret(unseal_secret(key))!r}")
+    if source_name:
+        lines.append(f"TRANSCRIPTION_SOURCE = {source_name!r}")
+    destination.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    log("staged runtime secrets")
 
 
 def write_manifest(stage: Path, *, version: str, arch: str, gpu_backend: str) -> None:

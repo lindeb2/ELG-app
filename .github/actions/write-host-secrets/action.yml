@@ -10,6 +10,14 @@ inputs:
   mongodb_uri:
     description: MongoDB connection URI
     required: true
+  groq_api_key:
+    description: Optional Groq API key, sealed before it is written
+    required: false
+    default: ""
+  transcription_source:
+    description: "local or groq. Empty means local."
+    required: false
+    default: ""
 runs:
   using: composite
   steps:
@@ -19,9 +27,13 @@ runs:
         DISCORD_BOT_TOKEN: ${{ inputs.discord_bot_token }}
         DISCORD_GUILD_ID: ${{ inputs.discord_guild_id }}
         MONGODB_URI: ${{ inputs.mongodb_uri }}
+        GROQ_API_KEY: ${{ inputs.groq_api_key }}
+        TRANSCRIPTION_SOURCE: ${{ inputs.transcription_source }}
       run: |
         import os
         from pathlib import Path
+
+        from meeting_host.secret_codec import seal_secret
 
         names = ("DISCORD_BOT_TOKEN", "DISCORD_GUILD_ID", "MONGODB_URI")
         lines = []
@@ -31,6 +43,19 @@ runs:
                 raise SystemExit(f"Missing GitHub Actions secret: {name}")
             lines.append(f"{name} = {value!r}")
 
+        source = os.environ.get("TRANSCRIPTION_SOURCE", "").strip().lower()
+        key = os.environ.get("GROQ_API_KEY", "")
+        if source == "groq" and not key:
+            raise SystemExit(
+                "TRANSCRIPTION_SOURCE is groq but the GROQ_API_KEY secret is empty."
+            )
+        if key:
+            lines.append(f"GROQ_API_KEY = {seal_secret(key)!r}")
+        if source:
+            lines.append(f"TRANSCRIPTION_SOURCE = {source!r}")
+        else:
+            source = "groq (config default)"
+
         path = Path("meeting_host/runtime_secrets.py")
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        print(f"Wrote {path} with {len(names)} secrets")
+        print(f"Wrote {path} (transcription source: {source}, groq key: {'set' if key else 'absent'})")

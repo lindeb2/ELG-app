@@ -13,6 +13,7 @@ import traceback
 from pathlib import Path
 
 from meeting_host import config, mongo_host, pipeline, protocol
+from meeting_host.install_prompt import WaitingInstallPrompt, prompt_for_resume
 from meeting_host.protocol import EventWriter
 
 
@@ -28,6 +29,7 @@ class Host:
         self._worker: threading.Thread | None = None
         self._finished = threading.Event()
         self._exit_code = 0
+        self._install_prompt = WaitingInstallPrompt(events)
 
     # --- command handling -------------------------------------------------
     def handle(self, command: dict) -> None:
@@ -39,6 +41,10 @@ class Host:
         elif name == protocol.CMD_SHUTDOWN:
             self._stop(run_pipeline=False)
             self._finished.set()
+        elif name == protocol.CMD_INSTALL_LOCAL:
+            self._install_prompt.answer(True)
+        elif name == protocol.CMD_SKIP_LOCAL:
+            self._install_prompt.answer(False)
 
     def _start(self, command: dict) -> None:
         with self._lock:
@@ -136,7 +142,12 @@ class Host:
 
     def _pipeline_worker(self, meeting_dir: Path) -> None:
         try:
-            pipeline.run(self._base_dir, meeting_dir, self._events)
+            pipeline.run(
+                self._base_dir,
+                meeting_dir,
+                self._events,
+                install_prompt=self._install_prompt,
+            )
             self._events.emit(protocol.EVENT_DONE, meeting_dir=str(meeting_dir))
         except Exception as exc:
             pipeline.write_status(meeting_dir, pipeline="failed", error=str(exc))
@@ -165,6 +176,7 @@ class Host:
 
     def on_stdin_closed(self) -> None:
         """ELG exited or crashed: never leave the bot sitting in voice."""
+        self._install_prompt.close()
         self.shutdown()
         self._finished.set()
 
@@ -211,7 +223,7 @@ def _run_resume(base_dir: Path, events: EventWriter, target: str) -> int:
             return 1
 
     try:
-        pipeline.resume(base_dir, meeting_dir, events)
+        pipeline.resume(base_dir, meeting_dir, events, install_prompt=prompt_for_resume(events))
     except Exception as exc:
         pipeline.write_status(meeting_dir, pipeline="failed", error=str(exc))
         events.emit(protocol.EVENT_ERROR, message=f"Processing failed: {exc}")

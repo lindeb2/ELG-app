@@ -93,6 +93,14 @@ def remove_noncanonical_llms(base: Path) -> list[Path]:
     return removed
 
 
+def local_whisper_installed(base: Path) -> bool:
+    """True when both speech models are already on disk. Does not download."""
+    return all(
+        _dir_has_model(whisper_model_dir(base, model))
+        for model in (config.MIX_MODEL, config.USER_MODEL)
+    )
+
+
 def missing_assets(base: Path) -> list[str]:
     missing: list[str] = []
     for model in (config.MIX_MODEL, config.USER_MODEL):

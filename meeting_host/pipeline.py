@@ -108,6 +108,7 @@ def run(
     events: protocol.EventWriter,
     *,
     skip_existing: bool = False,
+    install_prompt=None,
 ) -> Path:
     """Run every post-recording step. Returns the summary path."""
     attendance = _read_json(meeting_dir / "attendance.json", {})
@@ -123,20 +124,38 @@ def run(
         duration = audio_mix.wav_duration_seconds(mix_path)
     write_status(meeting_dir, mix_seconds=round(duration, 2), pipeline="running")
 
-    if skip_existing and (meeting_dir / "transcripts" / "mix.json").is_file():
-        mix_transcript, user_transcripts = transcribe.load_saved(meeting_dir)
-    else:
-        mix_transcript = transcribe.transcribe_mix(
-            base_dir,
-            meeting_dir,
-            on_stage=clock.on_stage,
-        )
-        user_transcripts = transcribe.transcribe_users(
-            base_dir,
-            meeting_dir,
-            on_stage=clock.on_stage,
-            labels=labels,
-        )
+    transcript_error = ""
+    tokens = transcribe.activate(transcribe.TranscribeState(), install_prompt)
+    try:
+        if skip_existing and (meeting_dir / "transcripts" / "mix.json").is_file():
+            mix_transcript, user_transcripts = transcribe.load_saved(meeting_dir)
+        else:
+            try:
+                mix_transcript = transcribe.transcribe_mix(
+                    base_dir,
+                    meeting_dir,
+                    on_stage=clock.on_stage,
+                )
+            except transcribe.TranscriptUnavailable as exc:
+                transcript_error = str(exc)
+                mix_transcript = {"language": "en", "duration": 0.0, "segments": []}
+                user_transcripts = {}
+            else:
+                try:
+                    user_transcripts = transcribe.transcribe_users(
+                        base_dir,
+                        meeting_dir,
+                        on_stage=clock.on_stage,
+                        labels=labels,
+                    )
+                except transcribe.TranscriptUnavailable as exc:
+                    transcript_error = str(exc)
+                    user_transcripts = {}
+    finally:
+        transcribe.deactivate(tokens)
+    if transcript_error:
+        clock.detail(protocol.PHASE_WHISPER_MIX, transcript_error)
+        write_status(meeting_dir, transcript_error=transcript_error)
 
     # Anyone who only shows up in audio still needs a label.
     for discord_id in user_transcripts:
@@ -201,14 +220,15 @@ def run(
         pipeline="done",
         speaker_attribution=diarized.get("speaker_attribution"),
         llm_error=llm_error,
+        transcript_error=transcript_error,
         segments=len(diarized.get("segments") or []),
         timings=clock.timings,
     )
     return summary_path
 
 
-def resume(base_dir: Path, meeting_dir: Path, events: protocol.EventWriter) -> Path:
-    return run(base_dir, meeting_dir, events, skip_existing=True)
+def resume(base_dir: Path, meeting_dir: Path, events: protocol.EventWriter, install_prompt=None) -> Path:
+    return run(base_dir, meeting_dir, events, skip_existing=True, install_prompt=install_prompt)
 
 
 def latest_pending(base_dir: Path) -> Path | None:

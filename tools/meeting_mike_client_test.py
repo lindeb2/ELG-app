@@ -178,6 +178,13 @@ def main() -> int:
         quitting.shutdown()
         check("child exits on shutdown", wait_for(lambda: quitting._process is None, timeout=10))
 
+        print("local model prompt")
+        prompting = client.MeetingHostSession()
+        prompting._apply_event({"event": "need_local_models", "detail": "Download them?"})
+        check("prompt is visible to the window", prompting.snapshot()["local_prompt"] == "Download them?")
+        check("answer without a process does not clear the prompt", not prompting.respond("skip_local"))
+        check("prompt stays until the host accepts it", prompting.snapshot()["local_prompt"] == "Download them?")
+
         print("no-op safety")
         client.shutdown_session()
         check("module shutdown is safe when unused", True)

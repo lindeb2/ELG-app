@@ -101,6 +101,8 @@ jobs:
           discord_bot_token: ${{ secrets.DISCORD_BOT_TOKEN }}
           discord_guild_id: ${{ secrets.DISCORD_GUILD_ID }}
           mongodb_uri: ${{ secrets.MONGODB_URI }}
+          groq_api_key: ${{ secrets.GROQ_API_KEY }}
+          transcription_source: ${{ vars.ELG_TRANSCRIPTION_SOURCE }}
       - name: Verify Meeting Host logic
         run: |
           pip install numpy requests platformdirs "discord.py[voice]==2.7.1" "discord-ext-voice-recv==0.5.2a179"

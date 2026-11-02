@@ -129,6 +129,7 @@ class MeetingHostSession:
         self._participants: dict[str, str] = {}
         self._log: list[str] = []
         self._steps: list[dict] = []
+        self._local_prompt = ""
 
     # --- observation -----------------------------------------------------
     def add_listener(self, callback: Callable[[dict], None]) -> None:
@@ -159,6 +160,7 @@ class MeetingHostSession:
                 "busy": self._state in (STATE_STARTING, STATE_RECORDING, STATE_PROCESSING),
                 "log": list(self._log),
                 "steps": self._public_steps(),
+                "local_prompt": self._local_prompt,
             }
 
     def is_busy(self) -> bool:
@@ -220,6 +222,7 @@ class MeetingHostSession:
             self._participants = {}
             self._log = []
             self._steps = []
+            self._local_prompt = ""
 
             self._reader = threading.Thread(
                 target=self._read_events,
@@ -281,6 +284,15 @@ class MeetingHostSession:
             process.kill()
         except OSError:
             pass
+
+    def respond(self, command: str) -> bool:
+        """Answer a Host prompt. Clears the prompt only when the write succeeds."""
+        sent = self._send({"cmd": command})
+        if sent:
+            with self._lock:
+                self._local_prompt = ""
+            self._notify()
+        return sent
 
     def _send(self, command: dict) -> bool:
         process = self._process
@@ -406,6 +418,9 @@ class MeetingHostSession:
                 self._state = STATE_STARTING
                 self._message = payload.get("detail") or "Downloading models..."
                 self._append_log(self._message)
+            elif event == "need_local_models":
+                self._local_prompt = str(payload.get("detail") or "Download the local speech models?")
+                self._append_log(self._local_prompt)
             elif event == "models_ready":
                 self._message = "Models ready."
                 self._append_log(self._message)

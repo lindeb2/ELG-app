@@ -63,6 +63,7 @@ class MeetingMikeWindow(ctk.CTkToplevel):
         self._step_labels: dict[str, ctk.CTkLabel] = {}
         self._model_labels: dict[str, ctk.CTkLabel] = {}
         self._time_labels: dict[str, ctk.CTkLabel] = {}
+        self._asking_local = False
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
@@ -115,6 +116,23 @@ class MeetingMikeWindow(ctk.CTkToplevel):
             color = _STATUS_COLORS[STATE_ERROR]
         self._headline.configure(text=headline, text_color=color)
         self._render_steps(snapshot.get("steps") or [])
+        self._offer_local_models(snapshot)
+
+    def _offer_local_models(self, snapshot: dict) -> None:
+        detail = str(snapshot.get("local_prompt") or "").strip()
+        if not detail or self._asking_local:
+            return
+        self._asking_local = True
+        self._show()
+        try:
+            from tkinter import messagebox
+
+            allow = bool(messagebox.askyesno("Meeting Mike", detail, parent=self))
+        except Exception:
+            allow = False
+        finally:
+            self._asking_local = False
+        self._session.respond("install_local" if allow else "skip_local")
 
     def _headline_text(self, snapshot: dict) -> str:
         state = snapshot.get("state")

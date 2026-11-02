@@ -13,10 +13,13 @@ from typing import Any, Callable
 CMD_START = "start"
 CMD_STOP = "stop"
 CMD_SHUTDOWN = "shutdown"
+CMD_INSTALL_LOCAL = "install_local"
+CMD_SKIP_LOCAL = "skip_local"
 
 EVENT_READY = "ready"
 EVENT_NEED_MODELS = "need_models"
 EVENT_MODELS_READY = "models_ready"
+EVENT_NEED_LOCAL_MODELS = "need_local_models"
 EVENT_JOINED = "joined"
 EVENT_PARTICIPANT = "participant"
 EVENT_RECORDING = "recording"

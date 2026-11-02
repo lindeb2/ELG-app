@@ -1,70 +1,46 @@
-"""faster-whisper passes: heavy on the mix, light per speaker.
+"""Transcribe the mix and each speaker with the configured source.
 
-The mix transcript is the source of truth for wording; the per-speaker ones
+The mix transcript is the source of truth for wording. The per-speaker ones
 exist so the merge step can attribute lines and repair overlapping speech.
+Groq is the default. If it fails and local Whisper is already installed, the
+rest of the meeting uses that. Otherwise ELG asks before downloading it.
 """
 from __future__ import annotations
 
 import json
+from contextvars import ContextVar
 from pathlib import Path
 
 from meeting_host import config, models, protocol
+from meeting_host.install_prompt import InstallPrompt
+from meeting_host.transcription import open_source
+from meeting_host.transcription.groq import GroqUnavailable
+
+_state: ContextVar["TranscribeState | None"] = ContextVar("mike_transcribe_state", default=None)
+_prompt: ContextVar[InstallPrompt | None] = ContextVar("mike_install_prompt", default=None)
 
 
-def _load_model(model_dir: Path):
-    """Prefer CUDA; fall back to CPU int8 so a weak host still works."""
-    from faster_whisper import WhisperModel
-
-    try:
-        model = WhisperModel(str(model_dir), device="cuda", compute_type="float16")
-        return model, "CUDA float16"
-    except Exception:
-        model = WhisperModel(str(model_dir), device="cpu", compute_type="int8")
-        return model, "CPU int8"
+class TranscriptUnavailable(RuntimeError):
+    """Groq failed and local Whisper will not run."""
 
 
-def _runtime_label(model_name: str, device: str) -> str:
-    return f"{model_name} · {device}" if device else model_name
+class TranscribeState:
+    """Sticky for one pipeline run. A Groq failure switches the rest of the meeting."""
+
+    def __init__(self) -> None:
+        self.force_local = False
 
 
-def _transcribe_file(model, audio_path: Path) -> dict:
-    segments, info = model.transcribe(
-        str(audio_path),
-        language=config.WHISPER_LANGUAGE,
-        vad_filter=True,
-        word_timestamps=True,
-        condition_on_previous_text=False,
-        beam_size=5,
-    )
+def activate(state: TranscribeState, prompt: InstallPrompt | None):
+    state_token = _state.set(state)
+    prompt_token = _prompt.set(prompt)
+    return state_token, prompt_token
 
-    out_segments = []
-    for segment in segments:
-        text = (segment.text or "").strip()
-        if not text:
-            continue
-        words = []
-        for word in getattr(segment, "words", None) or []:
-            words.append(
-                {
-                    "start": round(float(word.start or 0.0), 3),
-                    "end": round(float(word.end or 0.0), 3),
-                    "word": str(word.word or "").strip(),
-                }
-            )
-        out_segments.append(
-            {
-                "start": round(float(segment.start or 0.0), 3),
-                "end": round(float(segment.end or 0.0), 3),
-                "text": text,
-                "words": words,
-            }
-        )
 
-    return {
-        "language": getattr(info, "language", config.WHISPER_LANGUAGE),
-        "duration": round(float(getattr(info, "duration", 0.0) or 0.0), 3),
-        "segments": out_segments,
-    }
+def deactivate(tokens) -> None:
+    state_token, prompt_token = tokens
+    _state.reset(state_token)
+    _prompt.reset(prompt_token)
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -85,62 +61,75 @@ def _stage(
         on_stage(name, which, detail, label, parent, model)
 
 
+def _empty() -> dict:
+    return {"language": config.WHISPER_LANGUAGE, "duration": 0.0, "segments": []}
+
+
+def _run_state() -> TranscribeState:
+    state = _state.get()
+    if state is None:
+        state = TranscribeState()
+        _state.set(state)
+    return state
+
+
+def offer_local(base: Path, reason: str) -> bool:
+    """Switch to local Whisper. Ask before downloading weights that are not here."""
+    state = _run_state()
+    if models.local_whisper_installed(base):
+        state.force_local = True
+        return True
+    prompt = _prompt.get()
+    if prompt is None or not prompt.ask(_install_detail(reason)):
+        return False
+    state.force_local = True
+    return True
+
+
+def _install_detail(reason: str) -> str:
+    return (
+        f"Groq transcription is unavailable ({reason}). "
+        f"Local speech models are not on this PC ({config.LOCAL_WHISPER_DOWNLOAD}, downloaded once). "
+        "Download them and finish this meeting locally?"
+    )
+
+
+def _open_for_run():
+    state = _run_state()
+    if state.force_local:
+        return open_source("local")
+    return open_source()
+
+
+def _call(source, base: Path, audio_path: Path, *, role: str, on_progress) -> tuple[dict, str]:
+    try:
+        label = source.prepare(base, role=role, on_progress=on_progress)
+        payload = source.transcribe(audio_path, base=base, on_progress=on_progress)
+    except GroqUnavailable:
+        raise
+    return payload, label
+
+
 def transcribe_mix(base: Path, meeting_dir: Path, *, on_progress=None, on_stage=None) -> dict:
     audio_path = meeting_dir / "audio" / "mix.wav"
     output = meeting_dir / "transcripts" / "mix.json"
 
     if not audio_path.is_file():
-        payload = {"language": config.WHISPER_LANGUAGE, "duration": 0.0, "segments": []}
+        payload = _empty()
         _write_json(output, payload)
         return payload
 
-    def _note(detail: str) -> None:
-        if on_progress is not None:
-            on_progress(detail)
-
-    runtime = config.MIX_MODEL
-    _stage(
-        on_stage,
-        protocol.PHASE_WHISPER_MIX,
-        "start",
-        label="Transcribing meeting",
-        model=runtime,
+    payload = _transcribe_one(
+        base,
+        audio_path,
+        role="mix",
+        on_progress=on_progress,
+        on_stage=on_stage,
+        parent=protocol.PHASE_WHISPER_MIX,
+        prepare=protocol.PHASE_WHISPER_MIX_PREPARE,
+        infer=protocol.PHASE_WHISPER_MIX_INFER,
+        parent_label="Transcribing meeting",
     )
-    model = None
-    try:
-        _stage(
-            on_stage,
-            protocol.PHASE_WHISPER_MIX_PREPARE,
-            "start",
-            label="Loading model",
-            parent=protocol.PHASE_WHISPER_MIX,
-            model=runtime,
-        )
-        try:
-            model_dir = models.ensure_whisper_model(base, config.MIX_MODEL, on_progress=_note)
-            model, device = _load_model(model_dir)
-            runtime = _runtime_label(config.MIX_MODEL, device)
-            _stage(on_stage, protocol.PHASE_WHISPER_MIX, "detail", model=runtime)
-            _stage(on_stage, protocol.PHASE_WHISPER_MIX_PREPARE, "detail", model=device)
-        finally:
-            _stage(on_stage, protocol.PHASE_WHISPER_MIX_PREPARE, "end")
-
-        _stage(
-            on_stage,
-            protocol.PHASE_WHISPER_MIX_INFER,
-            "start",
-            label="Transcribing",
-            parent=protocol.PHASE_WHISPER_MIX,
-        )
-        try:
-            payload = _transcribe_file(model, audio_path)
-        finally:
-            _stage(on_stage, protocol.PHASE_WHISPER_MIX_INFER, "end")
-    finally:
-        if model is not None:
-            del model
-        _stage(on_stage, protocol.PHASE_WHISPER_MIX, "end")
-
     _write_json(output, payload)
     return payload
 
@@ -159,44 +148,61 @@ def transcribe_users(
     if not audio_files:
         return {}
 
-    def _note(detail: str) -> None:
-        if on_progress is not None:
-            on_progress(detail)
-
     names = labels or {}
-    runtime = config.USER_MODEL
-    _stage(
-        on_stage,
-        protocol.PHASE_WHISPER_USERS,
-        "start",
-        label="Transcribing speakers",
-        model=runtime,
-    )
-    model = None
+    source = None
+    runtime = ""
     results: dict[str, dict] = {}
+    parent_open = False
     try:
-        _stage(
-            on_stage,
-            protocol.PHASE_WHISPER_USERS_PREPARE,
-            "start",
-            label="Loading model",
-            parent=protocol.PHASE_WHISPER_USERS,
-            model=runtime,
-        )
-        try:
-            model_dir = models.ensure_whisper_model(base, config.USER_MODEL, on_progress=_note)
-            model, device = _load_model(model_dir)
-            runtime = _runtime_label(config.USER_MODEL, device)
-            _stage(on_stage, protocol.PHASE_WHISPER_USERS, "detail", model=runtime)
-            _stage(on_stage, protocol.PHASE_WHISPER_USERS_PREPARE, "detail", model=device)
-        finally:
-            _stage(on_stage, protocol.PHASE_WHISPER_USERS_PREPARE, "end")
+        index = 0
+        while index < len(audio_files):
+            audio_path = audio_files[index]
+            if source is None:
+                source = _open_for_run()
+                runtime = source.id
+                _stage(
+                    on_stage,
+                    protocol.PHASE_WHISPER_USERS,
+                    "start",
+                    label="Transcribing speakers",
+                    model=runtime,
+                )
+                parent_open = True
+                _stage(
+                    on_stage,
+                    protocol.PHASE_WHISPER_USERS_PREPARE,
+                    "start",
+                    label="Preparing",
+                    parent=protocol.PHASE_WHISPER_USERS,
+                    model=runtime,
+                )
+                try:
+                    runtime = source.prepare(
+                        base,
+                        role="user",
+                        on_progress=lambda detail: _note(
+                            on_stage, on_progress, protocol.PHASE_WHISPER_USERS_PREPARE, detail
+                        ),
+                    )
+                    _stage(on_stage, protocol.PHASE_WHISPER_USERS, "detail", model=runtime)
+                    _stage(on_stage, protocol.PHASE_WHISPER_USERS_PREPARE, "detail", model=runtime)
+                except GroqUnavailable as exc:
+                    source.close()
+                    source = None
+                    _stage(on_stage, protocol.PHASE_WHISPER_USERS_PREPARE, "end")
+                    _stage(on_stage, protocol.PHASE_WHISPER_USERS, "end")
+                    parent_open = False
+                    if not offer_local(base, str(exc)):
+                        raise TranscriptUnavailable(str(exc)) from exc
+                    continue
+                finally:
+                    if source is not None:
+                        _stage(on_stage, protocol.PHASE_WHISPER_USERS_PREPARE, "end")
 
-        for index, audio_path in enumerate(audio_files, start=1):
             discord_id = audio_path.stem
             speaker = str(names.get(discord_id) or "").strip()
             if not speaker or speaker == discord_id:
-                speaker = f"Speaker {index}"
+                speaker = f"Speaker {index + 1}"
             stage = f"whisper_user:{discord_id}"
             _stage(
                 on_stage,
@@ -207,17 +213,86 @@ def transcribe_users(
                 model=runtime,
             )
             try:
-                payload = _transcribe_file(model, audio_path)
+                payload = source.transcribe(
+                    audio_path,
+                    base=base,
+                    on_progress=lambda detail, stage=stage: _note(on_stage, on_progress, stage, detail),
+                )
                 results[discord_id] = payload
                 _write_json(meeting_dir / "transcripts" / "users" / f"{discord_id}.json", payload)
-            finally:
+                index += 1
+            except GroqUnavailable as exc:
+                source.close()
+                source = None
                 _stage(on_stage, stage, "end")
+                _stage(on_stage, protocol.PHASE_WHISPER_USERS, "end")
+                parent_open = False
+                if not offer_local(base, str(exc)):
+                    raise TranscriptUnavailable(str(exc)) from exc
+                continue
+            finally:
+                if source is not None:
+                    _stage(on_stage, stage, "end")
     finally:
-        if model is not None:
-            del model
-        _stage(on_stage, protocol.PHASE_WHISPER_USERS, "end")
+        if source is not None:
+            source.close()
+        if parent_open:
+            _stage(on_stage, protocol.PHASE_WHISPER_USERS, "end")
 
     return results
+
+
+def _transcribe_one(
+    base: Path,
+    audio_path: Path,
+    *,
+    role: str,
+    on_progress,
+    on_stage,
+    parent: str,
+    prepare: str,
+    infer: str,
+    parent_label: str,
+) -> dict:
+    while True:
+        source = _open_for_run()
+        runtime = source.id
+        _stage(on_stage, parent, "start", label=parent_label, model=runtime)
+        try:
+            _stage(on_stage, prepare, "start", label="Preparing", parent=parent, model=runtime)
+            try:
+                runtime = source.prepare(
+                    base,
+                    role=role,
+                    on_progress=lambda detail: _note(on_stage, on_progress, prepare, detail),
+                )
+                _stage(on_stage, parent, "detail", model=runtime)
+                _stage(on_stage, prepare, "detail", model=runtime)
+            finally:
+                _stage(on_stage, prepare, "end")
+
+            _stage(on_stage, infer, "start", label="Transcribing", parent=parent, model=runtime)
+            try:
+                payload = source.transcribe(
+                    audio_path,
+                    base=base,
+                    on_progress=lambda detail: _note(on_stage, on_progress, infer, detail),
+                )
+            finally:
+                _stage(on_stage, infer, "end")
+            return payload
+        except GroqUnavailable as exc:
+            if not offer_local(base, str(exc)):
+                raise TranscriptUnavailable(str(exc)) from exc
+        finally:
+            source.close()
+            _stage(on_stage, parent, "end")
+
+
+def _note(on_stage, on_progress, stage: str, detail: str) -> None:
+    if on_progress is not None:
+        on_progress(detail)
+    _stage(on_stage, stage, "detail", detail=detail)
 
 
 def load_saved(meeting_dir: Path) -> tuple[dict, dict[str, dict]]:
