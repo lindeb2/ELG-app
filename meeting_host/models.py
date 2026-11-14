@@ -255,11 +255,12 @@ def llama_server_path(base: Path | None = None) -> Path | None:
 
     names = ("llama-server.exe", "llama-server")
     if base is not None:
-        directory = config.models_dir(base) / "llama"
-        for name in names:
-            candidate = directory / name
-            if candidate.is_file():
-                return candidate
+        for sub in ("llama-gpu", "llama"):
+            directory = config.models_dir(base) / sub
+            for name in names:
+                candidate = directory / name
+                if candidate.is_file():
+                    return candidate
 
     root = Path(__file__).resolve().parent.parent
     for sub in ("llama-gpu", "llama"):

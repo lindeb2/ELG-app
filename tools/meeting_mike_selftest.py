@@ -357,12 +357,26 @@ def _attendance() -> dict:
 class _SummaryStub:
     def complete_json(self, *, system, user, schema, max_tokens=4096) -> dict:
         return {
-            "discussion": "Johan cleared his goal; Ada lost time to a build issue.",
-            "points": [
-                {"index": 0, "notes": "Agreed to cut the tutorial from the demo."},
-                {"index": 1, "notes": "Not discussed."},
+            "team_summary": "The team made steady progress on vertical slice demo scope.",
+            "user_summaries": [
+                {"username": "Johan", "summary": "Finished level art assets and placed dungeon props."},
+                {"username": "Ada", "summary": "Worked on build automation scripts."},
             ],
-            "actions": ["Johan cuts tutorial scope", "Ada fixes the build"],
+            "discussion": [
+                {
+                    "topic": "Demo scope",
+                    "summary": "Agreed to cut the tutorial from the demo.",
+                    "subpoints": ["Johan cuts tutorial scope", "Ada fixes the build"],
+                },
+                {
+                    "topic": "Build times",
+                    "summary": "Investigated caching options.",
+                    "subpoints": [],
+                },
+            ],
+            "next_week": {
+                "planned_work": ["Johan to polish combat animations", "Ada to deploy new build scripts"],
+            },
         }
 
 
@@ -372,31 +386,39 @@ def test_summary() -> None:
 
     for heading in (
         "# Weekly Status Meeting — Week 38, 2026",
-        "## Attendance",
-        "## This week's goals",
-        "## Logs",
-        "## Discussion points",
-        "## Next week's goals",
-        "## What was said",
-        "## Decisions and action items",
+        "## This Week",
+        "## Discussion & Decisions",
+        "## Next Week",
     ):
         check(f"section present: {heading}", heading in content)
 
-    goals_section = content.split("## Logs")[0]
-    said_section = content.split("## What was said", 1)[1]
-    check("goal section is data only", "cleared his goal" not in goals_section)
-    check("discussion placed under What was said", "cleared his goal" in said_section)
-
-    check("late join flagged", "Ada (joined late)" in content)
-    check("unlinked account flagged", "(unlinked Discord account)" in content)
+    check("attendance section removed", "## Attendance" not in content)
+    check("team goal rendered", "Team Goal" in content and "16.5h of 18h" in content)
+    check("team summary rendered", "steady progress on vertical slice" in content)
     check("reached goal stated as fact", "12.5h of 10h, 4/3 days — reached" in content)
     check("missed goal stated as fact", "**Ada**: 4h of 8h" in content and "missed" in content)
+    check("user summary inserted", "Finished level art assets" in content)
+    check("discussion topic rendered", "**Demo scope**: Agreed to cut the tutorial" in content)
+    check("discussion subpoint rendered", "- Johan cuts tutorial scope" in content)
     check("next-week goal rendered", "**Johan**: 12h, 4 days" in content)
     check("unset next-week goal rendered", "**Ada**: not set" in content)
-    check("discussion point heading kept", "### Demo scope" in content)
-    check("model notes inserted", "cut the tutorial" in content)
-    check("undiscussed point marked", "Not discussed." in content)
-    check("actions listed", "- Johan cuts tutorial scope" in content)
+    check("meetup time omitted", "Thursday" not in content and "Next Meetup" not in content)
+    check("planned work rendered", "Johan to polish combat animations" in content)
+    team_line = [line for line in content.splitlines() if line.startswith("**Team Goal**")][0]
+    check("team goal omits days", "day" not in team_line)
+
+    stub_no_disc_data = _SummaryStub().complete_json(system="", user="", schema={})
+    stub_no_disc_data["discussion"] = []
+    class _NoDiscStub:
+        def complete_json(self, **kwargs):
+            return stub_no_disc_data
+    content_no_disc = summarize.build_summary(_facts(), _attendance(), "", llm=_NoDiscStub())
+    check("discussion section omitted when empty", "## Discussion & Decisions" not in content_no_disc)
+
+    facts_zero = _facts()
+    facts_zero.goals = [UserGoalFact("Johan", 3.0, 2, 0.0, 0, "missed")]
+    content_zero = summarize.build_summary(facts_zero, _attendance(), "", llm=_SummaryStub())
+    check("zero hours outputs standard phrase", "No work logged." in content_zero)
 
     degraded = summarize.build_summary(_facts(), _attendance(), "", llm=None)
     check("summary still produced without a model", "# Weekly Status Meeting" in degraded)

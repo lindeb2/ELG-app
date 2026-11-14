@@ -2,7 +2,7 @@ import customtkinter as ctk
 from pymongo import UpdateOne
 import datetime
 import os
-from app_secrets import get_gh_models_token
+from app_secrets import get_groq_api_key
 import threading
 import tkinter
 import math
@@ -412,6 +412,13 @@ class MeetingFrame(ctk.CTkFrame):
         self.slide_frames[slide_number].lift()
         if old_slide == self.slide_map.index(4):
             self._presence_update_event.set()
+        if slide_number == 5:
+            try:
+                from meeting_mike_client import get_session
+
+                get_session().preload_llm()
+            except Exception:
+                pass
 
     def update_slide_indicator_dots(self):
         active_style = {"text": "●", "text_color": "white"}
@@ -2496,7 +2503,10 @@ class MeetingFrame(ctk.CTkFrame):
         threading.Thread(target=self._s5_generate_with_lock, daemon=True, name="slide_5_generator").start()
 
     def _s5_generate_with_lock(self):
-        string, style = self._s5_get_data()
+        try:
+            string, style = self._s5_get_data()
+        except Exception:
+            string, style = "Grrreetings!!", "Default"
         self.after(0, self._s5_create_end_label, string, style)
 
     # noinspection PyUnboundLocalVariable
@@ -2522,13 +2532,6 @@ class MeetingFrame(ctk.CTkFrame):
         projection = {data_path: 1, "_id": 0}
 
         pymongo_network_errors = (ConnectionFailure, ServerSelectionTimeoutError, NetworkTimeout, AutoReconnect)
-        gh_models_errors = (
-            requests.exceptions.ConnectionError,
-            requests.exceptions.Timeout,
-            requests.exceptions.ChunkedEncodingError,
-            requests.exceptions.HTTPError,
-        )
-        retry_errors = pymongo_network_errors + gh_models_errors  # type: ignore[misc]
 
         while True:
             try:
@@ -2547,40 +2550,53 @@ class MeetingFrame(ctk.CTkFrame):
                     return week_data["string"], week_data["style"]
 
                 # We got the lock
-                try:
-                    string, style = self._s5_generate_phrase()
+                string, style = self._s5_generate_phrase()
 
-                    pipeline = [{
-                        "$set": {
-                            data_path: {
-                                "$cond": {
-                                    "if": {"$eq": [{"$type": f"${data_path}"}, "missing"]},
-                                    "then": {"string": string, "style": style},
-                                    "else": f"${data_path}"}},
-                            "lock_timestamp": None}}]
+                # If Groq does not work at all, release the lock and do not save to DB!
+                if not string:
+                    try:
+                        status_meeting_collection.update_one(
+                            {"_id": "End Strings"},
+                            {"$set": {"lock_timestamp": None}}
+                        )
+                    except pymongo_network_errors:
+                        pass
+                    return "Grrreetings!!", "Default"
 
-                    updated_doc = status_meeting_collection.find_one_and_update({"_id": "End Strings"},
-                        pipeline, projection=projection, return_document=ReturnDocument.AFTER
-                    )
-                    week_data = updated_doc["data"][self.current_year][self.current_week]
-                    return week_data["string"], week_data["style"]
-                except Exception as e:
-                    if not isinstance(e, pymongo_network_errors):
-                        try:
-                            status_meeting_collection.update_one({"_id": "End Strings"},{"$set": {"lock_timestamp": None}})
-                        except pymongo_network_errors:
-                            pass
-                    raise
-            except retry_errors:
+                pipeline = [{
+                    "$set": {
+                        data_path: {
+                            "$cond": {
+                                "if": {"$eq": [{"$type": f"${data_path}"}, "missing"]},
+                                "then": {"string": string, "style": style},
+                                "else": f"${data_path}"}},
+                        "lock_timestamp": None}}]
+
+                updated_doc = status_meeting_collection.find_one_and_update({"_id": "End Strings"},
+                    pipeline, projection=projection, return_document=ReturnDocument.AFTER
+                )
+                week_data = updated_doc["data"][self.current_year][self.current_week]
+                return week_data["string"], week_data["style"]
+            except pymongo_network_errors:
                 self._s5_get_data_event.clear()
                 self._s5_get_data_event.wait(1.0)
                 continue
+            except Exception:
+                try:
+                    status_meeting_collection.update_one(
+                        {"_id": "End Strings"},
+                        {"$set": {"lock_timestamp": None}}
+                    )
+                except Exception:
+                    pass
+                return "Grrreetings!!", "Default"
 
     @staticmethod
     def _s5_generate_phrase():
         """
-        Generate phrase using the GitHub Models API.
-        Returns generated phrase string and style.
+        Generate phrase using the Groq API.
+        Tries preview model 'qwen/qwen3.8-27b' first; falls back to 'openai/gpt-oss-120b' on failure.
+        Returns (phrase, style) on success, or (None, None) if Groq does not work.
         """
         style_list = [
             "Excessively corporate formal.",
@@ -2614,34 +2630,48 @@ Strict rules:
 - Be punchy. No filler. No greetings. No sign-offs.
 - Return ONLY the phrase. No explanations, extra text or having quotation marks around the phrase."""
 
-        github_token = get_gh_models_token()
         try:
-            response = requests.post(
-                "https://models.github.ai/inference/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {github_token}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "messages": [{"role": "user", "content": prompt}],
-                    "model": "openai/gpt-4o",
-                    "temperature": 0.9,
-                    "max_tokens": 60,
-                    "top_p": 1,
-                },
-                timeout=15.0,
-            )
-        except requests.exceptions.RequestException:
-            raise
+            groq_key = get_groq_api_key()
+        except Exception:
+            return None, None
 
-        if response.status_code == 429 or response.status_code >= 500:
-            raise requests.exceptions.HTTPError(
-                f"GitHub Models request failed with status {response.status_code}",
-                response=response,
-            )
-        response.raise_for_status()
-        phrase = response.json()["choices"][0]["message"]["content"]
-        return phrase, style
+        if not groq_key:
+            return None, None
+
+        models = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b"]
+        headers = {
+            "Authorization": f"Bearer {groq_key}",
+            "Content-Type": "application/json",
+        }
+
+        for model in models:
+            try:
+                response = requests.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers=headers,
+                    json={
+                        "messages": [{"role": "user", "content": prompt}],
+                        "model": model,
+                        "temperature": 0.9,
+                        "max_tokens": 150,
+                    },
+                    timeout=10.0,
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    choices = data.get("choices") or []
+                    if choices:
+                        content = choices[0].get("message", {}).get("content", "").strip()
+                        if (content.startswith('"') and content.endswith('"')) or (
+                            content.startswith("'") and content.endswith("'")
+                        ):
+                            content = content[1:-1].strip()
+                        if content:
+                            return content, style
+            except Exception:
+                continue
+
+        return None, None
 
     def _s5_create_end_label(self, text, style):
         """Create or update the end slide label"""

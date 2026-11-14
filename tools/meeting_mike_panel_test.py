@@ -1,8 +1,9 @@
-"""Builds the Meeting Mike Record overlay against real CustomTkinter widgets.
+"""Builds the Meeting Mike Host overlay against real CustomTkinter widgets.
 
 Confirms the panel stays invisible without a Host install, renders each state
-correctly when one is present, and detaches cleanly so an active recording is
-never stopped by leaving the meeting view.
+correctly when one is present, launches the Meeting Mike window with Record and
+Open folder controls, and detaches cleanly so an active recording is never stopped
+by leaving the meeting view.
 
 Usage: python tools/meeting_mike_panel_test.py
 """
@@ -27,14 +28,6 @@ import customtkinter as ctk
 
 _failures: list[str] = []
 _checks = 0
-
-
-def _is_packed(widget) -> bool:
-    """pack_info() raises rather than returning empty for unpacked widgets."""
-    try:
-        return bool(widget.pack_info())
-    except Exception:
-        return False
 
 
 def check(label: str, condition: bool, detail: str = "") -> None:
@@ -85,12 +78,15 @@ def main() -> int:
         assert panel is not None
         root.update_idletasks()
         check("panel is placed", bool(panel.place_info()), str(panel.place_info()))
-        check("starts on Record", panel._button.cget("text") == "Record", panel._button.cget("text"))
-        check("status button is separate", panel._status_button.cget("text") == "Status")
-        check("open-folder button hidden", not panel._open_button_shown)
+        check("single button is Host", panel._button.cget("text") == "Host", panel._button.cget("text"))
 
-        print("state rendering")
+        print("state rendering and window controls")
         session = panel._session
+
+        status = panel_module.open_status_window(panel, username="Johan", focus=False)
+        root.update_idletasks()
+        check("window has Record button", status._record_button.cget("text") == "Record")
+        check("window open-folder initially disabled", status._open_button.cget("state") == "disabled")
 
         panel._render(
             {
@@ -106,16 +102,29 @@ def main() -> int:
                 "busy": True,
             }
         )
+        status.render(
+            {
+                "state": client.STATE_RECORDING,
+                "message": "",
+                "channel_name": "boardroom",
+                "meeting_dir": "",
+                "phase": "",
+                "phase_label": "",
+                "phase_progress": 0.0,
+                "elapsed": 95.0,
+                "participants": {"1": "Johan", "2": "Ada"},
+                "busy": True,
+            }
+        )
         root.update_idletasks()
-        status = panel_module.open_status_window(panel, focus=False)
-        root.update_idletasks()
-        check("shows Stop while recording", panel._button.cget("text") == "Stop")
-        check("Stop is enabled", panel._button.cget("state") == "normal")
+        check("Host button highlights recording", panel._button.cget("fg_color") == panel_module._BTN_RECORDING["fg_color"])
+        check("shows Stop while recording", status._record_button.cget("text") == "Stop")
+        check("Stop is enabled", status._record_button.cget("state") == "normal")
         headline = status._headline.cget("text")
         check("elapsed is in the status window", "01:35" in headline, headline)
         check("names are in the status window", "Johan" in headline and "Ada" in headline, headline)
 
-        panel._render(
+        status.render(
             {
                 "state": client.STATE_PROCESSING,
                 "message": "Transcribing meeting",
@@ -130,6 +139,7 @@ def main() -> int:
                 "log": ["16:12:01  Transcribing meeting"],
                 "steps": [
                     {"name": "mix", "label": "Mixing audio", "model": "", "parent": "", "state": "done", "seconds": 0.4},
+                    {"name": "whisper_mix_prepare", "label": "Preparing", "model": "groq", "parent": "whisper_mix", "state": "done", "seconds": 0.0},
                     {
                         "name": "whisper_mix",
                         "label": "Transcribing meeting",
@@ -150,10 +160,11 @@ def main() -> int:
             }
         )
         root.update_idletasks()
-        check("Stop disabled while processing", panel._button.cget("state") == "disabled")
+        check("Stop disabled while processing", status._record_button.cget("state") == "disabled")
         step_text = " ".join(label.cget("text") for label in status._step_labels.values())
         time_text = " ".join(label.cget("text") for label in status._time_labels.values())
         model_text = " ".join(label.cget("text") for label in status._model_labels.values())
+        check("0s speech prepare step is omitted", "Preparing" not in step_text)
         check("status log is not shown in the window", not hasattr(status, "_log"))
         check("finished step shows its duration", "Mixing audio" in step_text and "0.40s" in time_text, time_text)
         check("running step shows whole seconds", "Transcribing meeting" in step_text and "12s" in time_text, time_text)
@@ -162,7 +173,7 @@ def main() -> int:
 
         meeting_dir = tmp / "meeting"
         meeting_dir.mkdir()
-        panel._render(
+        status.render(
             {
                 "state": client.STATE_DONE,
                 "message": "Summary saved.",
@@ -177,12 +188,11 @@ def main() -> int:
             }
         )
         root.update_idletasks()
-        check("back to Record when done", panel._button.cget("text") == "Record")
-        check("open-folder button shown", panel._open_button_shown)
-        check("open-folder is packed", _is_packed(panel._open_button))
+        check("back to Record when done", status._record_button.cget("text") == "Record")
+        check("open-folder button enabled", status._open_button.cget("state") == "normal")
         check("success colour used", status._headline.cget("text_color") == "#00AD00")
 
-        panel._render(
+        status.render(
             {
                 "state": client.STATE_ERROR,
                 "message": "You are not in a voice channel.",
@@ -199,8 +209,7 @@ def main() -> int:
         root.update_idletasks()
         check("error text shown", "voice channel" in status._headline.cget("text"))
         check("error colour used", status._headline.cget("text_color") == "#FF4444")
-        check("open-folder hidden again", not panel._open_button_shown)
-        check("open-folder is unpacked", not _is_packed(panel._open_button))
+        check("open-folder disabled again", status._open_button.cget("state") == "disabled")
 
         print("detach and teardown")
         check("panel listens to the session", panel._on_session_event in session._listeners)

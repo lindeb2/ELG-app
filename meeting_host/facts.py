@@ -162,6 +162,7 @@ def load_facts() -> MeetingFacts:
         {
             "user": log.get("user"),
             "name": str(log.get("name") or "").strip(),
+            "description": str(log.get("description") or "").strip(),
             "seconds": int(log.get("elapsed_time") or 0),
             "date": to_local(log["timestamp"]).strftime("%a %d %b") if log.get("timestamp") else "",
         }
@@ -196,3 +197,20 @@ def load_facts_safe() -> MeetingFacts:
             next_iso_year=iso_year,
             next_iso_week=str(int(iso_week) + 1),
         )
+
+
+def team_goal_fact(facts: MeetingFacts) -> dict:
+    total_actual_hours = round(sum(g.actual_hours for g in facts.goals), 2)
+    total_goal_hours = round(sum(g.goal_hours for g in facts.goals if g.goal_hours is not None), 2)
+
+    status = classify_goal(
+        total_goal_hours if total_goal_hours > 0 else None,
+        None,
+        total_actual_hours,
+        0,
+    )
+    return {
+        "actual_hours": total_actual_hours,
+        "goal_hours": total_goal_hours if total_goal_hours > 0 else None,
+        "status": status,
+    }

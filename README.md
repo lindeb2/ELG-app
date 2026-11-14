@@ -182,7 +182,7 @@ Or set `PYTHONPATH=src` (Windows: `set PYTHONPATH=src`) if you prefer running mo
 ### Meeting Mike (optional)
 
 Meeting recording, transcription and summaries live in a separate Windows
-installer so the main app stays small. The **Record** button only appears in
+installer so the main app stays small. The **Host** button only appears in
 the Meeting App on machines that installed `ELG-Meeting-Host` and linked a
 Discord user-ID. See [docs/meeting-mike.md](docs/meeting-mike.md).
 

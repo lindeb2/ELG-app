@@ -121,7 +121,7 @@ def install_stubs(tmp: Path, state: StubState) -> None:
     def stub_release(*, host_username):
         state.lock_released.append(host_username)
 
-    def stub_run(base_dir, target_dir, events, skip_existing=False):
+    def stub_run(base_dir, target_dir, events, skip_existing=False, **kwargs):
         if state.pipeline_error:
             raise RuntimeError(state.pipeline_error)
         state.pipeline_runs.append(target_dir)

@@ -44,6 +44,9 @@ class LlamaServer:
     def __exit__(self, *exc_info) -> None:
         self.stop()
 
+    def is_running(self) -> bool:
+        return self._process is not None and self._process.poll() is None
+
     def start(self) -> None:
         binary = models.llama_server_path(self._base_dir)
         if binary is None:
@@ -52,12 +55,17 @@ class LlamaServer:
             raise LlmUnavailable("Language model file is missing.")
 
         gpu_layers = "99" if models.has_gpu_llama(self._base_dir) else "0"
+        ctx_size = str(config.LLM_CONTEXT)
+        if gpu_layers == "0":
+            ctx_size = str(min(config.LLM_CONTEXT, 4096))
         command = [
             str(binary),
             "--model", str(self._model_path),
             "--host", "127.0.0.1",
             "--port", str(self._port),
-            "--ctx-size", str(config.LLM_CONTEXT),
+            "--ctx-size", ctx_size,
+            "-ctk", "q8_0",
+            "-ctv", "q8_0",
             "--n-gpu-layers", gpu_layers,
             "--jinja",
             "--reasoning-budget", "0",

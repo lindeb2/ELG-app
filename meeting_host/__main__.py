@@ -30,6 +30,8 @@ class Host:
         self._finished = threading.Event()
         self._exit_code = 0
         self._install_prompt = WaitingInstallPrompt(events)
+        self._preloaded_llm = None
+        self._preloading_llm = False
 
     # --- command handling -------------------------------------------------
     def handle(self, command: dict) -> None:
@@ -45,6 +47,37 @@ class Host:
             self._install_prompt.answer(True)
         elif name == protocol.CMD_SKIP_LOCAL:
             self._install_prompt.answer(False)
+        elif name == protocol.CMD_PRELOAD_LLM:
+            self._preload_llm()
+
+    def _preload_llm(self) -> None:
+        with self._lock:
+            if self._preloaded_llm is not None or self._preloading_llm:
+                return
+            self._preloading_llm = True
+        worker = threading.Thread(
+            target=self._preload_llm_worker,
+            name="mike-llm-preload",
+            daemon=True,
+        )
+        worker.start()
+
+    def _preload_llm_worker(self) -> None:
+        try:
+            from meeting_host import models
+            from meeting_host.llama_server import LlamaServer
+
+            models.ensure_llama_server(self._base_dir)
+            model_path = models.ensure_llm(self._base_dir)
+            server = LlamaServer(model_path=model_path, base_dir=self._base_dir)
+            server.start()
+            with self._lock:
+                self._preloaded_llm = server
+        except Exception:
+            pass
+        finally:
+            with self._lock:
+                self._preloading_llm = False
 
     def _start(self, command: dict) -> None:
         with self._lock:
@@ -141,12 +174,17 @@ class Host:
         worker.start()
 
     def _pipeline_worker(self, meeting_dir: Path) -> None:
+        preloaded = None
+        with self._lock:
+            preloaded = self._preloaded_llm
+            self._preloaded_llm = None
         try:
             pipeline.run(
                 self._base_dir,
                 meeting_dir,
                 self._events,
                 install_prompt=self._install_prompt,
+                preloaded_llm=preloaded,
             )
             self._events.emit(protocol.EVENT_DONE, meeting_dir=str(meeting_dir))
         except Exception as exc:
@@ -172,6 +210,13 @@ class Host:
         """Leave Discord and free the lock; keep whatever is on disk."""
         self._stop(run_pipeline=False)
         self._release_lock()
+        with self._lock:
+            if self._preloaded_llm is not None:
+                try:
+                    self._preloaded_llm.stop()
+                except Exception:
+                    pass
+                self._preloaded_llm = None
         mongo_host.close()
 
     def on_stdin_closed(self) -> None:

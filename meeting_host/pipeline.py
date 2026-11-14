@@ -109,6 +109,7 @@ def run(
     *,
     skip_existing: bool = False,
     install_prompt=None,
+    preloaded_llm: LlamaServer | None = None,
 ) -> Path:
     """Run every post-recording step. Returns the summary path."""
     attendance = _read_json(meeting_dir / "attendance.json", {})
@@ -170,18 +171,21 @@ def run(
         llm_name = config.LLM_FILENAME.removesuffix(".gguf")
         clock.begin(protocol.PHASE_LLM_START, model=llm_name)
         try:
-            models.ensure_llama_server(
-                base_dir,
-                on_progress=lambda detail: clock.detail(protocol.PHASE_LLM_START, str(detail)),
-            )
-            llm = LlamaServer(
-                model_path=models.ensure_llm(
+            if preloaded_llm is not None and preloaded_llm.is_running():
+                llm = preloaded_llm
+            else:
+                models.ensure_llama_server(
                     base_dir,
                     on_progress=lambda detail: clock.detail(protocol.PHASE_LLM_START, str(detail)),
-                ),
-                base_dir=base_dir,
-            )
-            llm.start()
+                )
+                llm = LlamaServer(
+                    model_path=models.ensure_llm(
+                        base_dir,
+                        on_progress=lambda detail: clock.detail(protocol.PHASE_LLM_START, str(detail)),
+                    ),
+                    base_dir=base_dir,
+                )
+                llm.start()
         except LlmUnavailable as exc:
             llm = None
             llm_error = str(exc)

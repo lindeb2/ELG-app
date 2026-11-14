@@ -52,6 +52,7 @@ jobs:
           gh_models_token: ${{ secrets.GH_MODELS_TOKEN }}
           gae_url: ${{ secrets.GAE_URL }}
           notifications_secret: ${{ secrets.NOTIFICATIONS_SECRET }}
+          groq_api_key: ${{ secrets.GROQ_API_KEY }}
       - run: pip install -r requirements.txt nuitka
       - run: >
           python -m nuitka --output-dir=${{ matrix.nuitka_output }} --msvc=latest
@@ -151,6 +152,7 @@ jobs:
           gh_models_token: ${{ secrets.GH_MODELS_TOKEN }}
           gae_url: ${{ secrets.GAE_URL }}
           notifications_secret: ${{ secrets.NOTIFICATIONS_SECRET }}
+          groq_api_key: ${{ secrets.GROQ_API_KEY }}
       - run: pip install -r requirements.txt nuitka
       - run: >
           python -m nuitka --output-dir=build/macos-arm64 --macos-target-arch=arm64
@@ -194,6 +196,7 @@ jobs:
           gh_models_token: ${{ secrets.GH_MODELS_TOKEN }}
           gae_url: ${{ secrets.GAE_URL }}
           notifications_secret: ${{ secrets.NOTIFICATIONS_SECRET }}
+          groq_api_key: ${{ secrets.GROQ_API_KEY }}
       - run: pip install -r requirements.txt nuitka
       - run: >
           python -m nuitka --output-dir=build/linux-x64

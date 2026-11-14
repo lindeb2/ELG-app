@@ -66,3 +66,20 @@ def get_gae_url() -> str:
 
 def get_notifications_secret() -> str:
     return _get("NOTIFICATIONS_SECRET", "ELG_NOTIFICATIONS_SECRET")
+
+
+def get_groq_api_key() -> str:
+    try:
+        return _get("GROQ_API_KEY", "ELG_GROQ_API_KEY")
+    except RuntimeError:
+        val = os.environ.get("GROQ_API_KEY")
+        if val:
+            return val
+        try:
+            from meeting_host import runtime_secrets as m_rs
+            val = getattr(m_rs, "GROQ_API_KEY", None)
+            if val:
+                return val
+        except Exception:
+            pass
+        raise

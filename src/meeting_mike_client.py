@@ -257,6 +257,13 @@ class MeetingHostSession:
             self._send({"cmd": "stop"})
         self._notify()
 
+    def preload_llm(self) -> bool:
+        """Ask the Host to warm up the local LLM in advance."""
+        with self._lock:
+            if self._process is None or self._process.poll() is not None:
+                return False
+            return self._send({"cmd": "preload_llm"})
+
     def shutdown(self, *, wait: float = _STOP_GRACE_SECONDS) -> None:
         """Stop the child for app exit: ask nicely, then kill."""
         with self._lock:

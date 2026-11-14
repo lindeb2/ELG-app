@@ -78,11 +78,11 @@ into `%LOCALAPPDATA%\ELG Studio\ELG-app\meeting_mike\models`.
 
 ## Using it
 
-Open **Meeting App**. With the Host installed, **Record** and **Status**
-appear bottom-left. Press Record to start. Press **Stop** to end the meeting
-and run the pipeline. Status, the log and how long each step took open in a
-separate **Meeting Mike** window, not inside the meeting view. **Open folder**
-appears when the summary is written.
+Open **Meeting App**. With the Host installed, a **Host** button appears bottom-left
+(highlighted in red while recording). Clicking **Host** opens the **Meeting Mike**
+window with **Record**, elapsed time, attendees, pipeline progress steps, and
+**Open folder**. Press Record to start. Press **Stop** to end the meeting and run
+the pipeline. **Open folder** is enabled when the summary is written.
 
 Recording survives navigating away from the meeting view and minimising to
 tray, because the process is owned by a module-level session in

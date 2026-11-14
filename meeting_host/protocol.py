@@ -15,6 +15,7 @@ CMD_STOP = "stop"
 CMD_SHUTDOWN = "shutdown"
 CMD_INSTALL_LOCAL = "install_local"
 CMD_SKIP_LOCAL = "skip_local"
+CMD_PRELOAD_LLM = "preload_llm"
 
 EVENT_READY = "ready"
 EVENT_NEED_MODELS = "need_models"

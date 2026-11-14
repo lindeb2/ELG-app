@@ -1,10 +1,10 @@
-"""Separate Meeting Mike window: timed sections, models, and per-speaker rows.
+"""Separate Meeting Mike window: timed sections, models, per-speaker rows, and host controls.
 
-The meeting view only keeps Record / Stop. This window is parented to the
-application root so leaving the meeting view does not close it.
+Parented to the application root so leaving the meeting view does not close it.
 """
 from __future__ import annotations
 
+import threading
 import customtkinter as ctk
 
 from format_time import format_time
@@ -17,6 +17,7 @@ from meeting_mike_client import (
     STATE_STARTING,
     format_duration,
     get_session,
+    open_in_file_manager,
 )
 from settings_ui_constants import (
     ACCENT,
@@ -42,18 +43,22 @@ _STATUS_COLORS = {
     STATE_PROCESSING: "#E0E0E0",
 }
 
+_BTN_IDLE = {"fg_color": "#333333", "hover_color": "#404040", "text_color": "white"}
+_BTN_RECORDING = {"fg_color": "#8B1A1A", "hover_color": "#A82121", "text_color": "white"}
+
 _window: "MeetingMikeWindow | None" = None
 
 
 class MeetingMikeWindow(ctk.CTkToplevel):
-    def __init__(self, master):
+    def __init__(self, master, username: str = ""):
         # The app paints its own caption. Leave CustomTkinter's title-bar swap off.
         ctk.CTkToplevel._deactivate_windows_window_header_manipulation = True
         super().__init__(master, fg_color=_APP_BG)
-        self.geometry("740x520")
-        self.minsize(620, 360)
+        self.geometry("740x540")
+        self.minsize(620, 380)
         self.protocol("WM_DELETE_WINDOW", self._hide)
 
+        self._username = username or ""
         self._session = get_session()
         self._tick_id: str | None = None
         self._closed = False
@@ -88,10 +93,38 @@ class MeetingMikeWindow(ctk.CTkToplevel):
             scrollbar_button_hover_color="#505050",
             scrollbar_fg_color=CARD_BG,
         )
-        self._steps.grid(row=1, column=0, padx=16, pady=(0, 16), sticky="nsew")
+        self._steps.grid(row=1, column=0, padx=16, pady=(0, 12), sticky="nsew")
         self._steps.grid_columnconfigure(0, weight=1)
         self._steps.grid_columnconfigure(1, minsize=_MODEL_WIDTH)
         self._steps.grid_columnconfigure(2, minsize=_TIME_WIDTH)
+
+        # Host controls inside the window
+        self._footer = ctk.CTkFrame(self, fg_color="transparent")
+        self._footer.grid(row=2, column=0, padx=16, pady=(0, 16), sticky="ew")
+
+        self._record_button = ctk.CTkButton(
+            self._footer,
+            text="Record",
+            width=96,
+            height=30,
+            corner_radius=BOX_CORNER,
+            font=("Segoe UI", 12, "bold"),
+            command=self._on_record,
+            **_BTN_IDLE,
+        )
+        self._record_button.pack(side="left")
+
+        self._open_button = ctk.CTkButton(
+            self._footer,
+            text="Open folder",
+            width=100,
+            height=30,
+            corner_radius=BOX_CORNER,
+            font=("Segoe UI", 12),
+            command=self._on_open_folder,
+            **_BTN_IDLE,
+        )
+        self._open_button.pack(side="left", padx=(10, 0))
 
         self._session.add_listener(self._on_session_event)
         self.render(self._session.snapshot())
@@ -110,13 +143,28 @@ class MeetingMikeWindow(ctk.CTkToplevel):
         if self._closed or not self.winfo_exists():
             return
 
+        state = snapshot.get("state")
         headline = self._headline_text(snapshot)
-        color = _STATUS_COLORS.get(snapshot.get("state"), "#B0B0B0")
-        if self._note_error and snapshot.get("state") in (STATE_IDLE, STATE_STARTING):
+        color = _STATUS_COLORS.get(state, "#B0B0B0")
+        if self._note_error and state in (STATE_IDLE, STATE_STARTING):
             color = _STATUS_COLORS[STATE_ERROR]
         self._headline.configure(text=headline, text_color=color)
         self._render_steps(snapshot.get("steps") or [])
         self._offer_local_models(snapshot)
+
+        # Host button updates
+        if state == STATE_RECORDING:
+            self._record_button.configure(text="Stop", state="normal", **_BTN_RECORDING)
+        elif state in (STATE_STARTING, STATE_PROCESSING):
+            self._record_button.configure(text="Stop", state="disabled", **_BTN_IDLE)
+        else:
+            self._record_button.configure(text="Record", state="normal", **_BTN_IDLE)
+
+        has_dir = bool(snapshot.get("meeting_dir"))
+        if has_dir:
+            self._open_button.configure(state="normal")
+        else:
+            self._open_button.configure(state="disabled")
 
     def _offer_local_models(self, snapshot: dict) -> None:
         detail = str(snapshot.get("local_prompt") or "").strip()
@@ -164,10 +212,25 @@ class MeetingMikeWindow(ctk.CTkToplevel):
         self._header_ready = True
 
     def _render_steps(self, steps: list[dict]) -> None:
-        if steps:
+        filtered_steps = []
+        for step in steps:
+            name = str(step.get("name") or "")
+            label = str(step.get("label") or "")
+            seconds = step.get("seconds")
+            state = step.get("state") or "pending"
+            is_prepare = (
+                name in ("whisper_mix_prepare", "whisper_users_prepare")
+                or label.lower() in ("preparing", "loading model")
+            )
+            # Remove speech-to-text prepare step when duration is 0
+            if is_prepare and state != "running" and (seconds is None or seconds <= 0.05 or round(float(seconds), 1) == 0):
+                continue
+            filtered_steps.append(step)
+
+        if filtered_steps:
             self._ensure_header()
         seen: set[str] = set()
-        for index, step in enumerate(steps):
+        for index, step in enumerate(filtered_steps):
             name = str(step.get("name") or index)
             seen.add(name)
             title = self._step_labels.get(name)
@@ -210,6 +273,73 @@ class MeetingMikeWindow(ctk.CTkToplevel):
             self._step_labels.pop(name).destroy()
             self._model_labels.pop(name).destroy()
             self._time_labels.pop(name).destroy()
+
+    def _on_record(self) -> None:
+        snapshot = self._session.snapshot()
+        state = snapshot["state"]
+
+        if state == STATE_RECORDING:
+            self._session.stop()
+            return
+        if state in (STATE_STARTING, STATE_PROCESSING):
+            return
+
+        if state in (STATE_DONE, STATE_ERROR):
+            self._session.reset_if_finished()
+
+        self._record_button.configure(state="disabled")
+        self.set_note("Checking your Discord link...")
+        threading.Thread(
+            target=self._start_worker,
+            name="meeting-mike-start",
+            daemon=True,
+        ).start()
+
+    def _start_worker(self) -> None:
+        username = self._username
+        if not username:
+            self._post_start_result(False, "No username provided.")
+            return
+        try:
+            from notification_preferences import fetch_notification_prefs
+
+            prefs = fetch_notification_prefs(username)
+            discord_user_id = str(prefs.get("discord_user_id") or "").strip()
+        except Exception as exc:
+            self._post_start_result(False, f"Could not read your Discord link: {exc}")
+            return
+
+        if not discord_user_id:
+            self._post_start_result(
+                False,
+                "Set your Discord user-ID in Settings to record.",
+            )
+            return
+
+        started, error = self._session.start(
+            elg_username=username,
+            discord_user_id=discord_user_id,
+        )
+        self._post_start_result(started, error)
+
+    def _post_start_result(self, started: bool, error: str) -> None:
+        def apply() -> None:
+            if self._closed or not self.winfo_exists():
+                return
+            self._record_button.configure(state="normal")
+            if not started:
+                self.set_note(error, error=True)
+            self.render(self._session.snapshot())
+
+        try:
+            self.after(0, apply)
+        except Exception:
+            pass
+
+    def _on_open_folder(self) -> None:
+        meeting_dir = self._session.snapshot().get("meeting_dir")
+        if meeting_dir:
+            open_in_file_manager(meeting_dir)
 
     def _apply_chrome(self) -> None:
         if self._closed:
@@ -285,7 +415,7 @@ class MeetingMikeWindow(ctk.CTkToplevel):
         super().destroy()
 
 
-def open_status_window(master, *, focus: bool = True) -> MeetingMikeWindow:
+def open_status_window(master, *, username: str = "", focus: bool = True) -> MeetingMikeWindow:
     """Show the status window, creating it on the app root if needed."""
     global _window
     root = master.winfo_toplevel()
@@ -293,10 +423,12 @@ def open_status_window(master, *, focus: bool = True) -> MeetingMikeWindow:
     if existing is not None:
         try:
             if existing.winfo_exists():
+                if username:
+                    existing._username = username
                 if focus:
                     existing._show()
                 return existing
         except Exception:
             pass
-    _window = MeetingMikeWindow(root)
+    _window = MeetingMikeWindow(root, username=username)
     return _window
