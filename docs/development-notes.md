@@ -59,4 +59,7 @@
 
 ## To-Do
 - [ ]  Auto log and record during meetings
+   - [X]  Record meetings (Meeting Mike, optional Host install — see `docs/meeting-mike.md`)
+   - [ ]  Auto log time from meeting attendance
 - [ ]  Implement Color Themes
+- [X]  Migrate slide 5 end-string generation to Groq API (qwen/qwen3.8-27b with gpt-oss-120b & static fallback)

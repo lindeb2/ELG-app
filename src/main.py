@@ -40,6 +40,7 @@ from app_config import app_preferences_from_config, read_config, sync_startup_re
 from runtime_paths import is_packaged_build
 from app_shell import AppShell
 from app_update import schedule_automatic_checks
+from meeting_mike_client import shutdown_session as shutdown_meeting_mike
 from setup_window import SetupFrame
 from single_instance import SingleInstanceGuard
 from update_dialog import show_update_dialog
@@ -274,6 +275,7 @@ def main() -> None:
     try:
         root.mainloop()
     finally:
+        shutdown_meeting_mike()
         instance_guard.release()
 
 
