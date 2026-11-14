@@ -30,6 +30,11 @@ mkdir -p "$STAGING" "$ROOT/dist-installers"
 cp -R "$APP_PATH" "$STAGING/"
 rm -f "$DMG_OUT"
 
+# create-dmg uses HFS+ by default. Do not force APFS, as APFS causes
+# 'cannot find IO media' / 'interstitial disk image was not found' on modern macOS.
+# If create-dmg fails (or exits 2 from Finder AppleScript on headless runners),
+# ensure a valid DMG is produced via hdiutil fallback.
+set +e
 create-dmg \
   --volname "ELG" \
   --background "$BACKGROUND" \
@@ -40,10 +45,26 @@ create-dmg \
   --icon "ELG.app" 140 160 \
   --hide-extension "ELG.app" \
   --app-drop-link 372 160 \
-  --filesystem APFS \
   --format UDZO \
   --no-internet-enable \
   "$DMG_OUT" \
   "$STAGING/"
+CREATE_DMG_STATUS=$?
+set -e
+
+if [[ ! -f "$DMG_OUT" ]]; then
+  echo "create-dmg did not create output (status: $CREATE_DMG_STATUS); falling back to hdiutil create..." >&2
+  # Detach any dangling interstitial mounts from create-dmg
+  hdiutil info | grep -E '^/dev/disk[0-9]+' | awk '{print $1}' | while read -r dev; do
+    hdiutil detach "$dev" -force 2>/dev/null || true
+  done
+  ln -sf /Applications "$STAGING/Applications"
+  hdiutil create \
+    -volname "ELG" \
+    -srcfolder "$STAGING" \
+    -ov \
+    -format UDZO \
+    "$DMG_OUT"
+fi
 
 echo "Wrote $DMG_OUT"
