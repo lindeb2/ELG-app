@@ -33,6 +33,7 @@ class OpenCommit:
     elapsed_time: int
     collection: Collection
     aggregations: Collection
+    extra_fields: dict | None = None
 
 
 def _is_retryable_transaction_error(exc: Exception) -> bool:
@@ -55,6 +56,7 @@ def begin_commit(
     elapsed_time: int,
     *,
     log_id: ObjectId | None = None,
+    extra_fields: dict | None = None,
 ) -> OpenCommit:
     """Start a transaction and prefetch (call at Done)."""
     log_id = log_id or ObjectId()
@@ -82,6 +84,7 @@ def begin_commit(
         elapsed_time=int(elapsed_time),
         collection=collection,
         aggregations=aggregations,
+        extra_fields=dict(extra_fields) if extra_fields else None,
     )
 
 
@@ -93,15 +96,17 @@ def _write_plan(
 ) -> tuple[datetime, list[dict]]:
     plan = open_commit.plan
     user = open_commit.user
+    doc = {
+        **(open_commit.extra_fields or {}),
+        "_id": plan.log_id,
+        "name": name,
+        "user": user,
+        "description": description,
+        "elapsed_time": plan.elapsed_time,
+        "timestamp": plan.log_ts,
+    }
     open_commit.collection.insert_one(
-        {
-            "_id": plan.log_id,
-            "name": name,
-            "user": user,
-            "description": description,
-            "elapsed_time": plan.elapsed_time,
-            "timestamp": plan.log_ts,
-        },
+        doc,
         session=open_commit.session,
     )
     open_commit.aggregations.bulk_write(
@@ -180,6 +185,7 @@ def refresh_commit(
         log_ts,
         elapsed_time,
         log_id=current.plan.log_id,
+        extra_fields=current.extra_fields,
     )
     digest_changed = new_open.prefetch_digest != current.prefetch_digest
     abort_commit(current)
@@ -207,10 +213,17 @@ def commit_log(
     description: str,
     log_ts: datetime,
     elapsed_time: int,
+    extra_fields: dict | None = None,
 ) -> tuple[datetime, list[dict]]:
-    """One-shot begin + finalize; for scripts and integration tests."""
+    """One-shot begin + finalize; for scripts, meeting logs, and integration tests."""
     open_commit = begin_commit(
-        client, collection, aggregations, user, log_ts, elapsed_time
+        client,
+        collection,
+        aggregations,
+        user,
+        log_ts,
+        elapsed_time,
+        extra_fields=extra_fields,
     )
     try:
         return finalize_commit(

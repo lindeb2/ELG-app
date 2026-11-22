@@ -26,6 +26,7 @@ class Host:
         self._host_username = ""
         self._host_discord_user_id = ""
         self._lock_held = False
+        self._heartbeat_stop = threading.Event()
         self._worker: threading.Thread | None = None
         self._finished = threading.Event()
         self._exit_code = 0
@@ -106,11 +107,19 @@ class Host:
             )
             recorder.start(host_discord_user_id=self._host_discord_user_id)
 
-            acquired, holder = mongo_host.acquire_lock(
-                host_username=self._host_username or "unknown",
-                channel_id=recorder.channel_id,
-                meeting_dir=str(recorder.meeting_dir or ""),
-            )
+            acquire_kwargs = {
+                "host_username": self._host_username or "unknown",
+                "channel_id": recorder.channel_id,
+                "meeting_dir": str(recorder.meeting_dir or ""),
+            }
+            meeting_id = getattr(recorder, "meeting_id", "")
+            if meeting_id:
+                acquire_kwargs["meeting_id"] = meeting_id
+            try:
+                acquired, holder = mongo_host.acquire_lock(**acquire_kwargs)
+            except TypeError:
+                acquire_kwargs.pop("meeting_id", None)
+                acquired, holder = mongo_host.acquire_lock(**acquire_kwargs)
             if not acquired:
                 recorder.stop(
                     host_elg_user=self._host_username,
@@ -122,6 +131,7 @@ class Host:
             with self._lock:
                 self._recorder = recorder
                 self._lock_held = True
+                self._start_heartbeat()
 
             self._events.emit(protocol.EVENT_RECORDING)
         except RecorderError as exc:
@@ -149,7 +159,18 @@ class Host:
             return
 
         self._release_lock()
-        self._events.emit(protocol.EVENT_STOPPED)
+        stopped_fields: dict = {}
+        if run_pipeline:
+            attendance_path = result.meeting_dir / "attendance.json"
+            try:
+                import json
+
+                loaded = json.loads(attendance_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    stopped_fields["attendance"] = loaded
+            except Exception:
+                pass
+        self._events.emit(protocol.EVENT_STOPPED, **stopped_fields)
 
         meeting_dir = result.meeting_dir
         pipeline.write_status(
@@ -194,7 +215,20 @@ class Host:
             self._finished.set()
 
     # --- helpers ---------------------------------------------------------
+    def _start_heartbeat(self) -> None:
+        self._heartbeat_stop.clear()
+        host_username = self._host_username or "unknown"
+
+        def _loop() -> None:
+            interval = max(1.0, float(config.LOCK_HEARTBEAT_INTERVAL_SECONDS))
+            while not self._heartbeat_stop.wait(interval):
+                if hasattr(mongo_host, "heartbeat_lock"):
+                    mongo_host.heartbeat_lock(host_username=host_username)
+
+        threading.Thread(target=_loop, name="mike-lock-heartbeat", daemon=True).start()
+
     def _release_lock(self) -> None:
+        self._heartbeat_stop.set()
         with self._lock:
             if not self._lock_held:
                 return

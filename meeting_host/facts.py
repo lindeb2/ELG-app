@@ -79,18 +79,21 @@ class MeetingFacts:
     logs: list[dict] = field(default_factory=list)
 
 
-def _fetch_week_logs(week_start) -> list[dict]:
+def _fetch_week_logs(week_start, *, exclude_meeting_id: str | None = None) -> list[dict]:
     from meeting_host import mongo_host
 
     start, end = week_bounds_utc_naive(week_start)
+    query: dict = {"timestamp": {"$gte": start, "$lt": end}, "user": {"$nin": [None, ""]}}
+    if exclude_meeting_id:
+        query["meeting_id"] = {"$ne": exclude_meeting_id}
     cursor = mongo_host.timetable().find(
-        {"timestamp": {"$gte": start, "$lt": end}, "user": {"$nin": [None, ""]}},
+        query,
         projection={"user": 1, "timestamp": 1, "elapsed_time": 1, "name": 1, "description": 1},
     )
     return list(cursor)
 
 
-def load_facts() -> MeetingFacts:
+def load_facts(*, exclude_meeting_id: str | None = None) -> MeetingFacts:
     from meeting_host import mongo_host
 
     status = mongo_host.status_meeting()
@@ -126,7 +129,7 @@ def load_facts() -> MeetingFacts:
         if isinstance(point, dict) and str(point.get("title") or "").strip()
     ]
 
-    logs = _fetch_week_logs(week_start)
+    logs = _fetch_week_logs(week_start, exclude_meeting_id=exclude_meeting_id)
 
     user_seconds: dict[str, int] = defaultdict(int)
     user_days: dict[str, set] = defaultdict(set)
@@ -183,10 +186,10 @@ def load_facts() -> MeetingFacts:
     )
 
 
-def load_facts_safe() -> MeetingFacts:
+def load_facts_safe(*, exclude_meeting_id: str | None = None) -> MeetingFacts:
     """Facts, or an empty shell if Mongo is unreachable."""
     try:
-        return load_facts()
+        return load_facts(exclude_meeting_id=exclude_meeting_id)
     except Exception:
         from meeting_host.period import utc_now
 

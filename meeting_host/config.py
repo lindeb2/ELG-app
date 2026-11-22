@@ -23,8 +23,8 @@ DECIMATION = DISCORD_SAMPLE_RATE // SAMPLE_RATE  # 3
 FRAME_MS = 20
 PAD_TOLERANCE_SAMPLES = SAMPLE_RATE * FRAME_MS // 1000
 
-# Someone arriving more than this late is flagged as a late joiner.
-LATE_JOIN_GRACE_SECONDS = 5.0
+# No grace window: anyone joining after recording starts is tracked as late.
+LATE_JOIN_GRACE_SECONDS = 0.0
 # Voice states sometimes arrive a beat after on_ready; wait this long.
 VOICE_JOIN_WAIT_SECONDS = 15.0
 
@@ -64,8 +64,9 @@ LLM_PROMPT_TOKEN_BUDGET = 24_000
 LLM_STARTUP_TIMEOUT_SECONDS = 300.0
 LLM_REQUEST_TIMEOUT_SECONDS = 900.0
 
-# Mongo recording lock: older than this means a crashed host, so steal it.
-LOCK_STALE_SECONDS = 20 * 60
+# Mongo recording lock heartbeat and stale timeout (for crashed hosts).
+LOCK_HEARTBEAT_INTERVAL_SECONDS = 30.0
+LOCK_STALE_SECONDS = 3 * 60
 
 MONGO_DB_NAME = "ELG-Database"
 TIMETABLE_COLLECTION = "Timetable"

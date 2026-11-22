@@ -14,6 +14,7 @@ from notifications import (
     post_notification,
 )
 from period_model import to_local
+from records_persist import persist_broken_records
 from settings_ui_constants import ACCENT
 from timetable_db import aggregations, client, collection, db, get_user, status_meeting
 from utils import flash_error
@@ -85,6 +86,7 @@ class TimetableFrame(ctk.CTkFrame):
         self._plan_refresh_job = None
         self._prepare_retry_job = None
         self._start_notified = False
+        self._meeting_locked = False
         self._keyboard_focus_indicators_active = False
         self._focus_highlight_defaults = {}
 
@@ -104,7 +106,7 @@ class TimetableFrame(ctk.CTkFrame):
         self.time_label = ctk.CTkLabel(self, text="00:00", font=("Arial", 32), text_color=COLOR_TEXT, fg_color=COLOR_BACKGROUND)
         self.time_label.grid(row=_ROW_TIMER, column=_COL_LEFT, sticky="nsew", columnspan=_COL_FULL_SPAN)
 
-        self.toggle_run_button = ctk.CTkButton(self, text="Start", fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER, text_color=COLOR_TEXT, font=_PRIMARY_BTN_FONT, corner_radius=8, command=self.toggle_button)
+        self.toggle_run_button = ctk.CTkButton(self, text="Start", fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER, text_color=COLOR_TEXT, text_color_disabled=COLOR_DISABLED_TEXT, font=_PRIMARY_BTN_FONT, corner_radius=8, command=self.toggle_button)
         self.toggle_run_button.grid(row=_ROW_BUTTONS, column=_COL_LEFT, sticky="nsew", columnspan=_COL_FULL_SPAN)
 
         self.done_button = ctk.CTkButton(self, text="Done", fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER, text_color=COLOR_TEXT, text_color_disabled=COLOR_DISABLED_TEXT, font=_ACTION_BTN_FONT, corner_radius=8, command=self.show_entry_overlay, state="disabled")
@@ -132,7 +134,7 @@ class TimetableFrame(ctk.CTkFrame):
         self.desc_entry.bind("<KeyPress>", lambda event: self.after_idle(self.validate_inputs))
 
         self.continue_button = ctk.CTkButton(self.overlay_canvas, text="Continue", fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER,
-                      command=self.continue_timer, text_color=COLOR_TEXT, font=_ACTION_BTN_FONT, corner_radius=8)
+                      command=self.continue_timer, text_color=COLOR_TEXT, text_color_disabled=COLOR_DISABLED_TEXT, font=_ACTION_BTN_FONT, corner_radius=8)
         self.continue_button.grid(row=_OVERLAY_ROW_BUTTONS, column=_COL_LEFT, sticky="nsew")
 
         self.log_button = ctk.CTkButton(self.overlay_canvas, text="Log Entry", fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER,
@@ -142,7 +144,9 @@ class TimetableFrame(ctk.CTkFrame):
         self._setup_keyboard_navigation()
 
         self.sync_top_padding()
-        self.after_idle(self.toggle_run_button.focus_set)
+        if shell is not None and hasattr(shell, "is_meeting_locked") and shell.is_meeting_locked():
+            self.set_meeting_locked(True)
+        self.after_idle(self._focus_initial_control)
 
     # --- Keyboard navigation ---
     #
@@ -250,11 +254,52 @@ class TimetableFrame(ctk.CTkFrame):
             self._install_focus_highlight(button)
 
         for button in self._focusable_buttons():
-            button.bind("<space>", lambda event, b=button: b.invoke())
+            button.bind(
+                "<space>",
+                lambda event, b=button: b.invoke() if self._widget_enabled(b) else None,
+            )
 
         for entry in self._focusable_entries():
             entry.bind("<Return>", self._submit_via_return, add="+")
             entry.bind("<Shift-Return>", lambda event: None, add="+")
+
+    def _focus_initial_control(self) -> None:
+        order = self._visible_focus_order()
+        if order:
+            order[0].focus_set()
+
+    def _sync_meeting_lock_controls(self) -> None:
+        state = "disabled" if self._meeting_locked else "normal"
+        self.toggle_run_button.configure(state=state)
+        self.continue_button.configure(state=state)
+        if self._meeting_locked:
+            self._clear_focus_highlight(self.toggle_run_button)
+            self._clear_focus_highlight(self.continue_button)
+            try:
+                focused = self.focus_get()
+            except Exception:
+                focused = None
+            if focused in (self.toggle_run_button, self.continue_button):
+                self._focus_initial_control()
+
+    def set_meeting_locked(self, locked: bool) -> None:
+        """Pause a running timer and lock Start/Continue while a meeting is active."""
+        locked = bool(locked)
+        self._meeting_locked = locked
+        if locked and self.running:
+            self._pause_timer()
+            self._notify_session_changed()
+        self._sync_meeting_lock_controls()
+
+    def _pause_timer(self) -> None:
+        self.elapsed_time += time.perf_counter() - self._monotonic_anchor
+        self.running = False
+        self.toggle_run_button.configure(text="Continue", font=_ACTION_BTN_FONT)
+        self.time_label.configure(text=format_time(self.elapsed_time))
+        self.done_button.grid(row=_ROW_BUTTONS, column=_COL_RIGHT, sticky="nsew")
+        self.toggle_run_button.grid_configure(column=_COL_LEFT, columnspan=1)
+        if not self._meeting_locked:
+            self.toggle_run_button.focus_set()
 
     def sync_user(self) -> None:
         """Refresh cached username after first-run setup writes config."""
@@ -295,9 +340,12 @@ class TimetableFrame(ctk.CTkFrame):
         self.name_entry._activate_placeholder()
         self.desc_entry._activate_placeholder()
         self.overlay_canvas.grid_forget()
+        self._sync_meeting_lock_controls()
         self._notify_session_changed()
 
     def toggle_button(self):
+        if not self.running and self._meeting_locked:
+            return
         if self.log_ts is None:
             threading.Thread(target=self.get_log_db_timestamp, name="get_log_db_timestamp", daemon=True).start()
         if not self.running:
@@ -306,13 +354,7 @@ class TimetableFrame(ctk.CTkFrame):
             self.update_timer()
             self.hide_done_button("Pause")
         else:
-            self.elapsed_time += time.perf_counter() - self._monotonic_anchor
-            self.running = False
-            self.toggle_run_button.configure(text="Continue", font=_ACTION_BTN_FONT)
-            self.time_label.configure(text=format_time(self.elapsed_time))
-            self.done_button.grid(row=_ROW_BUTTONS, column=_COL_RIGHT, sticky="nsew")
-            self.toggle_run_button.grid_configure(column=_COL_LEFT, columnspan=1)
-            self.toggle_run_button.focus_set()
+            self._pause_timer()
         self._notify_session_changed()
 
     def get_log_db_timestamp(self):
@@ -466,58 +508,7 @@ class TimetableFrame(ctk.CTkFrame):
         self.validate_inputs()
 
     def _persist_broken_records(self, broken_records, timestamp):
-        """
-        Write broken records to Status Meeting > Records.
-        Uses $mergeObjects so old_value is preserved on subsequent breaks of the same slot
-        within the same week: the first write sets old_value; later writes only update
-        new_value and last_broken_ts.
-        """
-        if not broken_records:
-            return
-        local = to_local(timestamp)
-        iso_year, iso_week, _ = local.isocalendar()
-
-        set_fields = {}
-        for record in broken_records:
-            old = record["old_record"]
-            new = record["new_record"]
-            scope = old["scope"]
-            time_type = old["time_type"]
-            metric = old["metric"]
-
-            if scope == "personal":
-                slot = f"data.{iso_year}.{iso_week}.personal.{self._user}.{time_type}.{metric}"
-            elif scope == "global":
-                slot = f"data.{iso_year}.{iso_week}.global.{time_type}.{metric}"
-            else:  # combined
-                slot = f"data.{iso_year}.{iso_week}.combined.{time_type}.{metric}"
-
-            defaults = {
-                "old_value": old["value"],
-                "scope": scope,
-                "time_type": time_type,
-                "metric": metric,
-                "broken_by": self._user,
-            }
-            if scope == "global":
-                defaults["old_holder"] = old.get("user")
-
-            set_fields[slot] = {
-                "$mergeObjects": [
-                    defaults,
-                    {"$ifNull": [f"${slot}", {}]},
-                    {"new_value": new["value"], "last_broken_ts": timestamp},
-                ]
-            }
-
-        try:
-            status_meeting.update_one(
-                {"_id": "Records"},
-                [{"$set": set_fields}],
-                upsert=True,
-            )
-        except Exception as e:
-            print(f"Failed to persist broken records: {e}")
+        persist_broken_records(status_meeting, self._user, broken_records, timestamp)
 
     def _send_end_notification(self, timestamp, plan, log_name: str):
         try:
@@ -582,9 +573,12 @@ class TimetableFrame(ctk.CTkFrame):
         self.name_entry._activate_placeholder()
         self.desc_entry._activate_placeholder()
         self.overlay_canvas.grid_forget()
+        self._sync_meeting_lock_controls()
         self._notify_session_changed()
 
     def continue_timer(self):
+        if self._meeting_locked:
+            return
         self._clear_commit_state()
         self.overlay_canvas.grid_forget()
         self.toggle_button()

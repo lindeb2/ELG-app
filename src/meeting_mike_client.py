@@ -113,11 +113,12 @@ def open_in_file_manager(path: str | Path) -> None:
 class MeetingHostSession:
     """Owns at most one Host child process and mirrors its reported state."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, log_committer: Callable | None = None) -> None:
         self._lock = threading.RLock()
         self._process: subprocess.Popen | None = None
         self._reader: threading.Thread | None = None
         self._listeners: list[Callable[[dict], None]] = []
+        self._log_committer = log_committer
 
         self._state = STATE_IDLE
         self._message = ""
@@ -418,8 +419,28 @@ class MeetingHostSession:
         if headline:
             self._message = step["label"]
 
+    def _start_meeting_log_commit(self, attendance: dict) -> None:
+        def worker() -> None:
+            def report(line: str) -> None:
+                with self._lock:
+                    self._append_log(line)
+                self._notify()
+
+            try:
+                committer = self._log_committer
+                if committer is None:
+                    from meeting_log_commit import commit_meeting_logs_default
+
+                    committer = commit_meeting_logs_default
+                committer(attendance, on_log=report)
+            except Exception as exc:
+                report(f"Meeting log commit failed: {exc}")
+
+        threading.Thread(target=worker, name="meeting-log-commit", daemon=True).start()
+
     def _apply_event(self, payload: dict) -> None:
         event = payload.get("event")
+        stopped_attendance: dict | None = None
         with self._lock:
             if event == "need_models":
                 self._state = STATE_STARTING
@@ -455,6 +476,9 @@ class MeetingHostSession:
                 self._started_monotonic = None
                 self._message = "Processing recording..."
                 self._append_log("Recording stopped")
+                raw_attendance = payload.get("attendance")
+                if isinstance(raw_attendance, dict):
+                    stopped_attendance = raw_attendance
             elif event == "phase":
                 self._state = STATE_PROCESSING
                 self._phase = str(payload.get("name") or "")
@@ -483,6 +507,8 @@ class MeetingHostSession:
                 self._message = str(payload.get("message") or "Meeting Host failed.")
                 self._append_log(self._message)
         self._notify()
+        if stopped_attendance is not None:
+            self._start_meeting_log_commit(stopped_attendance)
 
     def reset_if_finished(self) -> None:
         with self._lock:

@@ -10,6 +10,7 @@ import customtkinter as ctk
 
 from app_config import app_preferences_from_config, merge_app_preferences, read_config, write_config
 from meeting import MeetingFrame
+from meeting_lock import MeetingLockWatcher
 from meeting_mike_client import shutdown_session as shutdown_meeting_mike
 from meeting_point_manager import MeetingPointManagerFrame
 from session_guard import has_unlogged_time, prompt_unlogged_action_blocked, prompt_unlogged_exit
@@ -18,6 +19,7 @@ from shutdown_block import ShutdownBlocker
 from stats_viewer import StatsFrame
 from system_tray import SystemTray
 from Timetable import TimetableFrame
+from timetable_db import status_meeting as status_meeting_collection
 from platform_keys import (
     IS_WINDOWS,
     alt_arrow_sequences,
@@ -160,8 +162,12 @@ class AppShell(tk.Frame):
         self._timetable_nav_hovered = False
         self._timetable_pin_hovered = False
         self._window_state_persisted = False
+        self._pending_geometry_on_restore = False
         self._content_row = 0
         self._content_col = 0
+        self._meeting_lock = MeetingLockWatcher(status_meeting_collection)
+        self._meeting_lock.add_listener(self._on_meeting_lock_event)
+        self._meeting_lock.start()
 
         self._active_view: str | None = None
         self._nav_buttons: dict[str, ctk.CTkButton] = {}
@@ -213,6 +219,8 @@ class AppShell(tk.Frame):
         self._apply_shell_layout()
 
         window.protocol("WM_DELETE_WINDOW", self._on_close)
+        window.bind("<Unmap>", self._on_window_unmap, add="+")
+        window.bind("<Map>", self._on_window_map, add="+")
         self._bind_shortcuts()
         self._shutdown_blocker.install()
         if sys.platform.startswith("win"):
@@ -239,6 +247,20 @@ class AppShell(tk.Frame):
         host = self._frames.get("timetable")
         child = self._view_child(host)
         return child if isinstance(child, TimetableFrame) else None
+
+    def is_meeting_locked(self) -> bool:
+        return self._meeting_lock.is_active
+
+    def _on_meeting_lock_event(self, active: bool) -> None:
+        try:
+            self._window.after(0, lambda locked=active: self._apply_meeting_lock(locked))
+        except tk.TclError:
+            pass
+
+    def _apply_meeting_lock(self, locked: bool) -> None:
+        timetable = self.get_timetable()
+        if timetable is not None:
+            timetable.set_meeting_locked(locked)
 
     def on_timetable_session_changed(self) -> None:
         self._shutdown_blocker.sync()
@@ -295,7 +317,41 @@ class AppShell(tk.Frame):
         if self._active_view:
             self.reload_view(self._active_view)
 
+    def _leave_meeting_on_minimize(self, *, update_geometry: bool) -> None:
+        if self._active_view != "meeting":
+            return
+        self.switch_view("timetable", update_geometry=update_geometry)
+        if not update_geometry:
+            self._pending_geometry_on_restore = True
+
+    def _on_window_unmap(self, event=None) -> None:
+        if event is not None and event.widget is not self._window:
+            return
+        if self._active_view != "meeting":
+            return
+        try:
+            if self._window.state() != "iconic":
+                return
+        except tk.TclError:
+            return
+        self._leave_meeting_on_minimize(update_geometry=False)
+
+    def _on_window_map(self, event=None) -> None:
+        if event is not None and event.widget is not self._window:
+            return
+        if not self._pending_geometry_on_restore:
+            return
+        try:
+            if self._window.state() == "iconic":
+                return
+        except tk.TclError:
+            return
+        self._pending_geometry_on_restore = False
+        self._apply_window_geometry()
+        self._sync_title_bar_chrome()
+
     def _minimize_to_tray(self) -> None:
+        self._leave_meeting_on_minimize(update_geometry=True)
         self._tray.ensure_started()
         self._window.withdraw()
 
@@ -330,6 +386,7 @@ class AppShell(tk.Frame):
         self._quit_app()
 
     def _quit_app(self) -> None:
+        self._meeting_lock.stop()
         if self._active_view == "meeting":
             self._destroy_meeting_view()
         shutdown_meeting_mike()

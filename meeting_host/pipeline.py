@@ -162,7 +162,8 @@ def run(
     for discord_id in user_transcripts:
         labels.setdefault(discord_id, discord_id)
 
-    meeting_facts = facts_module.load_facts_safe()
+    meeting_id = str(attendance.get("meeting_id") or "").strip() or None
+    meeting_facts = facts_module.load_facts_safe(exclude_meeting_id=meeting_id)
 
     llm: LlamaServer | None = None
     llm_error = ""

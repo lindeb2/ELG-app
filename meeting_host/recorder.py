@@ -17,7 +17,15 @@ from types import SimpleNamespace
 import discord
 from discord.ext import voice_recv
 
-from meeting_host import config, dave_recv
+from meeting_host import config, dave_recv, mongo_host
+from meeting_host.attendance import (
+    Participant,
+    build_attendance_payload,
+    close_session,
+    finalize_attendance,
+    meeting_id_for_dir,
+    open_session,
+)
 from meeting_host.audio_mix import AlignedWavWriter, decode_discord_pcm
 from meeting_host.host_secrets import get_discord_bot_token, get_discord_guild_id
 from meeting_host.identity import DiscordSpeaker, IdentityResolver
@@ -29,32 +37,6 @@ class RecorderError(RuntimeError):
 
 
 @dataclass
-class Participant:
-    discord_user_id: str
-    discord_username: str = ""
-    discord_global_name: str = ""
-    discord_nick: str = ""
-    elg_username: str | None = None
-    joined_at: str = ""
-    left_at: str | None = None
-    joined_late: bool = False
-    audio_path: str = ""
-
-    def to_json(self) -> dict:
-        return {
-            "discord_user_id": self.discord_user_id,
-            "discord_username": self.discord_username,
-            "discord_global_name": self.discord_global_name,
-            "discord_nick": self.discord_nick,
-            "elg_username": self.elg_username,
-            "joined_at": self.joined_at,
-            "left_at": self.left_at,
-            "joined_late": self.joined_late,
-            "audio_path": self.audio_path,
-        }
-
-
-@dataclass
 class RecordingResult:
     meeting_dir: Path
     channel_id: str
@@ -62,6 +44,8 @@ class RecordingResult:
     started_at: datetime
     ended_at: datetime
     participants: list[Participant] = field(default_factory=list)
+    meeting_id: str = ""
+    duration_seconds: int = 0
 
 
 def _speaker_from_member(member) -> DiscordSpeaker:
@@ -106,6 +90,10 @@ class MeetingRecorder:
     @property
     def meeting_dir(self) -> Path | None:
         return self._meeting_dir
+
+    @property
+    def meeting_id(self) -> str:
+        return meeting_id_for_dir(self._meeting_dir)
 
     @property
     def channel_id(self) -> str:
@@ -155,17 +143,26 @@ class MeetingRecorder:
         if self._thread is not None:
             self._thread.join(timeout=15)
 
-        ended_at = utc_now()
+        duration = 0.0 if self._t0 is None else max(0.0, time.monotonic() - self._t0)
+        started_at = self._started_at or utc_now()
         with self._state_lock:
             longest = max((writer.samples_written for writer in self._writers.values()), default=0)
             for writer in self._writers.values():
                 writer.pad_to(longest)
                 writer.close()
-            for participant in self._participants.values():
-                if participant.left_at is None:
-                    participant.left_at = ended_at.isoformat()
+            total_seconds, ended_at = finalize_attendance(
+                list(self._participants.values()),
+                started_at=started_at,
+                total_duration_seconds=duration,
+            )
 
-        result = self._build_result(host_elg_user, host_discord_user_id, ended_at=ended_at)
+        result = self._build_result(
+            host_elg_user,
+            host_discord_user_id,
+            started_at=started_at,
+            ended_at=ended_at,
+            duration_seconds=total_seconds,
+        )
         self._write_attendance(result)
         return result
 
@@ -174,7 +171,9 @@ class MeetingRecorder:
         host_elg_user: str,
         host_discord_user_id: str,
         *,
+        started_at: datetime | None = None,
         ended_at: datetime | None = None,
+        duration_seconds: int = 0,
     ) -> RecordingResult:
         with self._state_lock:
             participants = list(self._participants.values())
@@ -182,21 +181,25 @@ class MeetingRecorder:
             meeting_dir=self._meeting_dir or config.mike_dir(self._base_dir),
             channel_id=self._channel_id,
             channel_name=self._channel_name,
-            started_at=self._started_at or utc_now(),
+            started_at=started_at or self._started_at or utc_now(),
             ended_at=ended_at or utc_now(),
             participants=participants,
+            meeting_id=self.meeting_id,
+            duration_seconds=int(duration_seconds),
         )
 
     def _write_attendance(self, result: RecordingResult) -> None:
-        payload = {
-            "started_at": result.started_at.isoformat(),
-            "ended_at": result.ended_at.isoformat(),
-            "channel_id": result.channel_id,
-            "channel_name": result.channel_name,
-            "host_elg_user": self._host_elg_user,
-            "host_discord_user_id": self._host_discord_user_id,
-            "participants": [p.to_json() for p in result.participants],
-        }
+        payload = build_attendance_payload(
+            meeting_id=result.meeting_id or self.meeting_id,
+            started_at=result.started_at,
+            ended_at=result.ended_at,
+            duration_seconds=result.duration_seconds,
+            channel_id=result.channel_id,
+            channel_name=result.channel_name,
+            host_elg_user=self._host_elg_user,
+            host_discord_user_id=self._host_discord_user_id,
+            participants=result.participants,
+        )
         path = result.meeting_dir / "attendance.json"
         path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
@@ -308,13 +311,14 @@ class MeetingRecorder:
         if not self._channel_id:
             raise RecorderError("Could not join a Discord voice channel.")
 
+        self._started_at = mongo_host.server_now()
         self._t0 = time.monotonic()
         self._events.emit("joined", channel_name=self._channel_name)
 
         for member in getattr(channel, "members", []):
             if member.id == getattr(client.user, "id", None):
                 continue
-            self._register_participant(member, late=False)
+            self._register_participant(member, late=False, offset=0.0)
 
         dave_recv.reset_stats()
         dave_recv.apply_voice_recv_patches()
@@ -638,34 +642,59 @@ class MeetingRecorder:
                     participant.audio_path = str(path.relative_to(self._meeting_dir).as_posix())
             return writer
 
-    def _register_participant(self, member, *, late: bool | None) -> Participant | None:
+    def _register_participant(
+        self,
+        member,
+        *,
+        late: bool | None,
+        offset: float | None = None,
+    ) -> Participant | None:
         discord_id = str(getattr(member, "id", "") or "")
         if not discord_id:
             return None
 
         speaker = _speaker_from_member(member)
-        elapsed = 0.0 if self._t0 is None else max(0.0, time.monotonic() - self._t0)
+        if offset is None:
+            elapsed = 0.0 if self._t0 is None else max(0.0, time.monotonic() - self._t0)
+        else:
+            elapsed = max(0.0, float(offset))
         if late is None:
             late = elapsed > config.LATE_JOIN_GRACE_SECONDS
 
         with self._state_lock:
             existing = self._participants.get(discord_id)
             if existing is not None:
+                was_absent = existing.left_at is not None
+                open_session(existing, elapsed)
                 existing.left_at = None
                 if not existing.discord_nick:
                     existing.discord_nick = speaker.nick
-                return existing
+                rejoined = existing if was_absent else None
+            else:
+                rejoined = None
+                participant = Participant(
+                    discord_user_id=discord_id,
+                    discord_username=speaker.username,
+                    discord_global_name=speaker.global_name,
+                    discord_nick=speaker.nick,
+                    elg_username=self._resolver.resolve(speaker),
+                    joined_at=utc_now().isoformat(),
+                    joined_late=bool(late),
+                    sessions=[(elapsed, None)],
+                )
+                self._participants[discord_id] = participant
 
-            participant = Participant(
-                discord_user_id=discord_id,
-                discord_username=speaker.username,
-                discord_global_name=speaker.global_name,
-                discord_nick=speaker.nick,
-                elg_username=self._resolver.resolve(speaker),
-                joined_at=utc_now().isoformat(),
-                joined_late=bool(late),
-            )
-            self._participants[discord_id] = participant
+        if existing is not None:
+            if rejoined is not None:
+                self._events.emit(
+                    "participant",
+                    discord_user_id=discord_id,
+                    elg_username=rejoined.elg_username,
+                    display_name=speaker.display_name,
+                    action="join",
+                    joined_late=True,
+                )
+            return existing
 
         self._events.emit(
             "participant",
@@ -692,9 +721,11 @@ class MeetingRecorder:
             self._register_participant(member, late=None)
         elif was_here and not is_here:
             discord_id = str(member.id)
+            offset = 0.0 if self._t0 is None else max(0.0, time.monotonic() - self._t0)
             with self._state_lock:
                 participant = self._participants.get(discord_id)
                 if participant is not None:
+                    close_session(participant, offset)
                     participant.left_at = utc_now().isoformat()
             self._events.emit(
                 "participant",
